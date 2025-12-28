@@ -1,0 +1,60 @@
+services:
+  # Node.js Backend Server
+  - type: web
+    name: truth-graph-server
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: cd server && node index.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USER
+        value: neo4j
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: AI_ENGINE_URL
+        value: https://truth-graph-ai.onrender.com
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /
+
+  # Python AI Engine
+  - type: web
+    name: truth-graph-ai
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: cd ai_engine && pip install -r requirements.txt
+    startCommand: cd ai_engine && python main.py
+    envVars:
+      - key: PORT
+        value: 8001
+      - key: EXECUTION_MODE
+        value: cloud
+      - key: HF_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_FACT_CHECK_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+    healthCheckPath: /
+
+  # React Frontend (Static Site)
+  - type: web
+    name: truth-graph-frontend
+    runtime: static
+    region: oregon
+    plan: free
+    buildCommand: cd client && npm install && npm run build
+    staticPublishPath: client/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://truth-graph-server.onrender.com

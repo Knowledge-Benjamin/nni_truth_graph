@@ -1,0 +1,12 @@
+fastapi>=0.115.0
+uvicorn>=0.32.0
+torch
+transformers
+torch-geometric
+pydantic
+python-dotenv
+requests
+sentence-transformers
+spacy
+gliner-spacy
+google-genai
