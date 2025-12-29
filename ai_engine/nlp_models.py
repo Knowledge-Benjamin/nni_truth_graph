@@ -1,4 +1,6 @@
 from typing import List, Dict
+import os
+import requests
 
 class SemanticLinker:
     """
@@ -8,23 +10,42 @@ class SemanticLinker:
     
     def __init__(self):
         print("🔄 Loading Semantic Similarity Model...")
-        # Lazy import to avoid loading heavy dependencies at module level
-        from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("✅ Semantic model ready (384-dim embeddings)")
-    
+        self.use_api = False
+        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+        self.api_token = os.getenv("HF_TOKEN")
+
+        try:
+            # Try loading local model
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ Semantic model ready (Local: 384-dim)")
+        except ImportError:
+            # Fallback to API
+            print("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
+            self.use_api = True
+            if not self.api_token:
+                print("❌ HF_TOKEN is missing! Embeddings will fail.")
+
     def get_embedding(self, text: str) -> List[float]:
-        """
-        Convert text to 384-dimensional vector.
-        
-        Args:
-            text: Claim statement or any text
-        
-        Returns:
-            List of 384 floats (semantic embedding)
-        """
-        embedding = self.model.encode(text, convert_to_tensor=False)
-        return embedding.tolist()
+        """Convert text to 384-dimensional vector (Local or Cloud API)."""
+        if self.use_api:
+            if not self.api_token:
+                return [0.0] * 384 # Fail safe
+            
+            headers = {"Authorization": f"Bearer {self.api_token}"}
+            try:
+                response = requests.post(self.api_url, headers=headers, json={"inputs": text})
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    print(f"API Error {response.status_code}: {response.text}")
+                    return [0.0] * 384
+            except Exception as e:
+                print(f"Embedding API Failed: {e}")
+                return [0.0] * 384
+        else:
+            embedding = self.model.encode(text, convert_to_tensor=False)
+            return embedding.tolist()
     
     def batch_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
