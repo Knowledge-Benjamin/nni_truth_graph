@@ -33,11 +33,20 @@ class SemanticLinker:
             if not self.api_token:
                 return [0.0] * 384 # Fail safe
             
+            # Use explicit feature-extraction pipeline endpoint
+            self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
             headers = {"Authorization": f"Bearer {self.api_token}"}
+            
             try:
-                response = requests.post(self.api_url, headers=headers, json={"inputs": text})
+                # API expects a list of strings for feature extraction
+                response = requests.post(self.api_url, headers=headers, json={"inputs": [text], "options": {"wait_for_model": True}})
+                
                 if response.status_code == 200:
-                    return response.json()
+                    result = response.json()
+                    # Result is list of embeddings, we sent one input so take first
+                    if isinstance(result, list) and len(result) > 0:
+                        return result[0]
+                    return result
                 else:
                     print(f"API Error {response.status_code}: {response.text}")
                     return [0.0] * 384
