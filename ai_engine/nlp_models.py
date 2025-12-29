@@ -49,7 +49,7 @@ class SemanticLinker:
             # Use router.huggingface.co with correct model endpoint (2025)
             api_url = f"https://router.huggingface.co/models/{self.model_name}"
             headers = {"Authorization": f"Bearer {self.api_token}"}
-            payload = {"inputs": text, "options": {\"wait_for_model\": True}}
+            payload = {"inputs": text, "options": {"wait_for_model": True}}
 
             try:
                 response = requests.post(api_url, headers=headers, json=payload)
