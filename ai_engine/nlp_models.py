@@ -1,7 +1,3 @@
-from sentence_transformers import SentenceTransformer
-import numpy as np
-from typing import List, Dict
-
 class SemanticLinker:
     """
     Generates semantic embeddings for claims and finds similar existing claims.
@@ -10,6 +6,8 @@ class SemanticLinker:
     
     def __init__(self):
         print("🔄 Loading Semantic Similarity Model...")
+        # Lazy import to avoid loading heavy dependencies at module level
+        from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         print("✅ Semantic model ready (384-dim embeddings)")
     
