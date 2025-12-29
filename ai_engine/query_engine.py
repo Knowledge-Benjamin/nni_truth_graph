@@ -183,13 +183,23 @@ class QueryTranslator:
         
         prompt = f"""
         Analyze the following text and extract all verifiable factual claims.
-        Ignore opinions, questions, or vague statements.
-        Return ONLY a JSON list of strings.
+        
+        CRITICAL RULES:
+        1. STAND-ALONE FACTS: Rewrite every claim so it makes sense in isolation.
+           - Replace pronouns (he, she, it, they) with specific names.
+           - Replace "the event" or "the disaster" with the specific event name.
+           - Add dates and locations if they are mentioned earlier in the text but missing from the sentence.
+        
+        2. VERIFIABLE: Only extract objective facts (numbers, dates, actions). Ignore opinions.
+        
+        Example:
+        Text: "A massive earthquake struck Japan in 2025. It killed 956 people."
+        Output: ["A massive earthquake struck Japan in 2025.", "The 2025 Japan earthquake killed 956 people."]
         
         Text:
-        "{text[:3000]}"
+        "{text[:8000]}"
         
-        Return JSON:
+        Return ONLY a JSON list of strings:
         [ "Claim 1", "Claim 2", ... ]
         """
         
