@@ -1,70 +1,61 @@
-
 import os
 import psycopg2
 from dotenv import load_dotenv
 
-# Load env variables
-load_dotenv(os.path.join(os.path.dirname(__file__), '../server/.env'))
-NEON_DB = os.getenv("DATABASE_URL")
+# Hardcoded for debugging as requested by user
+NEON_DB = "postgresql://neondb_owner:npg_b2sNTig0IBmZ@ep-summer-fog-adlvchlm-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 def inspect_db():
-    if not NEON_DB:
-        print("❌ DATABASE_URL is missing in server/.env")
-        return
-
     try:
         print(f"Connecting to DB...")
         conn = psycopg2.connect(NEON_DB)
         cur = conn.cursor()
         print("✅ Connected!")
 
-        # 1. Check tables
-        cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
-        tables = cur.fetchall()
-        print(f"\nTables found: {[t[0] for t in tables]}")
+        # 1. Inspect Schema (Columns and Types)
+        cur.execute("""
+            SELECT column_name, data_type, udt_name
+            FROM information_schema.columns 
+            WHERE table_name = 'articles';
+        """)
+        columns = cur.fetchall()
+        print("\n[SCHEMA] 'articles' table columns:")
+        for col in columns:
+            print(f" - {col[0]}: {col[1]} (udt: {col[2]})")
 
-        if ('articles',) in tables or ('Articles',) in tables:
-            table_name = 'articles' if ('articles',) in tables else 'Articles'
-            
-            # 2. Count total rows
-            cur.execute(f'SELECT count(*) FROM "{table_name}";')
-            count = cur.fetchone()[0]
-            print(f"\nTotal rows in '{table_name}': {count}")
+        # 2. Check content of 'status' and 'content' for the 16 rows
+        cur.execute('SELECT id, status, length(content), "publishedAt" FROM articles;')
+        rows = cur.fetchall()
+        print(f"\n[DATA] Found {len(rows)} rows:")
+        for r in rows:
+            print(f" - ID: {r[0]} | Status: '{r[1]}' (Type: {type(r[1])}) | Content Len: {r[2]} | Published: {r[3]}")
 
-            if count > 0:
-                # 3. Check distinct statuses with repr to see whitespace
-                try:
-                    cur.execute(f'SELECT DISTINCT status FROM "{table_name}";')
-                    statuses = cur.fetchall()
-                    print(f"Distinct statuses (raw): {[repr(s[0]) for s in statuses]}")
-                    
-                    # Check for content nulls
-                    cur.execute(f'SELECT count(*) FROM "{table_name}" WHERE content IS NULL or content = \'\';')
-                    null_content = cur.fetchone()[0]
-                    print(f"Rows with NULL/Empty content: {null_content}")
-                    
-                    # Check matching rows query manually
-                    print("Testing match query...")
-                    cur.execute(f"SELECT count(*) FROM \"{table_name}\" WHERE TRIM(UPPER(status)) = 'PUBLISHED' AND content IS NOT NULL;")
-                    match_count = cur.fetchone()[0]
-                    print(f"Rows matching TRIM(UPPER(status))='PUBLISHED': {match_count}")
+        # 3. Test exact queries
+        print("\n[TEST] Testing Filters:")
+        
+        # Test 1: Case sensitive exact match
+        cur.execute("SELECT count(*) FROM articles WHERE status = 'PUBLISHED'")
+        print(f" - status = 'PUBLISHED': {cur.fetchone()[0]}")
 
-                except Exception as e:
-                    print(f"Could not check statuses: {e}")
+        # Test 2: Lowercase exact match
+        cur.execute("SELECT count(*) FROM articles WHERE status = 'published'")
+        print(f" - status = 'published': {cur.fetchone()[0]}")
 
-                # 4. Check one row to see column names and sample data
-                cur.execute(f'SELECT * FROM "{table_name}" LIMIT 1;')
-                row = cur.fetchone()
-                colnames = [desc[0] for desc in cur.description]
-                print(f"\nSample Row Columns: {colnames}")
-                # print(f"Sample Row Data: {row}")
-                
-                 # 5. Check "publishedAt" column existence casing
-                print("\nChecking publishedAt column...")
-                lower_pub = "publishedat" in colnames
-                camel_pub = "publishedAt" in colnames
-                print(f"Contains 'publishedat'? {lower_pub}")
-                print(f"Contains 'publishedAt'? {camel_pub}")
+        # Test 3: Upper with Cast (Handling Enums)
+        try:
+            cur.execute("SELECT count(*) FROM articles WHERE UPPER(status::text) = 'PUBLISHED'")
+            print(f" - UPPER(status::text) = 'PUBLISHED': {cur.fetchone()[0]}")
+        except Exception as e:
+            print(f" - UPPER(status::text) failed: {e}")
+            conn.rollback()
+
+        # Test 4: The Failing Query (TRIM(UPPER(status)))
+        try:
+            cur.execute("SELECT count(*) FROM articles WHERE TRIM(UPPER(status::text)) = 'PUBLISHED' AND content IS NOT NULL")
+            print(f" - TRIM(UPPER(status::text)) = 'PUBLISHED' + content: {cur.fetchone()[0]}")
+        except Exception as e:
+            print(f" - TRIM(UPPER) failed: {e}")
+            conn.rollback()
 
         conn.close()
 

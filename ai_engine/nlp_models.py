@@ -11,7 +11,8 @@ class SemanticLinker:
     def __init__(self):
         print("🔄 Loading Semantic Similarity Model...")
         self.use_api = False
-        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+        # FIX: Update deprecated API URL to new Router URL
+        self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
         self.api_token = os.getenv("HF_TOKEN")
 
         try:

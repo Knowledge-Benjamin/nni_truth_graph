@@ -88,6 +88,7 @@ def backfill_nni_articles():
             clean_content = strip_html(content)
             
             payload = {
+                "title": title,  # FIX: Send title at top level so server can read it
                 "text": f"{title}\n\n{clean_content}",
                 "source": "nni.news",
                 "sourceUrl": f"https://nni.news/articles/{slug}",

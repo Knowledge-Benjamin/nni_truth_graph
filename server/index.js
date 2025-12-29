@@ -47,6 +47,28 @@ const neo4jDriver = driver(
     } else {
       console.log('✅ Fulltext index ready.');
     }
+
+    // Auto-create Vector Index for Semantic Linking
+    console.log('🔍 Checking Vector Index...');
+    const vectorIndexCheck = await session.run("SHOW INDEXES YIELD name WHERE name = 'claim_embeddings'");
+    if (vectorIndexCheck.records.length === 0) {
+      console.log('⚡ Creating vector index for semantic search...');
+      try {
+        await session.run(`
+          CREATE VECTOR INDEX claim_embeddings IF NOT EXISTS
+          FOR (c:Claim) ON (c.embedding)
+          OPTIONS {indexConfig: {
+            ` + "`vector.dimensions`" + `: 384,
+            ` + "`vector.similarity_function`" + `: 'cosine'
+          }}
+        `);
+        console.log('✅ Vector index created.');
+      } catch (e) {
+        console.log(`⚠️  Could not create vector index (might require Enterprise/Aura Pro?): ${e.message}`);
+      }
+    } else {
+      console.log('✅ Vector index ready.');
+    }
     console.log('');
 
     // Check if database needs seeding
