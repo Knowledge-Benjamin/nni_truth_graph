@@ -35,10 +35,10 @@ def main():
         # Fetch published articles
         print("\n[..] Fetching published articles...")
         cur.execute("""
-            SELECT id, title, slug, content, publishedAt 
+            SELECT id, title, slug, content, "publishedAt" 
             FROM articles 
             WHERE status = 'published' AND content IS NOT NULL
-            ORDER BY publishedAt ASC
+            ORDER BY "publishedAt" ASC
         """)
         
         articles = cur.fetchall()
