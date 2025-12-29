@@ -48,6 +48,26 @@ const neo4jDriver = driver(
       console.log('✅ Fulltext index ready.');
     }
     console.log('');
+
+    // Check if database needs seeding
+    console.log('🔍 Checking if database needs seeding...');
+    const nodeCountResult = await session.run('MATCH (n) RETURN count(n) as nodeCount');
+    const nodeCount = nodeCountResult.records[0].get('nodeCount').toNumber();
+
+    if (nodeCount === 0) {
+      console.log('📭 Database is empty. Starting auto-seed in background...');
+      const path = require('path');
+      const scriptPath = path.join(__dirname, '../scripts/backfill_nni_articles.py');
+
+      exec(`python "${scriptPath}"`, (error, stdout, stderr) => {
+        if (error) console.error(`❌ Auto-seed error: ${error.message}`);
+        if (stderr) console.error(`⚠️  Auto-seed stderr: ${stderr}`);
+        if (stdout) console.log(`✅ Auto-seed output:\n${stdout}`);
+      });
+    } else {
+      console.log(`✅ Database already populated (${nodeCount} nodes)`);
+    }
+    console.log('');
   } catch (error) {
     console.error('❌ Neo4j connection/schema failed:');
     console.error(`   ${error.message}`);
