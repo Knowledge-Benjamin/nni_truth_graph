@@ -34,7 +34,7 @@ class SemanticLinker:
                 return [0.0] * 384 # Fail safe
             
             # Use explicit feature-extraction pipeline endpoint
-            self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+            self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
             headers = {"Authorization": f"Bearer {self.api_token}"}
             
             try:
