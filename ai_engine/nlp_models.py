@@ -33,8 +33,9 @@ class SemanticLinker:
             if not self.api_token:
                 return [0.0] * 384 # Fail safe
             
-            # Use explicit feature-extraction pipeline endpoint
-            self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
+            # Use direct model endpoint for feature extraction (embeddings)
+            # This avoids the router's task auto-detection which was causing 400 errors
+            self.api_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
             headers = {"Authorization": f"Bearer {self.api_token}"}
             
             payload = {"inputs": text, "options": {"wait_for_model": True}}
