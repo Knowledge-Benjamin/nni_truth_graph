@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const AI_ENGINE_URL = process.env.AI_ENGINE_URL || 'http://localhost:8001';
 
 // Neo4j Aura Connection
