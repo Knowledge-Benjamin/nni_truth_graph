@@ -32,6 +32,11 @@ def main():
         cur = conn.cursor()
         print("[OK] Connected!")
         
+        # DEBUG: Check total count without filters
+        cur.execute('SELECT count(*) FROM articles;')
+        raw_count = cur.fetchone()[0]
+        print(f"\n[DEBUG] Total rows in 'articles' table (no filters): {raw_count}")
+
         # Fetch published articles
         print("\n[..] Fetching published articles...")
         cur.execute("""
