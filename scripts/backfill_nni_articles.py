@@ -4,32 +4,42 @@ Connects to Neon PostgreSQL, fetches published articles, sends to AI Engine.
 """
 
 import os
-from dotenv import load_dotenv
 import psycopg2
 import requests
 import time
 import re
 from datetime import datetime
+from dotenv import load_dotenv
 
 # Load env variables (Local Dev support)
+# We look for server/.env because that's where DATABASE_URL is stored locally
 load_dotenv(os.path.join(os.path.dirname(__file__), '../server/.env'))
 
 # Database connection
 NEON_DB = os.getenv("DATABASE_URL")
 
-# Truth Graph API
-TRUTH_GRAPH_API = "http://localhost:3000/api/ingest"
+# Truth Graph API 
+# Allow dynamic port if set, otherwise default to 10000 (common Render default) or 3000
+PORT = os.getenv("PORT", "3000")
+TRUTH_GRAPH_API = f"http://localhost:{PORT}/api/ingest"
 
 def strip_html(html_text):
     """Remove HTML tags from content"""
+    if not html_text:
+        return ""
     clean = re.compile('<.*?>')
     return re.sub(clean, '', html_text)
 
-def main():
+def backfill_nni_articles():
     print("=" * 60)
     print("NNI.news → Truth Graph Backfill Script")
     print("=" * 60)
     
+    if not NEON_DB:
+        print("[ERROR] DATABASE_URL is missing! Cannot connect to NNI database.")
+        print("Ensure 'server/.env' exists and contains DATABASE_URL.")
+        return
+
     try:
         # Connect to Neon DB
         print("\n[..] Connecting to Neon PostgreSQL...")
@@ -48,108 +58,68 @@ def main():
             statuses = cur.fetchall()
             print(f"[DEBUG] Found article statuses: {[s[0] for s in statuses]}")
 
-        # Fetch published articles
+        # Fetch published articles using ROBUST verify logic
         print("\n[..] Fetching published articles...")
+        # FIX: cast status to text and use TRIM + UPPER to be absolutely sure
         cur.execute("""
             SELECT id, title, slug, content, "publishedAt" 
             FROM articles 
-            WHERE TRIM(UPPER(status)) = 'PUBLISHED' AND content IS NOT NULL
+            WHERE TRIM(UPPER(status::text)) = 'PUBLISHED' AND content IS NOT NULL
             ORDER BY "publishedAt" ASC
         """)
         
         articles = cur.fetchall()
-        total_articles = len(articles)
-        articles = cur.fetchall()
-        total_articles = len(articles)
-        print(f"[OK] Found {total_articles} articles to process\n")
-        
-        if total_articles == 0:
+        print(f"[OK] Found {len(articles)} articles to process")
+
+        if not articles:
             print("[WARN]  No articles to process. Exiting.")
+            conn.close()
             return
-        
+
         # Process each article
-        successful = 0
-        failed = 0
+        success_count = 0
         
-        for idx, (article_id, title, slug, content, pub_date) in enumerate(articles, 1):
-            print(f"\n[{idx}/{total_articles}] Processing: {title[:50]}...")
+        for art in articles:
+            art_id, title, slug, content, published_at = art
             
-            # Clean HTML from content
+            print(f"   > Processing: {title[:50]}...")
+            
+            # Prepare payload for Truth Graph API
             clean_content = strip_html(content)
             
-            # Create payload
             payload = {
-                "title": title,
-                "text": clean_content,
-                "article_id": article_id,
-                "source_url": f"https://nni.news/{slug}",
-                "published_date": pub_date.isoformat() if pub_date else datetime.now().isoformat()
+                "text": f"{title}\n\n{clean_content}",
+                "source": "nni.news",
+                "sourceUrl": f"https://nni.news/articles/{slug}",
+                "metadata": {
+                    "original_id": str(art_id),
+                    "published_at": str(published_at),
+                    "author": "NNI Staff" # Default
+                }
             }
             
-            # Send to Truth Graph API
+            # Send to Ingestion API
             try:
-                response = requests.post(
-                    TRUTH_GRAPH_API, 
-                    json=payload,
-                    timeout=30
-                )
-                
-                if response.status_code in [200, 201]:
-                    result = response.json()
-                    claims_extracted = len(result.get('data', []))
-                    print(f"  [OK] Success! Extracted {claims_extracted} claims")
-                    successful += 1
+                # We use the internal ingestion API which handles the AI Engine pipeline
+                response = requests.post(TRUTH_GRAPH_API, json=payload)
+                if response.status_code == 200:
+                    print(f"     ✅ Ingested (Claims extracted)")
+                    success_count += 1
                 else:
-                    print(f"  [ERR] Failed: HTTP {response.status_code}")
-                    print(f"     {response.text[:100]}")
-                    failed += 1
-                
-                # Rate limit: wait between requests for API quota management
-                if idx < total_articles:
-                    # 1-hour cooldown to stay within HF free tier (300 req/hour)
-                    # Each article: ~44 claims × 3 sources = 132 API calls
-                    # 132 < 300 → Safe per hour
-                    wait_time = 3600  # 1 hour in seconds
-                    
-                    print(f"\n{'='*60}")
-                    print(f"[OK] Article {idx}/{total_articles} complete!")
-                    print(f"[..] Cooling down for 1 hour before next article...")
-                    print(f"   Next article starts at: {datetime.fromtimestamp(time.time() + wait_time).strftime('%I:%M %p')}")
-                    print(f"   Progress: {idx}/{total_articles} ({(idx/total_articles)*100:.1f}%)")
-                    print(f"   Estimated completion: {(total_articles - idx)} hours remaining")
-                    print(f"{'='*60}\n")
-                    
-                    # Countdown timer (updates every 5 minutes)
-                    for remaining in range(wait_time, 0, -300):  # Update every 5 min
-                        mins = remaining // 60
-                        print(f"  [..]  {mins} minutes remaining...", end='\r')
-                        time.sleep(min(300, remaining))
-                    
-                    print("\n  [OK] Cooldown complete! Processing next article...\n")
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"  [ERR] Request failed: {e}")
-                failed += 1
+                    print(f"     ❌ Failed: {response.text}")
             except Exception as e:
-                print(f"  [ERR] Unexpected error: {e}")
-                failed += 1
+                print(f"     ⚠️ API Error: {e} (Is the server running on port {PORT}?)")
+                
+            # Rate limit politeness
+            time.sleep(1)
+
+        print("-" * 60)
+        print(f"Backfill Complete. Successfully processed {success_count}/{len(articles)} articles.")
         
-        # Summary
-        print("\n" + "=" * 60)
-        print("BACKFILL COMPLETE!")
-        print("=" * 60)
-        print(f"[OK] Successful: {successful}")
-        print(f"[ERR] Failed: {failed}")
-        print(f"Total: {total_articles}")
-        
-        # Close database connection
-        cur.close()
         conn.close()
-        
-    except psycopg2.Error as e:
-        print(f"\n[ERR] Database error: {e}")
+
     except Exception as e:
-        print(f"\n[ERR] Unexpected error: {e}")
+        print(f"\n[ERROR] Backfill failed: {e}")
 
 if __name__ == "__main__":
-    main()
+    backfill_nni_articles()
