@@ -1,6 +1,5 @@
 from typing import List, Dict, Optional
 import os
-import requests
 import logging
 
 # Configure logging
@@ -20,7 +19,6 @@ class SemanticLinker:
         logger.info("🔄 Loading Semantic Similarity Model...")
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
-        # Use Python client library to avoid deprecated endpoint issues
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
         try:
@@ -29,11 +27,20 @@ class SemanticLinker:
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
             logger.info("✅ Semantic model ready (Local: 384-dim)")
         except ImportError:
-            # Fallback to API
+            # Fallback to API using official client library
             logger.warning("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
             self.use_api = True
             if not self.api_token:
                 logger.error("❌ HF_TOKEN is missing! Embeddings will fail.")
+            else:
+                # Use official HuggingFace client (handles all routing automatically)
+                try:
+                    from huggingface_hub import InferenceClient
+                    self.hf_client = InferenceClient(token=self.api_token)
+                    logger.info("✅ HuggingFace InferenceClient ready")
+                except ImportError:
+                    logger.error("❌ huggingface_hub not installed! Run: pip install huggingface_hub")
+                    self.hf_client = None
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
         """Convert text to 384-dimensional vector (Local or Cloud API).
@@ -42,30 +49,26 @@ class SemanticLinker:
             384-dim vector or None if generation fails (prevents database corruption)
         """
         if self.use_api:
-            if not self.api_token:
-                logger.error("HF_TOKEN missing - cannot generate embeddings")
+            if not self.api_token or not self.hf_client:
+                logger.error("HF_TOKEN or client missing - cannot generate embeddings")
                 return None
             
-            # Use router.huggingface.co with /hf-inference/models/ path (2025)
-            api_url = f"https://router.huggingface.co/hf-inference/models/{self.model_name}"
-            headers = {"Authorization": f"Bearer {self.api_token}"}
-            payload = {"inputs": text, "options": {"wait_for_model": True}}
-
             try:
-                response = requests.post(api_url, headers=headers, json=payload)
+                # Use official client's feature_extraction method (handles routing correctly)
+                result = self.hf_client.feature_extraction(
+                    text,
+                    model=self.model_name
+                )
                 
-                if response.status_code == 200:
-                    result = response.json()
-                    # Handle robustly: could be list of floats or list of list of floats
-                    if isinstance(result, list):
-                        if len(result) > 0 and isinstance(result[0], list):
-                            return result[0] # [[0.1, ...]] -> [0.1, ...]
-                        return result # [0.1, ...]
+                # Result is already the embedding vector
+                if isinstance(result, list):
+                    if len(result) > 0 and isinstance(result[0], list):
+                        return result[0]  # Unwrap if nested
                     return result
-                else:
-                    logger.error(f"API Error {response.status_code}: {response.text}")
-                    logger.debug(f"Payload: {payload}")
-                    return None
+                
+                logger.error(f"Unexpected result type: {type(result)}")
+                return None
+                
             except Exception as e:
                 logger.error(f"Embedding API Failed: {e}")
                 return None
