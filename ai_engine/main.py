@@ -422,6 +422,11 @@ def extract_claims(request: TextRequest):
                 print(f"DEBUG: Verifying claim: {s[:30]}...")
                 
                 # 1. Gather Evidence
+                claim_sources = []
+                # Check optional external tools
+                fact_check = check_google_fact_check(s) if GOOGLE_FACT_CHECK_KEY else None
+                citations = find_citations_with_date(s) if SERPER_API_KEY else []
+                
                 # 2. Process Fact Check
                 if fact_check:
                     claim_sources.append(Source(
