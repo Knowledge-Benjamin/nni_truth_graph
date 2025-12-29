@@ -88,9 +88,8 @@ def translate_query(request: QueryRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# Load models
-# 1. Summarization (for extraction)
-extractor_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+# 91: # Load models - REMOVED GLOBAL INIT TO PREVENT OOM
+# 92: # 1. Summarization (for extraction) is now lazy-loaded in functions
 
 # -----------------------------------------------------------------------------
 # ARCHITECTURE CONFIGURATION: EXECUTION MODE
@@ -122,19 +121,19 @@ else:
 # Only load heavy models if we are in LOCAL mode
 if EXECUTION_MODE == "local":
     print("🖥️ LOCAL MODE: Loading AI Models into Memory...")
-    # Summarization
-    extractor_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-    
-    # Stance Detection
-    if APP_ENV == "production":
-        print(f"🚀 PRODUCTION: Loading heavy Stance model ({stance_model_name})...")
-    else:
-        print(f"🛠️ DEV: Loading light Stance model ({stance_model_name})...")
-        
     try:
+        # Summarization
+        extractor_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+        
+        # Stance Detection
+        if APP_ENV == "production":
+            print(f"🚀 PRODUCTION: Loading heavy Stance model ({stance_model_name})...")
+        else:
+            print(f"🛠️ DEV: Loading light Stance model ({stance_model_name})...")
+        
         stance_classifier = pipeline("zero-shot-classification", model=stance_model_name)
     except Exception as e:
-        print(f"⚠️ Warning: Model load failed. Falling back to Heuristic Mode.")
+        print(f"⚠️ Warning: Model load failed. Falling back to Heuristic Mode. Error: {e}")
         EXECUTION_MODE = "heuristic"
 
 elif EXECUTION_MODE == "cloud":
@@ -154,19 +153,30 @@ entity_extractor = None
 query_translator = None
 
 if NLP_AVAILABLE:
-    print("🔄 Initializing NLP Models...")
+    print(f"🔄 Initializing NLP Models (Mode: {EXECUTION_MODE})...")
+    
+    # Semantic Linker (Embeddings) - Optional in Cloud Mode?
+    # Keeping for now if memory permits (80MB), but wrapping in try-catch
     try:
-        if 'SemanticLinker' in globals():
-            semantic_linker = SemanticLinker()
+        if 'SemanticLinker' in globals() and EXECUTION_MODE != "heuristic": # Skip in heuristic
+             if EXECUTION_MODE == "cloud":
+                  print("⚠️ Skipping SemanticLinker in Cloud Mode to save RAM (Use API if needed)")
+             else:
+                  semantic_linker = SemanticLinker()
     except Exception as e:
         print(f"⚠️  Semantic Linker init failed: {e}")
 
+    # Entity Extractor (GLiNER) - Too heavy for Cloud/Free Tier
     try:
         if 'EntityExtractor' in globals():
-            entity_extractor = EntityExtractor()
+            if EXECUTION_MODE == "local":
+                entity_extractor = EntityExtractor()
+            else:
+                 print("⚠️ Skipping EntityExtractor (Heavy) in Cloud/Heuristic Mode")
     except Exception as e:
         print(f"⚠️  Entity Extractor init failed: {e}")
 
+    # Query Translator (Gemini API) - Always safe if API key exists
     try:
         if 'QueryTranslator' in globals():
             query_translator = QueryTranslator()
