@@ -37,21 +37,25 @@ class SemanticLinker:
             self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
             headers = {"Authorization": f"Bearer {self.api_token}"}
             
+            payload = {"inputs": text, "options": {"wait_for_model": True}}
+
             try:
-                # API expects a list of strings for feature extraction
-                response = requests.post(self.api_url, headers=headers, json={"inputs": [text], "options": {"wait_for_model": True}})
+                response = requests.post(self.api_url, headers=headers, json=payload)
                 
                 if response.status_code == 200:
                     result = response.json()
-                    # Result is list of embeddings, we sent one input so take first
-                    if isinstance(result, list) and len(result) > 0:
-                        return result[0]
+                    # Handle robustly: could be list of floats or list of list of floats
+                    if isinstance(result, list):
+                        if len(result) > 0 and isinstance(result[0], list):
+                            return result[0] # [[0.1, ...]] -> [0.1, ...]
+                        return result # [0.1, ...]
                     return result
                 else:
-                    print(f"API Error {response.status_code}: {response.text}")
+                    print(f"⚠️ API Error {response.status_code}: {response.text}")
+                    print(f"   Debug Payload: {payload}")
                     return [0.0] * 384
             except Exception as e:
-                print(f"Embedding API Failed: {e}")
+                print(f"❌ Embedding API Failed: {e}")
                 return [0.0] * 384
         else:
             embedding = self.model.encode(text, convert_to_tensor=False)
