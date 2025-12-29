@@ -50,7 +50,6 @@ services:
   # React Frontend (Static Site)
   - runtime: static
     name: truth-graph-frontend
-    runtime: static
     buildCommand: cd client && npm install && npm run build
     staticPublishPath: client/dist
     envVars:
