@@ -570,4 +570,6 @@ def extract_claims(request: TextRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    port = int(os.getenv("PORT", 8001))
+    print(f"🚀 Starting AI Engine on port {port}...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
