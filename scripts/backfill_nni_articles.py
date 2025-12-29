@@ -53,7 +53,7 @@ def main():
         cur.execute("""
             SELECT id, title, slug, content, "publishedAt" 
             FROM articles 
-            WHERE status = 'published' AND content IS NOT NULL
+            WHERE status IN ('published', 'PUBLISHED') AND content IS NOT NULL
             ORDER BY "publishedAt" ASC
         """)
         
