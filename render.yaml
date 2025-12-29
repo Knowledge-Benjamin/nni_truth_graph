@@ -18,6 +18,8 @@ services:
         value: https://truth-graph-ai.onrender.com
       - key: APP_ENV
         value: production
+      - key: DATABASE_URL
+        sync: false
     healthCheckPath: /
 
   # Python AI Engine

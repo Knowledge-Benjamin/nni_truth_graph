@@ -3,14 +3,19 @@ Backfill Script: Process existing NNI.news articles into Truth Graph.
 Connects to Neon PostgreSQL, fetches published articles, sends to AI Engine.
 """
 
+import os
+from dotenv import load_dotenv
 import psycopg2
 import requests
 import time
 import re
 from datetime import datetime
 
+# Load env variables (Local Dev support)
+load_dotenv(os.path.join(os.path.dirname(__file__), '../server/.env'))
+
 # Database connection
-NEON_DB = "postgresql://neondb_owner:npg_b2sNTig0IBmZ@ep-summer-fog-adlvchlm-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+NEON_DB = os.getenv("DATABASE_URL")
 
 # Truth Graph API
 TRUTH_GRAPH_API = "http://localhost:3000/api/ingest"
@@ -36,6 +41,12 @@ def main():
         cur.execute('SELECT count(*) FROM articles;')
         raw_count = cur.fetchone()[0]
         print(f"\n[DEBUG] Total rows in 'articles' table (no filters): {raw_count}")
+
+        # DEBUG: Check statuses
+        if raw_count > 0:
+            cur.execute('SELECT DISTINCT status FROM articles;')
+            statuses = cur.fetchall()
+            print(f"[DEBUG] Found article statuses: {[s[0] for s in statuses]}")
 
         # Fetch published articles
         print("\n[..] Fetching published articles...")
