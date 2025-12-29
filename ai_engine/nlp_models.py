@@ -1,3 +1,5 @@
+from typing import List, Dict
+
 class SemanticLinker:
     """
     Generates semantic embeddings for claims and finds similar existing claims.
