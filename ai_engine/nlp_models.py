@@ -16,7 +16,7 @@ class SemanticLinker:
     """
     
     def __init__(self):
-        logger.info("🔄 Loading Semantic Similarity Model...")
+        logger.info("[INFO] Loading Semantic Similarity Model...")
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
@@ -25,10 +25,10 @@ class SemanticLinker:
             # Try loading local model
             from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("✅ Semantic model ready (Local: 384-dim)")
+            logger.info("[SUCCESS] Semantic model ready (Local: 384-dim)")
         except ImportError:
             # Fallback to API using official client library
-            logger.warning("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
+            logger.warning("[WARN] Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
             self.use_api = True
             
             # Debug token availability
@@ -129,7 +129,7 @@ class EntityExtractor:
     """
     
     def __init__(self):
-        print("🔄 Loading Entity Extraction Model...")
+        print("[INFO] Loading Entity Extraction Model...")
         try:
             import spacy
             try:
@@ -137,21 +137,21 @@ class EntityExtractor:
                 
                 self.nlp = spacy.blank("en")
                 self.nlp.add_pipe("gliner_spacy", config={
-                    "model": "urchade/gliner_medium-v2.1",
+                    "gliner_model": "urchade/gliner_medium-v2.1",
                     "labels": ["PERSON", "ORG", "GPE", "EVENT", "PRODUCT", "LAW", "DATE"],
                     "chunk_size": 250
                 })
-                print("✅ Entity extraction ready (GLiNER + spaCy)")
+                print("[SUCCESS] Entity extraction ready (GLiNER + spaCy)")
             except ImportError:
-                print("⚠️  GLiNER not available, using basic spaCy NER")
+                print("[WARN] GLiNER not available, using basic spaCy NER")
                 try:
                     self.nlp = spacy.load("en_core_web_sm")
                 except OSError:
                     # Model not downloaded
-                    print("⚠️  spaCy model not found. Run: python -m spacy download en_core_web_sm")
+                    print("[WARN] spaCy model not found. Run: python -m spacy download en_core_web_sm")
                     self.nlp = None
         except Exception as e:
-            print(f"⚠️  Entity extraction unavailable: {e}")
+            print(f"[ERROR] Entity extraction unavailable: {e}")
             self.nlp = None
     
     def extract_entities(self, text: str) -> List[Dict[str, str]]:

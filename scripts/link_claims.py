@@ -91,8 +91,27 @@ extractor = EntityExtractor()
 
 def link_claims():
     logger.info("🔌 Connecting to Neo4j...")
-    driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+    # Connect to Neo4j
+    # Explicitly trust all certs to avoid Windows SSL errors
+    driver = GraphDatabase.driver(
+        URI, 
+        auth=(USER, PASSWORD),
+        encrypted=True,
+        trust="TRUST_ALL_CERTIFICATES",
+        user_agent="TruthGraphLinker/1.0"
+    )
     
+    # Verify connectivity
+    try:
+        driver.verify_connectivity()
+    except Exception as e:
+        logger.warning(f"Standard connection failed: {e}. Retrying with encrypted=False...")
+        driver = GraphDatabase.driver(
+            URI, 
+            auth=(USER, PASSWORD),
+            encrypted=False
+        )
+
     with driver.session() as session:
         # 1. Find claims without embeddings
         logger.info("🔍 Finding un-embedded claims...")

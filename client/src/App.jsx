@@ -14,11 +14,14 @@ function App() {
   const [graphElements, setGraphElements] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'graph'
+  const [analysis, setAnalysis] = useState(null);
 
   // --- Search Logic ---
   const handleSearch = (data) => {
-    // data = { cypher, explanation, results }
+    // data = { cypher, explanation, results, analysis }
     console.log("Search results:", data);
+
+    setAnalysis(data.analysis || null);
 
     // Map Neo4j results to expected Claim format
     const mappedResults = data.results.map(r => {
@@ -26,9 +29,11 @@ function App() {
       // Assuming generic return or Claim return.
       // If result is a node, r.c or plain r properties
       const claim = r.c || r.claim || r;
+      const val_statement = claim.statement || claim["c.statement"] || r["c.statement"] || "Unknown Statement";
+
       return {
         id: claim.id || 'unknown',
-        statement: claim.statement || "Unknown Statement",
+        statement: val_statement,
         confidence: claim.confidence || 0.5,
         first_seen: claim.first_seen,
         last_verified: claim.last_verified,
@@ -176,22 +181,6 @@ function App() {
         <span className="beta-tag">Beta</span>
       </header>
 
-      {/* Navigation - Simplified since Analyze is removed */}
-      {/* <nav className="nav-bar">
-        <button
-          onClick={() => setActiveTab('search')}
-          className={`nav-btn ${activeTab === 'search' ? 'active' : ''}`}
-        >
-          🔍 Search Truth
-        </button>
-        <button
-          onClick={() => setActiveTab('submit')}
-          className={`nav-btn ${activeTab === 'submit' ? 'active' : ''}`}
-        >
-          📝 Analyze Text
-        </button>
-      </nav> */}
-
       {/* Main Content */}
       <main className="main-content">
         <div>
@@ -208,6 +197,25 @@ function App() {
 
           {viewMode === 'list' && (
             <div className="search-results" style={{ marginTop: '40px', maxWidth: '800px', margin: '40px auto' }}>
+
+              {/* AI Analysis Block */}
+              {analysis && (
+                <div className="analysis-box" style={{
+                  marginBottom: '32px',
+                  padding: '0 8px'
+                }}>
+                  <p style={{
+                    margin: 0,
+                    lineHeight: '1.6',
+                    fontSize: '1.1rem',
+                    color: 'var(--text-primary)',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {analysis}
+                  </p>
+                </div>
+              )}
+
               {searchResults.length > 0 ? (
                 searchResults.map((claim, i) => (
                   <ClaimCard key={i} claim={claim} onViewGraph={handleViewGraph} />

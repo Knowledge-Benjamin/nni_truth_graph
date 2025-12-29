@@ -179,27 +179,87 @@ app.post('/api/ingest', async (req, res) => {
   }
 });
 
-// Natural Language Query
+// Natural Language Query (Hybrid Search)
 app.post('/api/query/natural', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Query required' });
 
   try {
-    // 1. Call AI Engine to translate NL -> Cypher
-    console.log(` Translating query: "${query}"...`);
-    const translationResp = await axios.post(`${AI_ENGINE_URL}/translate_query`, { query });
-    const { query: cypherQuery, explanation } = translationResp.data;
+    console.log(`🔎 TruthRank: Processing "${query}"...`);
 
-    if (!cypherQuery) {
-      return res.status(500).json({ error: 'Failed to generate Cypher query' });
+    // 1. Parallel: Expand Query & Generate Embedding via AI Engine
+    const [expansionResp, embeddingResp] = await Promise.allSettled([
+      axios.post(`${AI_ENGINE_URL}/expand_query`, { query }),
+      axios.post(`${AI_ENGINE_URL}/embed_query`, { query })
+    ]);
+
+    // Process Expansion
+    let searchTerms = [query];
+    if (expansionResp.status === 'fulfilled' && expansionResp.value.data.variations) {
+      searchTerms = [...searchTerms, ...expansionResp.value.data.variations];
+    }
+    const fulltextQuery = searchTerms.map(t => `"${t.replace(/"/g, '')}"`).join(' OR ');
+    console.log(`   ✨ Expansion: ${searchTerms.join(', ')}`);
+
+    // Process Embedding
+    let vector = null;
+    if (embeddingResp.status === 'fulfilled' && embeddingResp.value.data.embedding) {
+      vector = embeddingResp.value.data.embedding;
+      console.log(`   🧬 Embedding generated (384-dim)`);
+    } else {
+      console.log(`   ⚠️ Vector search unavailable (using keyword only)`);
     }
 
-    console.log(` Executing Cypher: ${cypherQuery}`);
-
-    // 2. Execute on Neo4j
+    // 2. Execute Hybrid Cypher Query
     const session = neo4jDriver.session();
     try {
-      const result = await session.run(cypherQuery);
+      // TruthRank Cypher Query
+      const hybridQuery = `
+        // 1. Vector Search (Semantic)
+        CALL db.index.vector.queryNodes('claim_embeddings', 50, $vector) 
+        YIELD node AS c, score AS vectorScore
+
+        UNION 
+
+        // 2. Fulltext Search (Keyword)
+        CALL db.index.fulltext.queryNodes('claim_statement_fulltext', $fulltextQuery) 
+        YIELD node AS c, score AS fulltextScore
+        
+        WITH c, 
+             max(coalesce(vectorScore, 0)) as vecScore, 
+             max(coalesce(fulltextScore, 0)) as ftScore
+        
+        // 3. TruthRank Scoring
+        // Base Score: Weighted avg of Vector (70%) and Keyword (30%)
+        // Boosts:
+        // + Verified Claims (Trusted Fact Checks): x1.5
+        // + High Confidence (>0.8): x1.2
+        
+        WITH c, vecScore, ftScore,
+             (vecScore * 0.7 + ftScore * 0.3) AS baseScore,
+             (CASE WHEN c.confidence > 0.8 THEN 1.2 ELSE 1.0 END) AS confBoost,
+             (CASE WHEN any(s IN [(c)-[:VERIFIED_BY]->(s) | s.rating] WHERE s.rating CONTAINS 'True' OR s.rating = 'Verified') THEN 1.5 ELSE 1.0 END) AS verifyBoost
+        
+        WITH c, (baseScore * confBoost * verifyBoost) AS finalScore
+        ORDER BY finalScore DESC
+        LIMIT 15
+        
+        RETURN c, finalScore as relevance
+      `;
+
+      // Fallback if vector missing: Use Fulltext Only
+      const keywordOnlyQuery = `
+        CALL db.index.fulltext.queryNodes('claim_statement_fulltext', $fulltextQuery) 
+        YIELD node AS c, score AS relevance
+        RETURN c, relevance ORDER BY relevance DESC LIMIT 15
+      `;
+
+      const finalQuery = vector ? hybridQuery : keywordOnlyQuery;
+
+      const result = await session.run(finalQuery, {
+        vector: vector || [],
+        fulltextQuery: fulltextQuery
+      });
 
       // Format results
       const records = result.records.map(record => {
@@ -207,26 +267,58 @@ app.post('/api/query/natural', async (req, res) => {
           const val = record.get(key);
           // Handle Neo4j Integers and Nodes
           if (val && val.low !== undefined) acc[key] = val.low; // simple integer handling
-          else if (val && val.labels) acc[key] = val.properties; // Node
+          else if (val && val.labels) {
+            // It's a Node
+            acc[key] = { ...val.properties };
+            // Ensure ID exists (fallback to elementId if 'id' property missing)
+            if (!acc[key].id && val.elementId) {
+              acc[key].id = val.elementId;
+            }
+          }
           else acc[key] = val;
           return acc;
         }, {});
       });
 
+      console.log(`   📊 Found ${records.length} relevant claims.`);
+
+      // 3. AI Analysis (Synthesis)
+      let analysis = null;
+      let cleanedResults = records;
+
+      if (records.length > 0) {
+        console.log(`   🤖 Analyzing results...`);
+        try {
+          const analysisResp = await axios.post(`${AI_ENGINE_URL}/analyze_results`, {
+            query,
+            results: records
+          });
+
+          if (analysisResp.data) {
+            analysis = analysisResp.data.analysis;
+            cleanedResults = analysisResp.data.cleaned_results;
+            console.log('✅ Analysis complete.');
+          }
+        } catch (aiErr) {
+          console.error(`   ⚠️ Analysis failed: ${aiErr.message}`);
+        }
+      }
+
       res.json({
-        cypher: cypherQuery,
-        explanation: explanation,
-        results: records
+        truthRank: true,
+        analysis: analysis || "AI Analysis unavailable. Showing raw TruthRank results.",
+        results: cleanedResults
       });
+
     } finally {
       await session.close();
     }
   } catch (error) {
     console.error('Query Error:', error.message);
-    if (error.response) console.error('AI Engine Response:', error.response.data);
     res.status(500).json({ error: 'Search failed', details: error.message });
   }
 });
+
 
 // Verify Single Claim
 app.get('/api/verify', async (req, res) => {
@@ -314,8 +406,10 @@ app.get('/api/claim_graph/:claimId', async (req, res) => {
   try {
     // Fetch Claim, its Neighbors (Source, Article), and relationships
     // 1-hop for now to keep it clean, maybe 2-hop later
+    // Match by property ID or internal elementId
     const result = await session.run(`
-      MATCH (c:Claim {id: $id})
+      MATCH (c:Claim)
+      WHERE c.id = $id OR elementId(c) = $id
       OPTIONAL MATCH (c)-[r]-(n)
       RETURN c, r, n
     `, { id: claimId });

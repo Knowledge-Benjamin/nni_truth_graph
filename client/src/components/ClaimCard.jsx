@@ -32,7 +32,7 @@ function ClaimCard({ claim, onViewGraph }) {
                 </span>
             </div>
             <p className="card-statement">
-                {claim.statement}
+                {claim.statement.replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ')}
             </p>
 
             <div className="confidence-section">
@@ -57,13 +57,16 @@ function ClaimCard({ claim, onViewGraph }) {
                     </span>
                 )}
 
-                <button
-                    className="view-graph-btn"
-                    onClick={() => onViewGraph(claim.id)}
-                >
-                    <span>View in Graph</span>
-                    <span style={{ fontSize: '1.2em' }}>→</span>
-                </button>
+                <div className="card-actions">
+                    <button
+                        className="btn-view-graph"
+                        onClick={() => onViewGraph(claim.id)}
+                        disabled={!claim.id || claim.id === 'unknown'}
+                        title={(!claim.id || claim.id === 'unknown') ? "ID Missing" : "View Graph"}
+                    >
+                        View in Graph →
+                    </button>
+                </div>
             </div>
         </div>
     );

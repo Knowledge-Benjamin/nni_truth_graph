@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from typing import List, Optional
 # from transformers import pipeline # Lazy loaded only if needed
 import os
@@ -17,18 +17,30 @@ entity_extractor = None
 query_translator = None
 
 try:
-    print("🔄 Importing NLP modules...")
+    print("[INFO] Importing NLP modules...")
     from nlp_models import SemanticLinker, EntityExtractor
-    print("✅ NLP models imported")
+    print("[SUCCESS] NLP models imported")
 except ImportError as e:
-    print(f"⚠️  NLP models import failed: {e}")
+    print(f"[WARN] NLP models import failed: {e}")
 
 try:
-    print("🔄 Importing Query Engine...")
-    from query_engine import QueryTranslator
-    print("✅ Query Engine imported")
+    print("[INFO] Importing Query Engine...")
+    from query_engine import QueryTranslator, ResultAnalyzer
+    print("[SUCCESS] Query Engine imported")
 except Exception as e:
-    print(f"⚠️  Query Engine import failed: {e}")
+    print(f"[WARN] Query Engine import failed: {e}")
+    
+NLP_AVAILABLE = True # Partial availability is acceptable
+
+# ... (omitted) ...
+
+result_analyzer = None
+try:
+    if 'ResultAnalyzer' in globals():
+        result_analyzer = ResultAnalyzer()
+except Exception as e:
+    print(f"⚠️  Result Analyzer init failed: {e}")
+
     
 NLP_AVAILABLE = True # Partial availability is acceptable
 
@@ -89,6 +101,52 @@ def translate_query(request: QueryRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+class AnalysisRequest(BaseModel):
+    query: str
+    results: List[Dict]
+
+@app.post("/analyze_results")
+def analyze_results(request: AnalysisRequest):
+    """
+    Analyzes and cleans search results.
+    """
+    if "result_analyzer" not in globals() or not result_analyzer:
+         raise HTTPException(status_code=503, detail="Result Analyzer not available")
+
+    print(f"DEBUG: Analyzing {len(request.results)} results for query: {request.query}")
+    return result_analyzer.analyze_results(request.query, request.results)
+
+@app.post("/expand_query")
+def expand_query_endpoint(request: QueryRequest):
+    """
+    Generates search variations (synonyms, related terms).
+    """
+    if "query_translator" not in globals() or not query_translator:
+         raise HTTPException(status_code=503, detail="Query Translator Unavailable")
+    
+    return query_translator.expand_query(request.query)
+
+@app.post("/embed_query")
+def embed_query_endpoint(request: QueryRequest):
+    """
+    Generates vector embedding for valid queries.
+    """
+    if "semantic_linker" not in globals() or not semantic_linker:
+         # Mock embedding for cloud/heuristic mode if needed, or error
+         if EXECUTION_MODE == "cloud":
+             # In cloud mode, we might want to use an API or skip vector search
+             raise HTTPException(status_code=503, detail="Vector Search not supported in Cloud Mode yet (Need API)")
+         raise HTTPException(status_code=503, detail="Semantic Linker Unavailable")
+
+    try:
+        embedding = semantic_linker.get_embedding(request.query)
+        if not embedding:
+            raise HTTPException(status_code=500, detail="Embedding generation failed")
+        return {"embedding": embedding}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 91: # Load models - REMOVED GLOBAL INIT TO PREVENT OOM
 # 92: # 1. Summarization (for extraction) is now lazy-loaded in functions
 
@@ -139,11 +197,11 @@ if EXECUTION_MODE == "local":
         EXECUTION_MODE = "heuristic"
 
 elif EXECUTION_MODE == "cloud":
-    print("☁️ CLOUD MODE: AI functionality delegating to External APIs...")
+    print("[INFO] CLOUD MODE: AI functionality delegating to External APIs...")
     # No local loading needed
 
 else: # heuristic
-    print("⚡ HEURISTIC MODE: Using fast logic (No AI overhead)...")
+    print("[INFO] HEURISTIC MODE: Using fast logic (No AI overhead)...")
     # No local loading needed
 
 GOOGLE_FACT_CHECK_KEY = os.getenv("GOOGLE_FACT_CHECK_KEY")
@@ -381,60 +439,50 @@ def extract_claims(request: TextRequest):
     try:
         print(f"DEBUG: Processing content length: {len(request.content)}")
         
-        # Optimization: If text is short, skip summarization (saves RAM/Time)
-        if len(request.content) < 1000:
-            print("DEBUG: Text is short, skipping summarization.")
-            extracted_text = request.content
-        else:
-            print("DEBUG: Text is long, running summarization model...")
-            # INPUT TEXT PROCESSING
-            # Truncate text to avoid token limits
-            input_text = request.content[:3500]
+        # --- 1. Smart Chunking (No split words) ---
+        # If text is too long (e.g. > 3500 chars), we need to chunk it intelligently.
+        # We'll target ~3000 chars but ensuring we cut at the last period/newline.
+        
+        input_text = request.content
+        if len(input_text) > 3500:
+            print("DEBUG: Text is long, applying Smart Chunking...")
+            limit = 3500
+            # Find the last period or newline before the limit
+            cut_index = -1
+            for separator in ['. ', '\n', '.\n']:
+                 last_sep = input_text.rfind(separator, 0, limit)
+                 if last_sep > cut_index:
+                     cut_index = last_sep
             
-            # If we have a local summarizer, use it
-            if extractor_pipeline:
-                try:
-                    print("DEBUG: Running summarization model...")
-                    # Dynamic length parameters
-                    input_len = len(input_text.split())
-                    max_len = min(60, max(5, int(input_len * 0.6)))
-                    min_len = min(10, max_len - 2)
-                    
-                    summary = extractor_pipeline(input_text, max_length=max_len, min_length=min_len, do_sample=False, truncation=True)
-                    extracted_text = summary[0]['summary_text']
-                    print("DEBUG: Summarization complete.")
-                except Exception as e:
-                    print(f"⚠️ Summarization failed: {e}. Using raw text.")
-                    extracted_text = input_text[:1000] # Fallback
+            if cut_index > 0:
+                input_text = input_text[:cut_index+1] # Include the period
+                print(f"DEBUG: Smart cut at index {cut_index} (Clean sentence end)")
             else:
-                # Cloud/Heuristic Mode: Use smart chunking for long articles
-                print("DEBUG: Summarizer unavailable (Cloud/Heuristic). Using smart chunking.")
-                
-                if len(input_text) > 2000:
-                    # Extract 3 strategic sections: intro, middle, conclusion
-                    chunk_size = 600
-                    intro = input_text[:chunk_size]
-                    middle_start = len(input_text) // 2 - chunk_size // 2
-                    middle = input_text[middle_start:middle_start + chunk_size]
-                    conclusion = input_text[-chunk_size:]
-                    extracted_text = f"{intro}\n\n{middle}\n\n{conclusion}"
-                    print(f"DEBUG: Chunked {len(input_text)} chars to {len(extracted_text)} chars (intro/middle/end)")
-                else:
-                    extracted_text = input_text[:1500]  # Medium-length: use more content
+                input_text = input_text[:limit] # Fallback if no clean break found
         
-        # Split summary into sentences to simulate "claims"
-        sentences = extracted_text.split('. ')
+        extracted_text = input_text # For now, we use the first clean chunk
+        
+        # --- 2. LLM Smart Extraction ---
         claims = []
+        raw_claims = []
         
-        print(f"DEBUG: Extracted {len(sentences)} sentences. Starting verification...")
+        if query_translator:
+            print("DEBUG: Using Gemini for Smart Claim Extraction...")
+            raw_claims = query_translator.extract_claims_from_text(extracted_text)
+            print(f"DEBUG: Gemini extracted {len(raw_claims)} candidates.")
         
-        for i, s in enumerate(sentences):
-            if len(s) > 10:
-                print(f"DEBUG: Verifying claim: {s[:30]}...")
-                
+        # Fallback if Gemini failed or is unavailable
+        if not raw_claims:
+            print("DEBUG: Gemini unavailable/empty, falling back to Sentence Splitting.")
+            raw_claims = extracted_text.split('. ')
+
+        print(f"DEBUG: Verifying {len(raw_claims)} candidate claims...")
+        
+        for s in raw_claims:
+            s = s.strip()
+            if len(s) > 15: # Ignore very short artifacts
                 # 1. Gather Evidence
                 claim_sources = []
-                # Check optional external tools
                 fact_check = check_google_fact_check(s) if GOOGLE_FACT_CHECK_KEY else None
                 citations = find_citations_with_date(s) if SERPER_API_KEY else []
                 
@@ -455,9 +503,7 @@ def extract_claims(request: TextRequest):
                 contradicting_score = 0.0
                 
                 for cit in citations:
-                    # AI or Heuristic Stance
                     stance = determine_stance(s, cit['snippet'])
-                    
                     claim_sources.append(Source(
                         url=cit['url'],
                         publisher=cit['publisher'],
@@ -481,7 +527,7 @@ def extract_claims(request: TextRequest):
                     net_score = supporting_score - contradicting_score
                     final_confidence = min(0.99, max(0.01, 0.5 + (net_score * 0.2)))
                 
-                # 5. Optional: Generate embedding and extract entities (NLP Enhancement)
+                # 5. Optional: Embedding & Entities
                 embedding = None
                 entities = None
                 
@@ -491,6 +537,8 @@ def extract_claims(request: TextRequest):
                     except Exception as e:
                         print(f"⚠️  Embedding generation failed: {e}")
                 
+                # Skip Entity Extraction if using LLM claims (usually clean enough), or keep it?
+                # Keeping it adds metadata.
                 if entity_extractor:
                     try:
                         entities = entity_extractor.extract_unique_entities(s)
@@ -510,12 +558,8 @@ def extract_claims(request: TextRequest):
         
     except Exception as e:
         print(f"AI Error: {e}")
-        # Return partial results or failure
+        # Return fallback error claim so frontend sees something
         return [Claim(statement=f"Extraction Error: {str(e)}", confidence=0.0, last_updated=timestamp, sources=[])]
-        
-    except Exception as e:
-        print(f"AI Error: {e}")
-        return [Claim(statement=f"Extraction Failed: {str(e)}", confidence=0.0, last_updated=timestamp, sources=[])]
 
 if __name__ == "__main__":
     import uvicorn
