@@ -5,7 +5,7 @@ services:
     runtime: node
     region: oregon
     plan: free
-    buildCommand: cd server && npm install && pip install psycopg2-binary python-dotenv neo4j requests huggingface_hub
+    buildCommand: cd server && npm install && pip install psycopg2-binary python-dotenv neo4j requests huggingface_hub numpy
     startCommand: cd server && node index.js
     envVars:
       - key: NEO4J_URI
