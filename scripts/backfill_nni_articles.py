@@ -32,7 +32,7 @@ def strip_html(html_text):
 
 def backfill_nni_articles():
     print("=" * 60)
-    print("NNI.news → Truth Graph Backfill Script")
+    print("NNI.news -> Truth Graph Backfill Script")
     print("=" * 60)
     
     if not NEON_DB:

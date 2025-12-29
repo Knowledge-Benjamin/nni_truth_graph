@@ -93,11 +93,12 @@ def link_claims():
     logger.info("🔌 Connecting to Neo4j...")
     # Connect to Neo4j
     # Explicitly trust all certs to avoid Windows SSL errors
+    # Connect to Neo4j
+    # We rely on the URI scheme (neo4j+ssc://) to handle encryption settings
+    # This prevents conflicts like "ConfigurationError: ... only used with scheme 'bolt' or 'neo4j'"
     driver = GraphDatabase.driver(
         URI, 
         auth=(USER, PASSWORD),
-        encrypted=True,
-        trust="TRUST_ALL_CERTIFICATES",
         user_agent="TruthGraphLinker/1.0"
     )
     
