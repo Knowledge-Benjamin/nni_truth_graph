@@ -20,6 +20,10 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
     healthCheckPath: /
 
   # Python AI Engine
