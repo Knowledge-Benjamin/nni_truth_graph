@@ -102,12 +102,26 @@ app.post('/api/ingest', async (req, res) => {
   if (!text) return res.status(400).json({ error: 'Text required' });
 
   try {
-    // 1. Call AI Engine
+    // 1. Call AI Engine with Retry Logic (for cold starts)
     console.log('Sending text to AI Engine...');
-    const aiResponse = await axios.post(`${AI_ENGINE_URL}/extract_claims`, {
-      content: text,
-      article_id: title || 'unknown'
-    });
+
+    const callAiWithRetry = async (retries = 3, delay = 2000) => {
+      try {
+        return await axios.post(`${AI_ENGINE_URL}/extract_claims`, {
+          content: text,
+          article_id: title || 'unknown'
+        });
+      } catch (err) {
+        if (retries > 0 && (err.response?.status === 502 || err.response?.status === 503 || err.code === 'ECONNREFUSED')) {
+          console.log(`⚠️ AI Engine unavailable (${err.response?.status || err.code}). Retrying in ${delay / 1000}s...`);
+          await new Promise(res => setTimeout(res, delay));
+          return callAiWithRetry(retries - 1, delay * 2);
+        }
+        throw err;
+      }
+    };
+
+    const aiResponse = await callAiWithRetry(5, 3000); // 5 retries, start with 3s wait
     const claims = aiResponse.data;
 
     // 2. Save to Neo4j

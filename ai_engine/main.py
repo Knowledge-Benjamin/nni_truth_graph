@@ -387,17 +387,29 @@ def extract_claims(request: TextRequest):
             extracted_text = request.content
         else:
             print("DEBUG: Text is long, running summarization model...")
-            # Truncate text to avoid 1024 token limit (approx 3500 chars)
+            # INPUT TEXT PROCESSING
+            # Truncate text to avoid token limits
             input_text = request.content[:3500]
             
-            # Dynamic length parameters
-            input_len = len(input_text.split())
-            max_len = min(60, max(5, int(input_len * 0.6)))
-            min_len = min(10, max_len - 2)
-            
-            summary = extractor_pipeline(input_text, max_length=max_len, min_length=min_len, do_sample=False, truncation=True)
-            extracted_text = summary[0]['summary_text']
-            print("DEBUG: Summarization complete.")
+            # If we have a local summarizer, use it
+            if extractor_pipeline:
+                try:
+                    print("DEBUG: Running summarization model...")
+                    # Dynamic length parameters
+                    input_len = len(input_text.split())
+                    max_len = min(60, max(5, int(input_len * 0.6)))
+                    min_len = min(10, max_len - 2)
+                    
+                    summary = extractor_pipeline(input_text, max_length=max_len, min_length=min_len, do_sample=False, truncation=True)
+                    extracted_text = summary[0]['summary_text']
+                    print("DEBUG: Summarization complete.")
+                except Exception as e:
+                    print(f"⚠️ Summarization failed: {e}. Using raw text.")
+                    extracted_text = input_text[:1000] # Fallback
+            else:
+                # Cloud/Heuristic Mode: Skip summarization to save RAM/Time
+                print("DEBUG: Summarizer unavailable (Cloud/Heuristic). Using raw text truncation.")
+                extracted_text = input_text[:1500] # Use first 1500 chars
         
         # Split summary into sentences to simulate "claims"
         sentences = extracted_text.split('. ')
