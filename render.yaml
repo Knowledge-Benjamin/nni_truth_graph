@@ -18,7 +18,7 @@ services:
         sync: false
       - key: AI_ENGINE_URL
         value: https://truth-graph-ai.onrender.com
-      - key: NODE_ENV
+      - key: APP_ENV
         value: production
     healthCheckPath: /
 
@@ -35,6 +35,8 @@ services:
         value: 8001
       - key: EXECUTION_MODE
         value: cloud
+      - key: APP_ENV
+        value: production
       - key: HF_TOKEN
         sync: false
       - key: GEMINI_API_KEY
@@ -43,12 +45,10 @@ services:
         sync: false
       - key: SERPER_API_KEY
         sync: false
-      - key: APP_ENV
-        value: production
     healthCheckPath: /
 
   # React Frontend (Static Site)
-  - type: web
+  - type: static
     name: truth-graph-frontend
     runtime: static
     buildCommand: cd client && npm install && npm run build
