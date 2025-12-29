@@ -73,6 +73,10 @@ class SemanticLinker:
                 )
                 
                 # Result is already the embedding vector
+                # Handle numpy array (default return type)
+                if hasattr(result, 'tolist'):
+                    result = result.tolist()
+                
                 if isinstance(result, list):
                     if len(result) > 0 and isinstance(result[0], list):
                         return result[0]  # Unwrap if nested
