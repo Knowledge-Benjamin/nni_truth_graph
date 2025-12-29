@@ -20,8 +20,8 @@ class SemanticLinker:
         logger.info("🔄 Loading Semantic Similarity Model...")
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
-        # Direct model endpoint for feature extraction (embeddings)
-        self.api_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+        # Use HuggingFace Router (api-inference deprecated in 2025)
+        self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
 
         try:
             # Try loading local model
