@@ -407,9 +407,20 @@ def extract_claims(request: TextRequest):
                     print(f"⚠️ Summarization failed: {e}. Using raw text.")
                     extracted_text = input_text[:1000] # Fallback
             else:
-                # Cloud/Heuristic Mode: Skip summarization to save RAM/Time
-                print("DEBUG: Summarizer unavailable (Cloud/Heuristic). Using raw text truncation.")
-                extracted_text = input_text[:1500] # Use first 1500 chars
+                # Cloud/Heuristic Mode: Use smart chunking for long articles
+                print("DEBUG: Summarizer unavailable (Cloud/Heuristic). Using smart chunking.")
+                
+                if len(input_text) > 2000:
+                    # Extract 3 strategic sections: intro, middle, conclusion
+                    chunk_size = 600
+                    intro = input_text[:chunk_size]
+                    middle_start = len(input_text) // 2 - chunk_size // 2
+                    middle = input_text[middle_start:middle_start + chunk_size]
+                    conclusion = input_text[-chunk_size:]
+                    extracted_text = f"{intro}\n\n{middle}\n\n{conclusion}"
+                    print(f"DEBUG: Chunked {len(input_text)} chars to {len(extracted_text)} chars (intro/middle/end)")
+                else:
+                    extracted_text = input_text[:1500]  # Medium-length: use more content
         
         # Split summary into sentences to simulate "claims"
         sentences = extracted_text.split('. ')
