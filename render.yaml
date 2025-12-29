@@ -48,7 +48,7 @@ services:
     healthCheckPath: /
 
   # React Frontend (Static Site)
-  - type: static
+  - runtime: static
     name: truth-graph-frontend
     runtime: static
     buildCommand: cd client && npm install && npm run build
