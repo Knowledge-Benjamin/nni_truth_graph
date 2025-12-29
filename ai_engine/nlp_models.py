@@ -20,8 +20,8 @@ class SemanticLinker:
         logger.info("🔄 Loading Semantic Similarity Model...")
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
-        # Use task-specific pipeline endpoint for explicit feature extraction (2025)
-        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+        # Use Python client library to avoid deprecated endpoint issues
+        self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
         try:
             # Try loading local model
@@ -46,11 +46,13 @@ class SemanticLinker:
                 logger.error("HF_TOKEN missing - cannot generate embeddings")
                 return None
             
+            # Use router.huggingface.co with correct model endpoint (2025)
+            api_url = f"https://router.huggingface.co/models/{self.model_name}"
             headers = {"Authorization": f"Bearer {self.api_token}"}
-            payload = {"inputs": text, "options": {"wait_for_model": True}}
+            payload = {"inputs": text, "options": {\"wait_for_model\": True}}
 
             try:
-                response = requests.post(self.api_url, headers=headers, json=payload)
+                response = requests.post(api_url, headers=headers, json=payload)
                 
                 if response.status_code == 200:
                     result = response.json()
