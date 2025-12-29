@@ -1,6 +1,14 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 import requests
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class SemanticLinker:
     """
@@ -9,35 +17,36 @@ class SemanticLinker:
     """
     
     def __init__(self):
-        print("🔄 Loading Semantic Similarity Model...")
+        logger.info("🔄 Loading Semantic Similarity Model...")
         self.use_api = False
-        # FIX: Update deprecated API URL to new Router URL
-        self.api_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2"
         self.api_token = os.getenv("HF_TOKEN")
+        # Direct model endpoint for feature extraction (embeddings)
+        self.api_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
 
         try:
             # Try loading local model
             from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            print("✅ Semantic model ready (Local: 384-dim)")
+            logger.info("✅ Semantic model ready (Local: 384-dim)")
         except ImportError:
             # Fallback to API
-            print("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
+            logger.warning("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
             self.use_api = True
             if not self.api_token:
-                print("❌ HF_TOKEN is missing! Embeddings will fail.")
+                logger.error("❌ HF_TOKEN is missing! Embeddings will fail.")
 
-    def get_embedding(self, text: str) -> List[float]:
-        """Convert text to 384-dimensional vector (Local or Cloud API)."""
+    def get_embedding(self, text: str) -> Optional[List[float]]:
+        """Convert text to 384-dimensional vector (Local or Cloud API).
+        
+        Returns:
+            384-dim vector or None if generation fails (prevents database corruption)
+        """
         if self.use_api:
             if not self.api_token:
-                return [0.0] * 384 # Fail safe
+                logger.error("HF_TOKEN missing - cannot generate embeddings")
+                return None
             
-            # Use direct model endpoint for feature extraction (embeddings)
-            # This avoids the router's task auto-detection which was causing 400 errors
-            self.api_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
             headers = {"Authorization": f"Bearer {self.api_token}"}
-            
             payload = {"inputs": text, "options": {"wait_for_model": True}}
 
             try:
@@ -52,12 +61,12 @@ class SemanticLinker:
                         return result # [0.1, ...]
                     return result
                 else:
-                    print(f"⚠️ API Error {response.status_code}: {response.text}")
-                    print(f"   Debug Payload: {payload}")
-                    return [0.0] * 384
+                    logger.error(f"API Error {response.status_code}: {response.text}")
+                    logger.debug(f"Payload: {payload}")
+                    return None
             except Exception as e:
-                print(f"❌ Embedding API Failed: {e}")
-                return [0.0] * 384
+                logger.error(f"Embedding API Failed: {e}")
+                return None
         else:
             embedding = self.model.encode(text, convert_to_tensor=False)
             return embedding.tolist()

@@ -224,8 +224,8 @@ def determine_stance(claim, snippet):
 
     # --- 2. CLOUD MODE (API Key Required) ---
     elif EXECUTION_MODE == "cloud" and HF_TOKEN:
-        # New HF Router URL format
-        API_URL = f"https://router.huggingface.co/hf-inference/models/{stance_model_name}"
+        # Direct model endpoint for zero-shot classification
+        API_URL = f"https://api-inference.huggingface.co/models/{stance_model_name}"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
         # Payload properly formatted for Zero-Shot Classification API
