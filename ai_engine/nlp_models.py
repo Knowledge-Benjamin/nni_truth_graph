@@ -30,16 +30,25 @@ class SemanticLinker:
             # Fallback to API using official client library
             logger.warning("⚠️ Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
             self.use_api = True
+            
+            # Debug token availability
             if not self.api_token:
-                logger.error("❌ HF_TOKEN is missing! Embeddings will fail.")
+                logger.error("❌ HF_TOKEN is missing from environment variables!")
+                self.hf_client = None
             else:
-                # Use official HuggingFace client (handles all routing automatically)
+                logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
+                # Try to initialize HuggingFace client
                 try:
                     from huggingface_hub import InferenceClient
+                    logger.info("✅ huggingface_hub library imported successfully")
                     self.hf_client = InferenceClient(token=self.api_token)
-                    logger.info("✅ HuggingFace InferenceClient ready")
-                except ImportError:
-                    logger.error("❌ huggingface_hub not installed! Run: pip install huggingface_hub")
+                    logger.info("✅ HuggingFace InferenceClient initialized successfully")
+                except ImportError as e:
+                    logger.error(f"❌ huggingface_hub not installed! Error: {e}")
+                    logger.error("Run: pip install huggingface_hub")
+                    self.hf_client = None
+                except Exception as e:
+                    logger.error(f"❌ InferenceClient initialization failed: {e}")
                     self.hf_client = None
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
@@ -49,8 +58,11 @@ class SemanticLinker:
             384-dim vector or None if generation fails (prevents database corruption)
         """
         if self.use_api:
-            if not self.api_token or not self.hf_client:
-                logger.error("HF_TOKEN or client missing - cannot generate embeddings")
+            if not self.api_token:
+                logger.error("❌ HF_TOKEN environment variable is not set!")
+                return None
+            if not self.hf_client:
+                logger.error("❌ InferenceClient not initialized (check logs above for reason)")
                 return None
             
             try:
