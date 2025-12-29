@@ -32,11 +32,23 @@ def inspect_db():
             print(f"\nTotal rows in '{table_name}': {count}")
 
             if count > 0:
-                # 3. Check distinct statuses
+                # 3. Check distinct statuses with repr to see whitespace
                 try:
                     cur.execute(f'SELECT DISTINCT status FROM "{table_name}";')
                     statuses = cur.fetchall()
-                    print(f"Distinct statuses: {statuses}")
+                    print(f"Distinct statuses (raw): {[repr(s[0]) for s in statuses]}")
+                    
+                    # Check for content nulls
+                    cur.execute(f'SELECT count(*) FROM "{table_name}" WHERE content IS NULL or content = \'\';')
+                    null_content = cur.fetchone()[0]
+                    print(f"Rows with NULL/Empty content: {null_content}")
+                    
+                    # Check matching rows query manually
+                    print("Testing match query...")
+                    cur.execute(f"SELECT count(*) FROM \"{table_name}\" WHERE TRIM(UPPER(status)) = 'PUBLISHED' AND content IS NOT NULL;")
+                    match_count = cur.fetchone()[0]
+                    print(f"Rows matching TRIM(UPPER(status))='PUBLISHED': {match_count}")
+
                 except Exception as e:
                     print(f"Could not check statuses: {e}")
 
