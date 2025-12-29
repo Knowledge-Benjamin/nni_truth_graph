@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from transformers import pipeline
+from typing import List, Optional
+# from transformers import pipeline # Lazy loaded only if needed
 import os
 import requests
 import datetime
@@ -122,6 +123,7 @@ else:
 if EXECUTION_MODE == "local":
     print("🖥️ LOCAL MODE: Loading AI Models into Memory...")
     try:
+        from transformers import pipeline
         # Summarization
         extractor_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
         
