@@ -297,8 +297,10 @@ app.post("/api/query/natural", async (req, res) => {
     ) {
       searchTerms = [...searchTerms, ...expansionResp.value.data.variations];
     }
+    // Ensure all search terms are strings and non-empty
+    searchTerms = searchTerms.filter((t) => typeof t === "string" && t.trim().length > 0);
     const fulltextQuery = searchTerms
-      .map((t) => `"${t.replace(/"/g, "")}"`)
+      .map((t) => `"${String(t).replace(/"/g, '')}"`)
       .join(" OR ");
     console.log(`   ✨ Expansion: ${searchTerms.join(", ")}`);
 
