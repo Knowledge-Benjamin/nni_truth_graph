@@ -5,7 +5,8 @@ services:
     runtime: docker
     region: oregon
     plan: free
-    dockerfilePath: ./server/Dockerfile
+    dockerfile: server/Dockerfile
+    dockerContext: server
     envVars:
       - key: NEO4J_URI
         sync: false
@@ -23,8 +24,6 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-    healthCheckPath: /
-    healthCheckStartupFailureThresholdCount: 0
 
   # Python AI Engine (Docker)
   - type: web
@@ -32,7 +31,8 @@ services:
     runtime: docker
     region: oregon
     plan: free
-    dockerfilePath: ./ai_engine/Dockerfile
+    dockerfile: ai_engine/Dockerfile
+    dockerContext: .
     envVars:
       - key: EXECUTION_MODE
         value: cloud
@@ -54,14 +54,8 @@ services:
         sync: false
       - key: NEO4J_PASSWORD
         sync: false
-    healthCheckPath: /
-    healthCheckStartupFailureThresholdCount: 0
   # React Frontend (Static Site)
-  - type: web
+  - type: static_site
     name: truth-graph-frontend
-    runtime: static
     buildCommand: cd client && npm install && npm run build
-    staticPublishPath: client/dist
-    envVars:
-      - key: VITE_API_URL
         value: https://truth-graph-server.onrender.com
