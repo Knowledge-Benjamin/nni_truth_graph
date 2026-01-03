@@ -1,0 +1,10 @@
+{
+  "name": "nni-truth-graph-scripts",
+  "version": "1.0.0",
+  "description": "Scripts for NNI Truth Graph data processing",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "neo4j-driver": "^5.28.2"
+  }
+}

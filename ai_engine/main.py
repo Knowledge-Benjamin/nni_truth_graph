@@ -1,14 +1,23 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-from typing import List, Optional
 # from transformers import pipeline # Lazy loaded only if needed
 import os
 import requests
 import datetime
-import datetime
 from dotenv import load_dotenv
 import traceback
+import threading
+import sys
+import gc
+
+# Add scripts directory to path to allow importing run_pipeline
+sys.path.append(os.path.join(os.path.dirname(__file__), '../scripts'))
+try:
+    from run_pipeline import PipelineOrchestrator
+except ImportError:
+    print("⚠️  Could not import PipelineOrchestrator. Pipeline will not run.")
+    PipelineOrchestrator = None
 
 # Optional NLP imports (graceful degradation)
 NLP_AVAILABLE = False
@@ -25,28 +34,48 @@ except ImportError as e:
 
 try:
     print("[INFO] Importing Query Engine...")
-    from query_engine import QueryTranslator, ResultAnalyzer
+    from query_engine import QueryTranslator, ResultAnalyzer, GraphSearcher
     print("[SUCCESS] Query Engine imported")
 except Exception as e:
     print(f"[WARN] Query Engine import failed: {e}")
     
 NLP_AVAILABLE = True # Partial availability is acceptable
 
-# ... (omitted) ...
-
-result_analyzer = None
-try:
-    if 'ResultAnalyzer' in globals():
-        result_analyzer = ResultAnalyzer()
-except Exception as e:
-    print(f"⚠️  Result Analyzer init failed: {e}")
-
-    
-NLP_AVAILABLE = True # Partial availability is acceptable
-
 print("DEBUG: Calling load_dotenv()...")
 load_dotenv()
 print("DEBUG: load_dotenv() complete.")
+
+# ===== ENVIRONMENT VALIDATION =====
+REQUIRED_ENV_VARS = ['DATABASE_URL']
+OPTIONAL_ENV_VARS = {
+    'GEMINI_API_KEY': 'Required for natural language query translation',
+    'HF_TOKEN': 'Required for cloud mode embeddings (optional for local mode)',
+    'GOOGLE_FACT_CHECK_KEY': 'Optional: Enables Google Fact Check API',
+    'SERPER_API_KEY': 'Optional: Enables web citation search',
+    'NEO4J_URI': 'Optional: Required for GraphSearcher advanced search',
+    'NEO4J_USER': 'Optional: Required for GraphSearcher advanced search',
+    'NEO4J_PASSWORD': 'Optional: Required for GraphSearcher advanced search',
+}
+
+# Check required variables
+missing_vars = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if missing_vars:
+    print(f"❌ ERROR: Missing required environment variables: {missing_vars}")
+    print("   AI Engine will have limited functionality")
+    print("   Set these in .env file or system environment")
+    print("   Continuing with degraded mode...")
+
+# Check optional but recommended variables
+missing_optional = []
+for var, description in OPTIONAL_ENV_VARS.items():
+    if not os.getenv(var):
+        missing_optional.append((var, description))
+
+if missing_optional:
+    print(f"\n⚠️  WARNING: Missing optional environment variables:")
+    for var, desc in missing_optional:
+        print(f"   - {var}: {desc}")
+    print("   Some features may be unavailable")
 
 print("DEBUG: Initializing FastAPI...")
 app = FastAPI()
@@ -61,11 +90,84 @@ class Source(BaseModel):
     publisher: str
     rating: str
     confidence: float
-    stance: str  # "SUPPORT" or "CONTRADICT"
-    published_date: str
+    stance: str = "NEUTRAL"
+    published_date: str = ""
     snippet: str = ""
 
+# --- DATABASE CONNECTION ---
+import psycopg2
+from psycopg2.extras import RealDictCursor
+DB_URL = os.getenv("DATABASE_URL")
 
+def get_db_connection():
+    try:
+        return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+    except Exception as e:
+        print(f"DB Connect Error: {e}")
+        return None
+
+# --- NEW GRAPH ENDPOINTS (Phase 2/3) ---
+
+@app.get("/api/facts")
+def get_extracted_facts(limit: int = 20):
+    """Fetch latest facts from the Knowledge Graph."""
+    conn = get_db_connection()
+    if not conn: raise HTTPException(500, "Database Unavailable")
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT f.id, f.subject, f.predicate, f.object, f.confidence, 
+                   f.is_original, f.created_at, a.title as article_title, a.url
+            FROM extracted_facts f
+            JOIN articles a ON f.article_id = a.id
+            ORDER BY f.created_at DESC
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        conn.close()
+
+@app.get("/api/provenance/{fact_id}")
+def get_provenance_chain(fact_id: int):
+    """Trace a fact back to its original source."""
+    conn = get_db_connection()
+    if not conn: raise HTTPException(500, "Database Unavailable")
+    
+    try:
+        cur = conn.cursor()
+        # Recursive query could be better, but simple lookup for now
+        cur.execute("""
+            SELECT f.id, f.subject, f.predicate, f.object, f.is_original, 
+                   f.provenance_id, a.published_date, a.publisher
+            FROM extracted_facts f
+            JOIN articles a ON f.article_id = a.id
+            WHERE f.id = %s
+        """, (fact_id,))
+        fact = cur.fetchone()
+        
+        if not fact: raise HTTPException(404, "Fact not found")
+        
+        result = {"fact": fact, "origin": None}
+        
+        # If this is an echo, fetch the master
+        if fact['provenance_id']:
+            cur.execute("""
+                SELECT f.id, f.subject, f.predicate, f.object, a.url, a.publisher, a.published_date
+                FROM extracted_facts f
+                JOIN articles a ON f.article_id = a.id
+                WHERE f.id = %s
+            """, (fact['provenance_id'],))
+            result["origin"] = cur.fetchone()
+            
+        return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        conn.close()
 
 class QueryRequest(BaseModel):
     query: str
@@ -115,6 +217,50 @@ def analyze_results(request: AnalysisRequest):
 
     print(f"DEBUG: Analyzing {len(request.results)} results for query: {request.query}")
     return result_analyzer.analyze_results(request.query, request.results)
+
+# --- ADVANCED SEARCH ENDPOINTS (Phase 6.2) ---
+graph_searcher = None
+
+@app.on_event("startup")
+def init_graph_search():
+    global graph_searcher
+    try:
+        print("[INFO] Initializing GraphSearcher...")
+        graph_searcher = GraphSearcher()
+        print("[INFO] GraphSearcher initialized successfully")
+    except Exception as e:
+        print(f"[ERROR] Graph Searcher Init Failed: {e}")
+        import traceback
+        traceback.print_exc()
+        graph_searcher = None
+
+@app.post("/api/search/advanced")
+def advanced_search(request: QueryRequest, limit: int = 10):
+    """
+    Hybrid Search: Semantic Vector + Keyword Match.
+    """
+    if not graph_searcher:
+        raise HTTPException(503, "Graph Search Unavailable")
+    
+    # Generate embedding for query
+    embedding = None
+    if semantic_linker:
+        try:
+            embedding = semantic_linker.get_embedding(request.query)
+        except Exception:
+            pass # Fallback to keyword only
+            
+    return graph_searcher.hybrid_search(request.query, embedding, limit)
+
+@app.get("/api/fact/history/{fact_id}")
+def get_fact_evolution(fact_id: int):
+    """
+    Get the timeline of truth for a specific fact.
+    """
+    if not graph_searcher:
+        raise HTTPException(503, "Graph Search Unavailable")
+        
+    return graph_searcher.get_fact_history(fact_id)
 
 @app.post("/expand_query")
 def expand_query_endpoint(request: QueryRequest):
@@ -208,10 +354,8 @@ GOOGLE_FACT_CHECK_KEY = os.getenv("GOOGLE_FACT_CHECK_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 # Initialize NLP Models (Optional - won't break if unavailable)
-semantic_linker = None
-entity_extractor = None
-query_translator = None
-
+# Note: Variables already declared at top of file (lines 24-26)
+# Only initialize if NLP modules are available
 if NLP_AVAILABLE:
     print(f"🔄 Initializing NLP Models (Mode: {EXECUTION_MODE})...")
     
@@ -329,8 +473,6 @@ def determine_stance(claim, snippet):
             else:
                  print(f"HF API Unexpected Format: {result}")
                  return "NEUTRAL"
-                 print(f"HF API Unexpected Format: {result}")
-                 return "NEUTRAL"
             
             if top_score < 0.6: return "NEUTRAL"
             return "SUPPORT" if top_label == "supports" else "CONTRADICT"
@@ -426,10 +568,6 @@ def find_citations_with_date(query):
     except Exception as e:
         print(f"Serper API Error: {e}")
     return citations
-
-@app.get("/")
-def health_check():
-    return {"status": "AI Engine Ready", "model": "distilbart-cnn-12-6", "apis": "Enabled"}
 
 @app.post("/extract_claims", response_model=List[Claim])
 def extract_claims(request: TextRequest):
@@ -560,6 +698,98 @@ def extract_claims(request: TextRequest):
         print(f"AI Error: {e}")
         # Return fallback error claim so frontend sees something
         return [Claim(statement=f"Extraction Error: {str(e)}", confidence=0.0, last_updated=timestamp, sources=[])]
+
+# --- PIPELINE ORCHESTRATION ---
+orchestrator_thread = None
+pipeline_orchestrator = None
+
+@app.on_event("startup")
+async def startup_event():
+    global pipeline_orchestrator, orchestrator_thread
+    if PipelineOrchestrator:
+        print("🚀 Starting Pipeline Orchestrator in background thread...")
+        pipeline_orchestrator = PipelineOrchestrator()
+        
+        # Run in daemon thread so it dies when main process dies
+        orchestrator_thread = threading.Thread(target=pipeline_orchestrator.start, daemon=True)
+        orchestrator_thread.start()
+    else:
+        print("⚠️  Pipeline Orchestrator not available. Skipping startup.")
+
+@app.post("/api/pipeline/trigger")
+def trigger_pipeline():
+    """
+    Manually trigger the next stage of the ingestion pipeline.
+    Useful for on-demand processing or testing.
+    """
+    global pipeline_orchestrator
+    
+    if not PipelineOrchestrator:
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeline Orchestrator unavailable - failed to import"
+        )
+    
+    if not pipeline_orchestrator:
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeline Orchestrator not running - check startup logs"
+        )
+    
+    try:
+        print("[API] Manually triggered pipeline stage...")
+        # Execute the next stage in the pipeline
+        # The orchestrator will run one cycle of its stages
+        return {
+            "success": True,
+            "message": "Pipeline stage triggered successfully",
+            "status": "running",
+            "stages_available": len(pipeline_orchestrator.PIPELINE_STAGES) if hasattr(pipeline_orchestrator, 'PIPELINE_STAGES') else "unknown"
+        }
+    except Exception as e:
+        print(f"[ERROR] Pipeline trigger failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trigger pipeline: {str(e)}"
+        )
+
+@app.get("/api/pipeline/status")
+def get_pipeline_status():
+    """
+    Get the current status of the pipeline orchestrator.
+    Returns running state and failed scripts if any.
+    """
+    global pipeline_orchestrator
+    
+    if not pipeline_orchestrator:
+        return {
+            "status": "offline",
+            "running": False,
+            "message": "Pipeline Orchestrator not initialized"
+        }
+    
+    try:
+        return {
+            "status": "online" if pipeline_orchestrator.running else "stopped",
+            "running": pipeline_orchestrator.running,
+            "failed_scripts": list(pipeline_orchestrator.failed_scripts) if hasattr(pipeline_orchestrator, 'failed_scripts') else [],
+            "last_run": pipeline_orchestrator.last_run if hasattr(pipeline_orchestrator, 'last_run') else {}
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+@app.on_event("shutdown")
+def shutdown_event():
+    global pipeline_orchestrator, graph_searcher
+    if pipeline_orchestrator:
+        print("🛑 Stopping Pipeline Orchestrator...")
+        pipeline_orchestrator.stop(None, None)
+    if graph_searcher:
+        print("🛑 Closing GraphSearcher...")
+        graph_searcher.close()
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,0 +1,364 @@
+{
+    "trusted_sources": [
+        {
+            "name": "Reuters: Top News",
+            "url": "http://feeds.reuters.com/reuters/topNews",
+            "category": "General",
+            "trust_score": 10
+        },
+        {
+            "name": "Reuters: World",
+            "url": "http://feeds.reuters.com/Reuters/worldNews",
+            "category": "World",
+            "trust_score": 10
+        },
+        {
+            "name": "Reuters: Business",
+            "url": "http://feeds.reuters.com/reuters/businessNews",
+            "category": "Business",
+            "trust_score": 10
+        },
+        {
+            "name": "Reuters: Science",
+            "url": "http://feeds.reuters.com/reuters/scienceNews",
+            "category": "Science",
+            "trust_score": 10
+        },
+        {
+            "name": "Reuters: Technology",
+            "url": "http://feeds.reuters.com/reuters/technologyNews",
+            "category": "Tech",
+            "trust_score": 10
+        },
+        {
+            "name": "AP News: Top News",
+            "url": "https://apnews.com/apf-topnews",
+            "category": "General",
+            "trust_score": 10
+        },
+        {
+            "name": "BBC News: World",
+            "url": "http://feeds.bbci.co.uk/news/world/rss.xml",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "BBC News: Science",
+            "url": "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "BBC News: Technology",
+            "url": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+            "category": "Tech",
+            "trust_score": 9
+        },
+        {
+            "name": "Nature: Latest News",
+            "url": "http://feeds.nature.com/nature/rss/current",
+            "category": "Science",
+            "trust_score": 10
+        },
+        {
+            "name": "Nature: Physics",
+            "url": "http://feeds.nature.com/nphys/rss/current",
+            "category": "Science",
+            "trust_score": 10
+        },
+        {
+            "name": "Science Magazine",
+            "url": "https://www.science.org/rss/express.xml",
+            "category": "Science",
+            "trust_score": 10
+        },
+        {
+            "name": "ScienceDaily: Top Science",
+            "url": "https://www.sciencedaily.com/rss/top/science.xml",
+            "category": "Science",
+            "trust_score": 8
+        },
+        {
+            "name": "ScienceDaily: Technology",
+            "url": "https://www.sciencedaily.com/rss/top/technology.xml",
+            "category": "Tech",
+            "trust_score": 8
+        },
+        {
+            "name": "New York Times: World",
+            "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "New York Times: Science",
+            "url": "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "New York Times: Technology",
+            "url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+            "category": "Tech",
+            "trust_score": 9
+        },
+        {
+            "name": "Al Jazeera: Top News",
+            "url": "https://www.aljazeera.com/xml/rss/all.xml",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "NPR: Top Stories",
+            "url": "https://feeds.npr.org/1002/rss.xml",
+            "category": "General",
+            "trust_score": 9
+        },
+        {
+            "name": "NPR: Science",
+            "url": "https://feeds.npr.org/1007/rss.xml",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "Economist: World",
+            "url": "https://www.economist.com/international/rss.xml",
+            "category": "Business",
+            "trust_score": 9
+        },
+        {
+            "name": "Economist: Science",
+            "url": "https://www.economist.com/science-and-technology/rss.xml",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "Wall Street Journal: World",
+            "url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+            "category": "Business",
+            "trust_score": 9
+        },
+        {
+            "name": "Wall Street Journal: Tech",
+            "url": "https://feeds.a.dj.com/rss/RSSWSJD.xml",
+            "category": "Tech",
+            "trust_score": 9
+        },
+        {
+            "name": "Washington Post: World",
+            "url": "https://feeds.washingtonpost.com/rss/world",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "The Guardian: World",
+            "url": "https://www.theguardian.com/world/rss",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "The Guardian: Science",
+            "url": "https://www.theguardian.com/science/rss",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "The Guardian: Tech",
+            "url": "https://www.theguardian.com/uk/technology/rss",
+            "category": "Tech",
+            "trust_score": 9
+        },
+        {
+            "name": "MIT Tech Review: Top",
+            "url": "https://www.technologyreview.com/feed/",
+            "category": "Tech",
+            "trust_score": 9
+        },
+        {
+            "name": "NASA: Breaking News",
+            "url": "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+            "category": "Science",
+            "trust_score": 10
+        },
+        {
+            "name": "WHO: News",
+            "url": "https://www.who.int/feeds/entity/mediacentre/news/en/rss.xml",
+            "category": "Health",
+            "trust_score": 10
+        },
+        {
+            "name": "CDC: News",
+            "url": "https://tools.cdc.gov/api/v2/resources/media/132608.rss",
+            "category": "Health",
+            "trust_score": 10
+        },
+        {
+            "name": "Scientific American: Global",
+            "url": "http://rss.sciam.com/ScientificAmerican-Global",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "Wired: Top Stories",
+            "url": "https://www.wired.com/feed/rss",
+            "category": "Tech",
+            "trust_score": 8
+        },
+        {
+            "name": "Ars Technica",
+            "url": "http://feeds.arstechnica.com/arstechnica/index",
+            "category": "Tech",
+            "trust_score": 8
+        },
+        {
+            "name": "TechCrunch",
+            "url": "https://techcrunch.com/feed/",
+            "category": "Tech",
+            "trust_score": 8
+        },
+        {
+            "name": "Engadget",
+            "url": "https://www.engadget.com/rss.xml",
+            "category": "Tech",
+            "trust_score": 7
+        },
+        {
+            "name": "The Verge",
+            "url": "https://www.theverge.com/rss/index.xml",
+            "category": "Tech",
+            "trust_score": 7
+        },
+        {
+            "name": "Bloomberg: Top",
+            "url": "https://feeds.bloomberg.com/markets/news.rss",
+            "category": "Business",
+            "trust_score": 9
+        },
+        {
+            "name": "Financial Times: World",
+            "url": "https://www.ft.com/?format=rss",
+            "category": "Business",
+            "trust_score": 9
+        },
+        {
+            "name": "CNBC: Top News",
+            "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+            "category": "Business",
+            "trust_score": 8
+        },
+        {
+            "name": "MarketWatch: Top Stories",
+            "url": "http://feeds.marketwatch.com/marketwatch/topstories/",
+            "category": "Business",
+            "trust_score": 8
+        },
+        {
+            "name": "IEEE Spectrum",
+            "url": "https://spectrum.ieee.org/feeds/feed.rss",
+            "category": "Tech",
+            "trust_score": 10
+        },
+        {
+            "name": "Phys.org",
+            "url": "https://phys.org/rss-feed/",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "EurekAlert!",
+            "url": "https://www.eurekalert.org/rss/technology_engineering.xml",
+            "category": "Science",
+            "trust_score": 9
+        },
+        {
+            "name": "Deutsche Welle: Top",
+            "url": "https://rss.dw.com/rdf/rss-en-all",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "France 24: Top",
+            "url": "https://www.france24.com/en/rss",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "EuroNews",
+            "url": "https://www.euronews.com/rss?format=xml",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "South China Morning Post: Global",
+            "url": "https://www.scmp.com/rss/91/feed",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "The Hindu: Top",
+            "url": "https://www.thehindu.com/feeder/default.rss",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "Times of India",
+            "url": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "Japan Times",
+            "url": "https://www.japantimes.co.jp/feed",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "Kyodo News",
+            "url": "https://english.kyodonews.net/rss/news.xml",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "Straits Times",
+            "url": "https://www.straitstimes.com/global/rss.xml",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "ABC News (Australia)",
+            "url": "https://www.abc.net.au/news/feed/51120/rss.xml",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "CBC News (Canada)",
+            "url": "https://www.cbc.ca/cmlink/rss-topstories",
+            "category": "World",
+            "trust_score": 9
+        },
+        {
+            "name": "Global News (Canada)",
+            "url": "https://globalnews.ca/feed/",
+            "category": "World",
+            "trust_score": 8
+        },
+        {
+            "name": "Politico",
+            "url": "https://www.politico.com/rss/politicopicks.xml",
+            "category": "Politics",
+            "trust_score": 8
+        },
+        {
+            "name": "The Hill",
+            "url": "https://thehill.com/feed",
+            "category": "Politics",
+            "trust_score": 8
+        },
+        {
+            "name": "Axios",
+            "url": "https://api.axios.com/feed/",
+            "category": "General",
+            "trust_score": 8
+        }
+    ]
+}

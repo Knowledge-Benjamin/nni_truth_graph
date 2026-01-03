@@ -1,12 +1,7 @@
-fastapi>=0.115.0
-uvicorn>=0.32.0
-torch
-transformers
-torch-geometric
-pydantic
-python-dotenv
-requests
-sentence-transformers
-spacy
-gliner-spacy
-google-genai
+-r requirements.txt
+torch==2.1.0
+transformers==4.35.2
+torch-geometric==2.3.1
+sentence-transformers==2.2.2
+spacy==3.7.2
+gliner-spacy==0.1.5

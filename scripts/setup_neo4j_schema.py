@@ -4,42 +4,36 @@ Creates indexes and constraints for Truth Graph optimal performance.
 Run this AFTER successful connection test.
 """
 
-from neo4j import GraphDatabase
 import os
 from dotenv import load_dotenv
+from db_utils import get_neo4j_driver, close_neo4j_driver
 
 load_dotenv('server/.env')
-
-NEO4J_URI = os.getenv('NEO4J_URI')
-NEO4J_USER = os.getenv('NEO4J_USER')
-NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD')
 
 print("=" * 60)
 print("Neo4j Schema Setup - Creating Indexes & Constraints")
 print("=" * 60)
 
 try:
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    driver = get_neo4j_driver()
     
     with driver.session() as session:
         print("\n🔄 Creating indexes and constraints...\n")
         
-        # 1. Unique constraint on Claim IDs
-        print("1. Creating unique constraint on Claim IDs...")
+        # 1. Unique constraint on Fact IDs
+        print("1. Creating unique constraint on Fact IDs...")
         try:
-            session.run("CREATE CONSTRAINT claim_id_unique IF NOT EXISTS FOR (c:Claim) REQUIRE c.id IS UNIQUE")
-            print("   [OK] Claim ID constraint created")
+            session.run("CREATE CONSTRAINT fact_id_unique IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE")
+            print("   [OK] Fact ID constraint created")
         except Exception as e:
             print(f"   [WARN]  {e}")
         
-        # 2. Text index for claim search
-        # 2. Text index for claim search (Fulltext for relevance)
-        print("2. Creating fulltext index for claim search...")
+        # 2. Text index for fact search (Fulltext for relevance)
+        print("2. Creating fulltext index for fact search...")
         try:
-            # Drop old index if it conflicts or exists as non-fulltext (optional, but safer to just add new one)
             # Creating FULLTEXT index
-            session.run("CREATE FULLTEXT INDEX claim_statement_fulltext IF NOT EXISTS FOR (c:Claim) ON EACH [c.statement]")
-            print("   [OK] Claim fulltext index created")
+            session.run("CREATE FULLTEXT INDEX fact_statement_fulltext IF NOT EXISTS FOR (f:Fact) ON EACH [f.text]")
+            print("   [OK] Fact fulltext index created")
         except Exception as e:
             print(f"   [WARN]  {e}")
         
@@ -67,11 +61,11 @@ try:
         except Exception as e:
             print(f"   [WARN]  {e}")
         
-        # 6. Index for claim confidence scores
-        print("6. Creating index for claim confidence...")
+        # 6. Index for fact confidence scores
+        print("6. Creating index for fact confidence...")
         try:
-            session.run("CREATE INDEX claim_confidence_idx IF NOT EXISTS FOR (c:Claim) ON (c.confidence)")
-            print("   [OK] Claim confidence index created")
+            session.run("CREATE INDEX fact_confidence_idx IF NOT EXISTS FOR (f:Fact) ON (f.confidence)")
+            print("   [OK] Fact confidence index created")
         except Exception as e:
             print(f"   [WARN]  {e}")
         
@@ -88,7 +82,7 @@ try:
         print("[OK] Schema setup complete! Database ready for backfill.")
         print("=" * 60)
     
-    driver.close()
+    close_neo4j_driver()
     
 except Exception as e:
     print(f"\n[ERROR] Schema setup failed: {e}")

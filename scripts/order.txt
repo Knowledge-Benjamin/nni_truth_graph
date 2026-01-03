@@ -1,0 +1,30 @@
+ingest_rss.py (or ingest_gdelt.py)
+Role: Ingestion (Raw URLs).
+Status: Present in Orchestrator.
+scrape_content_pro.py <-- MISSING from Orchestrator
+Role: Hydration.
+Critical: Fetches the actual text. Without this, digest_articles.py has no input for some sources.
+classify_topics_api.py <-- MISSING from Orchestrator
+Role: Classification.
+Critical: Populates article_topics. sync_truth_graph.py IGNORES any article without a topic (Quality Gate 2).
+add_trust_scoring.py <-- MISSING from Orchestrator
+Role: Metadata.
+Critical: Populates trust_score. detect_contradictions_deberta.py IGNORES facts from sources with no trust score (Quality Gate 3).
+digest_articles.py
+Role: Extraction.
+Status: Present in Orchestrator.
+hunt_provenance.py
+Role: Verification.
+Status: Present in Orchestrator.
+sync_truth_graph.py
+Role: Publication.
+Status: Present in Orchestrator.
+detect_contradictions_deberta.py
+Role: QA.
+Status: Present in Orchestrator.
+link_claims.py
+Role: Enrichment (Finding similar claims inside Neo4j).
+Status: Optional/Missing. Good to add for a richer graph.
+archive_old_articles.py
+Role: Maintenance.
+Status: Present in Orchestrator.

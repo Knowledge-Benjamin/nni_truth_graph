@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 import os
 import logging
+import numpy as np
 
 # Configure logging
 logging.basicConfig(
