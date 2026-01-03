@@ -15,6 +15,8 @@ services:
         sync: false
       - key: AI_ENGINE_URL
         value: https://truth-graph-ai.onrender.com
+      - key: ALLOWED_ORIGINS
+        value: https://truth-graph-frontend.onrender.com,https://truth-graph-server.onrender.com
       - key: APP_ENV
         value: production
       - key: DATABASE_URL

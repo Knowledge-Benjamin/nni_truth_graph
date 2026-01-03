@@ -50,18 +50,9 @@ const corsOptions = {
   origin: (origin, callback) => {
     const allowedOrigins = getAllowedOrigins();
 
-    // Allow requests with no origin (e.g., mobile apps, Postman)
-    // But only in development
-    if (!origin && process.env.APP_ENV === "development") {
-      return callback(null, true);
-    }
-
+    // Allow requests with no origin (e.g., health checks, internal requests, mobile apps, Postman)
     if (!origin) {
-      return callback(
-        new Error(
-          "CORS policy: request missing origin header (likely blocked by browser)"
-        )
-      );
+      return callback(null, true);
     }
 
     if (allowedOrigins.includes(origin)) {
