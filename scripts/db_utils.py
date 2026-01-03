@@ -79,16 +79,22 @@ def get_neo4j_driver():
             raise ValueError("Neo4j credentials not set in environment variables")
         
         try:
-            # Convert neo4j+s:// to bolt:// for proper driver config
-            bolt_uri = uri.replace('neo4j+s://', 'bolt://').replace('neo4j://', 'bolt://')
+            # Convert neo4j+s:// to bolt+s:// for encrypted bolt connection
+            bolt_uri = uri.replace('neo4j+s://', 'bolt+s://').replace('neo4j://', 'bolt://')
             
-            # Use encrypted connection with trust for self-signed certificates
-            _neo4j_driver = GraphDatabase.driver(
-                bolt_uri,
-                auth=(user, password),
-                encrypted=True,
-                trusted_certificates=TrustAll()
-            )
+            # For encrypted schemes (bolt+s), let the URI handle encryption
+            # Don't pass encrypted/trust settings with bolt+s as it causes conflicts
+            if bolt_uri.startswith('bolt+s://'):
+                _neo4j_driver = GraphDatabase.driver(
+                    bolt_uri,
+                    auth=(user, password),
+                    trusted_certificates=TrustAll()
+                )
+            else:
+                _neo4j_driver = GraphDatabase.driver(
+                    bolt_uri,
+                    auth=(user, password)
+                )
             logger.info(f"Neo4j driver initialized: {bolt_uri}")
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")

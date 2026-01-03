@@ -445,10 +445,13 @@ class GraphSearcher:
             return
         
         try:
+            # For neo4j+s:// URIs, use TrustAll() but don't pass encrypted=True
+            # The +s in the URI already indicates encryption
+            from neo4j import TrustAll
             self.driver = GraphDatabase.driver(
                 self.neo4j_uri,
                 auth=(self.neo4j_user, self.neo4j_password),
-                encrypted=True
+                trusted_certificates=TrustAll()
             )
             # Test connection
             with self.driver.session() as session:
