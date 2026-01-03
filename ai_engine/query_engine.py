@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from neo4j import GraphDatabase, TrustAll
 import os
 from typing import Dict
 
@@ -447,7 +448,6 @@ class GraphSearcher:
         try:
             # For neo4j+s:// URIs, use TrustAll() but don't pass encrypted=True
             # The +s in the URI already indicates encryption
-            from neo4j import TrustAll
             self.driver = GraphDatabase.driver(
                 self.neo4j_uri,
                 auth=(self.neo4j_user, self.neo4j_password),
