@@ -3,7 +3,6 @@ services:
   - type: web
     name: truth-graph-server
     runtime: docker
-    region: oregon
     plan: free
     dockerfile: server/Dockerfile
     dockerContext: server
@@ -29,7 +28,6 @@ services:
   - type: web
     name: truth-graph-ai
     runtime: docker
-    region: oregon
     plan: free
     dockerfile: ai_engine/Dockerfile
     dockerContext: .
