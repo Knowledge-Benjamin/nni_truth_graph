@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-nni_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nni_pass}
+      POSTGRES_DB: ${DB_NAME:-nni_truth_graph}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-nni_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - truth-graph
+
+  # Python AI Engine & Scripts
+  python-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-nni_user}:${DB_PASSWORD:-nni_pass}@postgres:5432/${DB_NAME:-nni_truth_graph}
+      NEO4J_URI: ${NEO4J_URI}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      HF_TOKEN: ${HF_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/app/scripts
+      - ./ai_engine:/app/ai_engine
+    networks:
+      - truth-graph
+
+  # Node.js Backend Server
+  node-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-nni_user}:${DB_PASSWORD:-nni_pass}@postgres:5432/${DB_NAME:-nni_truth_graph}
+      NEO4J_URI: ${NEO4J_URI}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - python-app
+    networks:
+      - truth-graph
+
+volumes:
+  postgres_data:
+
+networks:
+  truth-graph:
+    driver: bridge

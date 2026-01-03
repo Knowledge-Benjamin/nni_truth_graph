@@ -1,9 +1,9 @@
-# Scripts Pipeline Dependencies
-# This file is for local development of the pipeline scripts
+# Scripts Pipeline Dependencies - Production Ready
+# Python 3.11+ only - all packages with pre-built wheels
 
 # Core & Database
 psycopg2-binary==2.9.9
-neo4j==5.12.0
+neo4j==5.21.0
 python-dotenv==1.0.0
 
 # HTTP & API
@@ -11,17 +11,15 @@ requests==2.31.0
 
 # Data Processing
 pandas==2.0.3
-numpy==1.24.3
+numpy==1.26.2
 
 # Web Scraping & Content
 trafilatura==1.6.0
 feedparser==6.0.10
-playwright==1.40.0
 
-# NLP & ML
+# NLP & ML (wheel-only)
 huggingface-hub==0.19.4
-sentence-transformers==3.0.1
-torch==2.0.1
+sentence-transformers==2.7.0
 
 # AI & LLM
 groq==0.4.1
