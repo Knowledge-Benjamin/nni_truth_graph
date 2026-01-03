@@ -14,9 +14,9 @@ services:
       - key: NEO4J_PASSWORD
         sync: false
       - key: AI_ENGINE_URL
-        value: https://truth-graph-ai.onrender.com
+        value: https://truth-graph-ai-umg3.onrender.com
       - key: ALLOWED_ORIGINS
-        value: https://truth-graph-frontend.onrender.com,https://truth-graph-server.onrender.com
+        value: https://truth-graph-frontend-umg3.onrender.com,https://truth-graph-server-umg3.onrender.com,https://truth-graph-frontend.onrender.com,https://truth-graph-server.onrender.com
       - key: APP_ENV
         value: production
       - key: DATABASE_URL
@@ -64,4 +64,4 @@ services:
     staticPublishPath: client/dist
     envVars:
       - key: VITE_API_URL
-        value: https://truth-graph-server.onrender.com
+        value: https://truth-graph-server-umg3.onrender.com
