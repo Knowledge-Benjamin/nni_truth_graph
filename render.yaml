@@ -1,12 +1,11 @@
 services:
-  # Node.js Backend Server
+  # Node.js Backend Server (Docker)
   - type: web
     name: truth-graph-server
-    runtime: node
+    runtime: docker
     region: oregon
     plan: free
-    buildCommand: cd server && npm install
-    startCommand: cd server && node index.js
+    dockerfilePath: ./server/Dockerfile
     envVars:
       - key: NEO4J_URI
         sync: false
@@ -25,16 +24,15 @@ services:
       - key: GEMINI_API_KEY
         sync: false
     healthCheckPath: /
+    healthCheckStartupFailureThresholdCount: 0
 
-  # Python AI Engine
+  # Python AI Engine (Docker)
   - type: web
     name: truth-graph-ai
-    runtime: python
-    runtimeVersion: 3.11
+    runtime: docker
     region: oregon
     plan: free
-    buildCommand: pip install --upgrade pip setuptools && pip install -r requirements.txt && cd ai_engine && pip install -r requirements.txt
-    startCommand: cd ai_engine && python main.py
+    dockerfilePath: ./ai_engine/Dockerfile
     envVars:
       - key: EXECUTION_MODE
         value: cloud
@@ -57,7 +55,7 @@ services:
       - key: NEO4J_PASSWORD
         sync: false
     healthCheckPath: /
-
+    healthCheckStartupFailureThresholdCount: 0
   # React Frontend (Static Site)
   - type: web
     name: truth-graph-frontend
