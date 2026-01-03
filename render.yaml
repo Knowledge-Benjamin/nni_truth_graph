@@ -55,8 +55,9 @@ services:
       - key: NEO4J_PASSWORD
         sync: false
   # React Frontend (Static Site)
-  - type: static_site
+  - type: web
     name: truth-graph-frontend
+    runtime: static
     buildCommand: cd client && npm install && npm run build
     staticPublishPath: client/dist
     envVars:
