@@ -3,7 +3,6 @@ services:
   - type: web
     name: truth-graph-server
     runtime: docker
-    plan: free
     dockerfile: server/Dockerfile
     dockerContext: server
     envVars:
@@ -28,7 +27,6 @@ services:
   - type: web
     name: truth-graph-ai
     runtime: docker
-    plan: free
     dockerfile: ai_engine/Dockerfile
     dockerContext: .
     envVars:
