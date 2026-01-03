@@ -58,4 +58,7 @@ services:
   - type: static_site
     name: truth-graph-frontend
     buildCommand: cd client && npm install && npm run build
+    staticPublishPath: client/dist
+    envVars:
+      - key: VITE_API_URL
         value: https://truth-graph-server.onrender.com
