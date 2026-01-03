@@ -1,6 +1,6 @@
 from google import genai
 from google.genai import types
-from neo4j import GraphDatabase, TrustAll
+from neo4j import GraphDatabase
 import os
 from typing import Dict
 
@@ -335,12 +335,12 @@ class GraphSearcher:
             return
         
         try:
-            # For neo4j+s:// URIs, use TrustAll() but don't pass encrypted=True
-            # The +s in the URI already indicates encryption
+            # For neo4j+s:// URIs, the +s scheme includes encryption
+            # Do NOT pass trusted_certificates or other SSL config - it conflicts with the URI scheme
+            # Just pass URI and auth credentials
             self.driver = GraphDatabase.driver(
                 self.neo4j_uri,
-                auth=(self.neo4j_user, self.neo4j_password),
-                trusted_certificates=TrustAll()
+                auth=(self.neo4j_user, self.neo4j_password)
             )
             # Test connection
             with self.driver.session() as session:

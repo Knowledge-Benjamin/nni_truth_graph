@@ -290,7 +290,11 @@ function buildSearchFactsByKeywordQuery({ searchTerm, limit = 1 } = {}) {
  * @param {number} options.limit - Result limit
  * @returns {Object} { query, params }
  */
-function buildVectorSearchQuery({ embedding, similarityThreshold = 0.7, limit = 15 } = {}) {
+function buildVectorSearchQuery({
+  embedding,
+  similarityThreshold = 0.7,
+  limit = 15,
+} = {}) {
   return {
     query: `
       // Vector similarity search using cosine distance
@@ -324,9 +328,14 @@ function buildVectorSearchQuery({ embedding, similarityThreshold = 0.7, limit = 
  * @param {number} options.limit - Result limit
  * @returns {Object} { query, params }
  */
-function buildHybridSearchQuery({ fulltextQuery, embedding, vectorWeight = 0.5, limit = 15 } = {}) {
+function buildHybridSearchQuery({
+  fulltextQuery,
+  embedding,
+  vectorWeight = 0.5,
+  limit = 15,
+} = {}) {
   const keywordWeight = 1 - vectorWeight;
-  
+
   return {
     query: `
       // Hybrid search: Combine keyword and vector similarity scoring
@@ -422,7 +431,7 @@ function buildCreateVectorIndexQuery() {
     query: `
       CREATE VECTOR INDEX fact_embeddings IF NOT EXISTS
       FOR (f:Fact) ON f.embedding
-      OPTIONS { indexConfig: { 'vector.dimensions': 384, 'vector.similarity_function': 'cosine' } }
+      OPTIONS { indexConfig: { vector.dimensions: 384, vector.similarity_function: 'cosine' } }
     `,
     params: {},
   };
@@ -486,7 +495,7 @@ function buildMergeArticleQuery(article) {
 function buildMergeFactQuery(fact) {
   // Parse embedding if it's a string
   let embedding = fact.embedding;
-  if (typeof embedding === 'string') {
+  if (typeof embedding === "string") {
     try {
       embedding = JSON.parse(embedding);
     } catch {

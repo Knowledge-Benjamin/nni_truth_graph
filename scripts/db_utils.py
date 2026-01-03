@@ -7,7 +7,7 @@ Eliminates duplication across 40+ scripts.
 import os
 import psycopg2
 from psycopg2 import pool
-from neo4j import GraphDatabase, TrustAll
+from neo4j import GraphDatabase
 import logging
 
 logger = logging.getLogger(__name__)
@@ -79,23 +79,14 @@ def get_neo4j_driver():
             raise ValueError("Neo4j credentials not set in environment variables")
         
         try:
-            # Convert neo4j+s:// to bolt+s:// for encrypted bolt connection
-            bolt_uri = uri.replace('neo4j+s://', 'bolt+s://').replace('neo4j://', 'bolt://')
-            
-            # For encrypted schemes (bolt+s), let the URI handle encryption
-            # Don't pass encrypted/trust settings with bolt+s as it causes conflicts
-            if bolt_uri.startswith('bolt+s://'):
-                _neo4j_driver = GraphDatabase.driver(
-                    bolt_uri,
-                    auth=(user, password),
-                    trusted_certificates=TrustAll()
-                )
-            else:
-                _neo4j_driver = GraphDatabase.driver(
-                    bolt_uri,
-                    auth=(user, password)
-                )
-            logger.info(f"Neo4j driver initialized: {bolt_uri}")
+            # Use neo4j+s:// directly - it includes encryption
+            # Don't convert to bolt+s as it causes SSL conflicts with TrustAll()
+            # For neo4j+s schemes, just pass URI and auth - no additional config needed
+            _neo4j_driver = GraphDatabase.driver(
+                uri,
+                auth=(user, password)
+            )
+            logger.info(f"Neo4j driver initialized: {uri}")
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
             raise

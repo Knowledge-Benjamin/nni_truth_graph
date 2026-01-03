@@ -119,6 +119,8 @@ def get_neo4j_driver():
         return None
     
     try:
+        # For neo4j+s:// URIs, encryption is in the scheme
+        # Just pass URI and auth - no additional SSL config to avoid conflicts
         driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         driver.verify_connectivity()
         logger.info("✅ Neo4j connection verified")
