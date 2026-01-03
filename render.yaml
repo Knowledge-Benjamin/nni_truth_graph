@@ -3,7 +3,8 @@ services:
   - type: web
     name: truth-graph-server
     runtime: docker
-    dockerfile: server/Dockerfile
+    plan: free
+    dockerfilePath: server/Dockerfile
     dockerContext: server
     envVars:
       - key: NEO4J_URI
@@ -27,7 +28,8 @@ services:
   - type: web
     name: truth-graph-ai
     runtime: docker
-    dockerfile: ai_engine/Dockerfile
+    plan: free
+    dockerfilePath: ai_engine/Dockerfile
     dockerContext: .
     envVars:
       - key: EXECUTION_MODE
