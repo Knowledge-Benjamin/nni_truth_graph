@@ -75,19 +75,14 @@ PIPELINE_STAGES = [
     },
     {
         "name": "8.5. Backfill (Historical Contradictions - ONCE ON FIRST RUN)",
-        "scripts": ["detect_contradictions_unified.py", "--backfill"],
+        "scripts": ["detect_contradictions_unified.py"],
         "frequency": 0, # Run only once on initialization (frequency=0 = disabled)
         "parallel": False,
         "description": "Backfill script to process ALL historical facts. Run via: python detect_contradictions_unified.py --backfill"
     },
     # Note: link_facts.py removed - embeddings are synced via sync_truth_graph.py
     # Note: detect_contradictions.py (old Neo4j-based) removed - replaced by detect_contradictions_unified.py
-    {
-        "name": "9. Evolution (Truth Timeline)",
-        "scripts": ["detect_evolution.py"],
-        "frequency": 43200, # Run every 12 hours (LLM Expensive)
-        "parallel": False
-    },
+    # Note: detect_evolution.py removed - optional feature for timeline tracking, not critical for core pipeline
     {
         "name": "10. Maintenance (Archival)",
         "scripts": ["archive_old_articles.py"],
