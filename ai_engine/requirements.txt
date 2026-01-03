@@ -5,7 +5,11 @@ python-dotenv==1.0.0
 requests==2.31.0
 google-genai==0.3.0
 huggingface-hub==0.19.4
+sentence-transformers==3.0.1
 numpy==1.24.3
 neo4j==5.12.0
 trafilatura==1.6.0
 groq==0.4.1
+psycopg2-binary==2.9.9
+feedparser==6.0.10
+playwright==1.40.0
