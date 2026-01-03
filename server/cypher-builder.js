@@ -423,6 +423,8 @@ function buildCreateFulltextIndexQuery() {
 
 /**
  * Create vector index for embeddings (idempotent)
+ * Note: Vector indexes are a paid feature on Neo4j Cloud and not available on free tier
+ * This query will fail gracefully on free tier (handled by try-catch in index.js)
  *
  * @returns {Object} { query, params }
  */
@@ -431,7 +433,7 @@ function buildCreateVectorIndexQuery() {
     query: `
       CREATE VECTOR INDEX fact_embeddings IF NOT EXISTS
       FOR (f:Fact) ON f.embedding
-      OPTIONS { indexConfig: { vector.dimensions: 384, vector.similarity_function: 'cosine' } }
+      OPTIONS { indexConfig: { \`vector.dimensions\`: 384, \`vector.similarity_function\`: 'cosine' } }
     `,
     params: {},
   };
