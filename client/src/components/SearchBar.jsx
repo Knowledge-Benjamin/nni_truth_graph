@@ -12,15 +12,13 @@ function SearchBar({ onSearch }) {
     setError(null);
 
     try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
-      const response = await fetch(
-        `${API_BASE_URL}/query/natural`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
-        }
-      );
+      const API_BASE_URL =
+        import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const response = await fetch(`${API_BASE_URL}/api/query/natural`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
 
       const data = await response.json();
 
