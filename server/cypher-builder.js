@@ -10,6 +10,9 @@
  * - Consistent query structure and performance
  */
 
+// Import neo4j int helper for proper integer handling
+const neo4j = require("neo4j-driver");
+
 /**
  * Search Facts by fulltext or hybrid search with scoring
  *
@@ -26,7 +29,7 @@ function buildSearchFactsQuery({
 } = {}) {
   const params = {
     fulltextQuery: fulltextQuery || "",
-    limit: Math.floor(Number(limit)),  // Ensure limit is a non-negative integer
+    limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
   };
 
   if (useHybrid) {
@@ -105,7 +108,7 @@ function buildGetNeighborsQuery(nodeId, limit = 25) {
       RETURN n, r, neighbor
       LIMIT $limit
     `,
-    params: { id: nodeId, limit: Math.floor(Number(limit)) },
+    params: { id: nodeId, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
@@ -138,7 +141,10 @@ function buildListFactsQuery({ skip = 0, limit = 20 } = {}) {
       SKIP $skip
       LIMIT $limit
     `,
-    params: { skip: Math.floor(Number(skip)), limit: Math.floor(Number(limit)) },
+    params: {
+      skip: neo4j.int(parseInt(Math.floor(Number(skip)), 10)),
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -159,7 +165,10 @@ function buildListArticlesQuery({ skip = 0, limit = 20 } = {}) {
       SKIP $skip
       LIMIT $limit
     `,
-    params: { skip: Math.floor(Number(skip)), limit: Math.floor(Number(limit)) },
+    params: {
+      skip: neo4j.int(parseInt(Math.floor(Number(skip)), 10)),
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -198,7 +207,7 @@ function buildFactsBySubjectQuery(subject, limit = 20) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { subject, limit: Math.floor(Number(limit)) },
+    params: { subject, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
@@ -218,7 +227,7 @@ function buildContradictionsQuery(minConfidence = 0.5, limit = 50) {
       ORDER BY rel.weight DESC
       LIMIT $limit
     `,
-    params: { minConfidence, limit: Math.floor(Number(limit)) },
+    params: { minConfidence, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
@@ -237,7 +246,7 @@ function buildFactEvolutionQuery(factId, limit = 25) {
       ORDER BY distance
       LIMIT $limit
     `,
-    params: { id: factId, limit: Math.floor(Number(limit)) },
+    params: { id: factId, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
@@ -277,7 +286,7 @@ function buildSearchFactsByKeywordQuery({ searchTerm, limit = 1 } = {}) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { searchTerm, limit: Math.floor(Number(limit)) },
+    params: { searchTerm, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
@@ -313,7 +322,7 @@ function buildVectorSearchQuery({
     params: {
       embedding,
       similarityThreshold,
-      limit: Math.floor(Number(limit)),
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
     },
   };
 }
@@ -380,7 +389,7 @@ function buildHybridSearchQuery({
       embedding,
       keywordWeight,
       vectorWeight,
-      limit: Math.floor(Number(limit)),
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
     },
   };
 }
@@ -606,7 +615,7 @@ function buildSampleAssertionsQuery(limit = 5) {
       RETURN a.title, f.text, a.is_reference
       LIMIT $limit
     `,
-    params: { limit: Math.floor(Number(limit)) },
+    params: { limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
   };
 }
 
