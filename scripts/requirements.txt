@@ -18,7 +18,7 @@ trafilatura==1.6.0
 feedparser==6.0.10
 
 # NLP & ML (wheel-only)
-huggingface-hub==0.19.4
+huggingface-hub==0.24.7
 # sentence-transformers==2.7.0 - Only needed for local embeddings, disabled in cloud mode
 
 # AI & LLM
