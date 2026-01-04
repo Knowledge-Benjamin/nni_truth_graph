@@ -34,14 +34,23 @@ DB_CONNECT_TIMEOUT = 10  # seconds
 
 class DigestEngine:
     def __init__(self):
+        logger.info("[STEP 1] Reading environment variables...")
         # CRITICAL FIX: Read environment variables at __init__ time (runtime), not module import time
         # This ensures Render's environment is fully initialized
         self.database_url = os.getenv("DATABASE_URL")
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         
-        # Debug logging to help troubleshoot environment variable loading
-        logger.info(f"[DEBUG] DATABASE_URL: {'✅ SET' if self.database_url else '❌ NOT SET'}")
-        logger.info(f"[DEBUG] GROQ_API_KEY: {'✅ SET (length: ' + str(len(self.groq_api_key)) + ')' if self.groq_api_key else '❌ NOT SET'}")
+        logger.info("[STEP 2] Validating DATABASE_URL...")
+        if self.database_url:
+            logger.info("[STEP 2a] DATABASE_URL is SET")
+        else:
+            logger.error("[STEP 2a] DATABASE_URL is NOT SET")
+        
+        logger.info("[STEP 3] Validating GROQ_API_KEY...")
+        if self.groq_api_key:
+            logger.info(f"[STEP 3a] GROQ_API_KEY is SET (length: {len(self.groq_api_key)})")
+        else:
+            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET")
         
         if not self.groq_api_key:
             error_msg = """
@@ -75,21 +84,23 @@ class DigestEngine:
             """
             raise ValueError(error_msg)
         
+        logger.info("[STEP 4] Initializing Groq client...")
         try:
-            logger.info(f"[DEBUG] Attempting to initialize Groq with API key length: {len(self.groq_api_key)}")
             self.groq_client = Groq(api_key=self.groq_api_key)
-            logger.info("✅ Groq client initialized successfully")
+            logger.info("[STEP 4a] ✅ Groq client initialized successfully")
         except Exception as e:
             import traceback
             full_error = traceback.format_exc()
-            logger.error(f"❌ Failed to initialize Groq client: {e}")
+            logger.error(f"[STEP 4a] ❌ Failed to initialize Groq client: {e}")
             logger.error(f"Full traceback:\n{full_error}")
             raise ValueError(f"❌ Failed to initialize Groq client: {str(e)}\n\nFull error:\n{full_error}")
         
+        logger.info("[STEP 5] Initializing SemanticLinker...")
         try:
             self.linker = SemanticLinker() # Loads vector model (Local or API)
+            logger.info("[STEP 5a] ✅ SemanticLinker initialized successfully")
         except Exception as e:
-            logger.warning(f"⚠️  SemanticLinker init failed: {e}")
+            logger.warning(f"[STEP 5a] ⚠️  SemanticLinker init failed: {e}")
             self.linker = None
         
     def fetch_fresh_content(self, url):
