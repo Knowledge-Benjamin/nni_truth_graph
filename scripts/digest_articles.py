@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import psycopg2
+import signal
 import trafilatura
 from groq import Groq
 from dotenv import load_dotenv
@@ -15,6 +16,31 @@ from ai_engine.nlp_models import SemanticLinker
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Timeout handler for long-running operations
+class TimeoutError(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("Operation timed out")
+
+def with_timeout(seconds, func, *args, **kwargs):
+    """Execute function with timeout - fallback if signal unavailable"""
+    try:
+        # Set signal handler (Unix only)
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+        try:
+            result = func(*args, **kwargs)
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            return result
+        except TimeoutError:
+            logger.error("[TIMEOUT] Operation exceeded " + str(seconds) + " seconds")
+            raise
+    except (ValueError, AttributeError):
+        # signal not available (Windows), just run it
+        return func(*args, **kwargs)
 
 # Load Environment - try local .env file first, then system env vars are auto-available via os.getenv()
 # CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
@@ -61,11 +87,15 @@ class DigestEngine:
             logger.info("[STEP 2] Config OK - initializing clients...")
             
             logger.info("[STEP 3] Initializing Groq client...")
-            self.groq_client = Groq(api_key=self.groq_api_key)
+            def init_groq():
+                return Groq(api_key=self.groq_api_key)
+            self.groq_client = with_timeout(5, init_groq)
             logger.info("[STEP 3a] Groq OK")
             
             logger.info("[STEP 4] Initializing SemanticLinker...")
-            self.linker = SemanticLinker()
+            def init_linker():
+                return SemanticLinker()
+            self.linker = with_timeout(10, init_linker)
             logger.info("[STEP 4a] SemanticLinker OK")
             
         except Exception as e:
