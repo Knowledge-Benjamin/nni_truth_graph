@@ -24,6 +24,7 @@ NLP_AVAILABLE = False
 semantic_linker = None
 entity_extractor = None
 query_translator = None
+result_analyzer = None
 
 try:
     print("[INFO] Importing NLP modules...")
@@ -388,6 +389,13 @@ if NLP_AVAILABLE:
             query_translator = QueryTranslator()
     except Exception as e:
         print(f"⚠️  Query Translator init failed: {e}")
+
+    # Result Analyzer (Gemini API) - For natural language analysis of search results
+    try:
+        if 'ResultAnalyzer' in globals():
+            result_analyzer = ResultAnalyzer()
+    except Exception as e:
+        print(f"⚠️  Result Analyzer init failed: {e}")
         
     print("✅ NLP Models initialization attempt complete")
 
