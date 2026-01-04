@@ -62,19 +62,22 @@ class DigestEngine:
     def __init__(self):
         try:
             logger.info("[STEP 1] Reading environment variables...")
-            # CRITICAL FIX: Read environment variables at __init__ time (runtime), not module import time
-            # This ensures Render's environment is fully initialized
             env_count = len(os.environ)
             logger.info("[STEP 1a] env_count=" + str(env_count))
             
+            logger.info("[STEP 1b-START] About to read DATABASE_URL")
             self.database_url = os.getenv("DATABASE_URL")
+            logger.info("[STEP 1b-DONE] DATABASE_URL read OK")
+            
+            logger.info("[STEP 1c-START] About to read GROQ_API_KEY")
             self.groq_api_key = os.getenv("GROQ_API_KEY")
+            logger.info("[STEP 1c-DONE] GROQ_API_KEY read OK")
             
             db_status = "YES" if self.database_url else "NO"
-            logger.info("[STEP 1b] db_url=" + db_status)
+            logger.info("[STEP 1d] db_url=" + db_status)
             
             gq_status = "YES" if self.groq_api_key else "NO"
-            logger.info("[STEP 1c] groq_key=" + gq_status)
+            logger.info("[STEP 1e] groq_key=" + gq_status)
             
             if not self.groq_api_key:
                 logger.error("[ERROR] GROQ_API_KEY is None")
@@ -86,17 +89,13 @@ class DigestEngine:
             
             logger.info("[STEP 2] Config OK - initializing clients...")
             
-            logger.info("[STEP 3] Initializing Groq client...")
-            def init_groq():
-                return Groq(api_key=self.groq_api_key)
-            self.groq_client = with_timeout(5, init_groq)
-            logger.info("[STEP 3a] Groq OK")
+            logger.info("[STEP 3-START] Initializing Groq client")
+            self.groq_client = Groq(api_key=self.groq_api_key)
+            logger.info("[STEP 3-DONE] Groq initialized")
             
-            logger.info("[STEP 4] Initializing SemanticLinker...")
-            def init_linker():
-                return SemanticLinker()
-            self.linker = with_timeout(10, init_linker)
-            logger.info("[STEP 4a] SemanticLinker OK")
+            logger.info("[STEP 4-START] Initializing SemanticLinker")
+            self.linker = SemanticLinker()
+            logger.info("[STEP 4-DONE] SemanticLinker initialized")
             
         except Exception as e:
             import traceback
