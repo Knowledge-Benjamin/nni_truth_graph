@@ -34,7 +34,7 @@ function App() {
         "Unknown Statement";
 
       return {
-        id: fact.id || "unknown",
+        id: String(fact.id || "unknown"),
         statement: val_statement,
         confidence: fact.confidence || 0.5,
         first_seen: fact.first_seen,

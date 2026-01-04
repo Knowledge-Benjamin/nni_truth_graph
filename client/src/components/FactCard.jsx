@@ -74,7 +74,7 @@ function FactCard({ fact, onViewGraph }) {
       </div>
 
       <div className="card-meta">
-        <span>ID: {fact.id ? fact.id.substring(0, 8) + "..." : "N/A"}</span>
+        <span>ID: {fact.id ? String(fact.id).substring(0, 8) + "..." : "N/A"}</span>
         <span>
           First Seen:{" "}
           {fact.first_seen
