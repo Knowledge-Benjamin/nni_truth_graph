@@ -2,6 +2,7 @@ import asyncio
 import os
 import json
 import logging
+import sys
 import psycopg2
 import signal
 import trafilatura
@@ -62,27 +63,34 @@ class DigestEngine:
     def __init__(self):
         try:
             logger.info("INIT-1")
+            sys.stdout.flush()
             env_count = len(os.environ)
             logger.info("INIT-2")
+            sys.stdout.flush()
             
             # Use try-except around each env var read to catch any issues
             try:
                 logger.info("INIT-3-START")
+                sys.stdout.flush()
                 self.database_url = os.getenv("DATABASE_URL")
                 logger.info("INIT-3-DONE")
+                sys.stdout.flush()
             except Exception as db_err:
                 logger.error("INIT-3-ERROR")
                 self.database_url = None
             
             try:
                 logger.info("INIT-4-START")
+                sys.stdout.flush()
                 self.groq_api_key = os.getenv("GROQ_API_KEY")
                 logger.info("INIT-4-DONE")
+                sys.stdout.flush()
             except Exception as gq_err:
                 logger.error("INIT-4-ERROR")
                 self.groq_api_key = None
             
             logger.info("INIT-5")
+            sys.stdout.flush()
             
             if not self.groq_api_key:
                 raise ValueError("GROQ_API_KEY is not set")
@@ -91,6 +99,7 @@ class DigestEngine:
                 raise ValueError("DATABASE_URL is not set")
             
             logger.info("INIT-6")
+            sys.stdout.flush()
             
             try:
                 logger.info("INIT-7-GRQ")
