@@ -343,5 +343,35 @@ class DigestEngine:
                     logger.warning(f"Failed to close connection: {e}")
 
 if __name__ == "__main__":
-    engine = DigestEngine()
-    asyncio.run(engine.process_batch())
+    try:
+        logger.info("=" * 80)
+        logger.info("🚀 Starting digest_articles.py")
+        logger.info("=" * 80)
+        
+        engine = DigestEngine()
+        logger.info("✅ DigestEngine initialized successfully")
+        
+        logger.info("🔄 Starting async batch processing...")
+        asyncio.run(engine.process_batch())
+        
+        logger.info("=" * 80)
+        logger.info("✅ Batch processing completed successfully")
+        logger.info("=" * 80)
+    
+    except Exception as e:
+        import traceback
+        full_error = traceback.format_exc()
+        logger.error("=" * 80)
+        logger.error("❌ CRITICAL ERROR IN DIGEST_ARTICLES")
+        logger.error("=" * 80)
+        logger.error(f"Error Type: {type(e).__name__}")
+        logger.error(f"Error Message: {str(e)}")
+        logger.error(f"\nFull Traceback:\n{full_error}")
+        logger.error("=" * 80)
+        
+        # Also print to stderr so it appears in container logs
+        import sys
+        print(f"\n❌ CRITICAL ERROR:\n{full_error}\n", file=sys.stderr)
+        
+        # Exit with error code
+        sys.exit(1)
