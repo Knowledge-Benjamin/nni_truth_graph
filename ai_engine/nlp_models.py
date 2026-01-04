@@ -22,6 +22,7 @@ class SemanticLinker:
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        self.hf_client = None  # Lazy initialization
         execution_mode = os.getenv("EXECUTION_MODE", "heuristic")
 
         # Cloud mode MUST use API, not local models - NEVER download models in cloud
@@ -30,24 +31,12 @@ class SemanticLinker:
             self.use_api = True
             self.model = None
             
-            # Initialize HuggingFace API client
+            # Defer InferenceClient initialization (avoid blocking on network calls)
             if not self.api_token:
                 logger.error("❌ HF_TOKEN is missing from environment variables!")
-                self.hf_client = None
             else:
                 logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
-                try:
-                    from huggingface_hub import InferenceClient
-                    logger.info("✅ huggingface_hub library imported successfully")
-                    self.hf_client = InferenceClient(token=self.api_token)
-                    logger.info("✅ HuggingFace InferenceClient initialized successfully")
-                except ImportError as e:
-                    logger.error(f"❌ huggingface_hub not installed! Error: {e}")
-                    logger.error("Run: pip install huggingface_hub")
-                    self.hf_client = None
-                except Exception as e:
-                    logger.error(f"❌ InferenceClient initialization failed: {e}")
-                    self.hf_client = None
+                logger.info("✅ HuggingFace API mode enabled - client will initialize on first use")
         else:
             # Local or Heuristic mode: try to load local model (if sentence-transformers is installed)
             try:
@@ -64,22 +53,31 @@ class SemanticLinker:
                 # Debug token availability
                 if not self.api_token:
                     logger.error("❌ HF_TOKEN is missing from environment variables!")
-                    self.hf_client = None
                 else:
                     logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
-                    # Try to initialize HuggingFace client
-                    try:
-                        from huggingface_hub import InferenceClient
-                        logger.info("✅ huggingface_hub library imported successfully")
-                        self.hf_client = InferenceClient(token=self.api_token)
-                        logger.info("✅ HuggingFace InferenceClient initialized successfully")
-                    except ImportError as e:
-                        logger.error(f"❌ huggingface_hub not installed! Error: {e}")
-                        logger.error("Run: pip install huggingface_hub")
-                        self.hf_client = None
-                    except Exception as e:
-                        logger.error(f"❌ InferenceClient initialization failed: {e}")
-                        self.hf_client = None
+                    logger.info("✅ HuggingFace API mode enabled - client will initialize on first use")
+
+    def _ensure_hf_client(self):
+        """Lazily initialize HuggingFace InferenceClient on first use."""
+        if self.hf_client is not None:
+            return True  # Already initialized
+        
+        if not self.api_token:
+            logger.error("❌ HF_TOKEN environment variable is not set!")
+            return False
+        
+        try:
+            from huggingface_hub import InferenceClient
+            logger.info("✅ Initializing HuggingFace InferenceClient (deferred initialization)...")
+            self.hf_client = InferenceClient(token=self.api_token, timeout=30)
+            logger.info("✅ HuggingFace InferenceClient initialized successfully")
+            return True
+        except ImportError as e:
+            logger.error(f"❌ huggingface_hub not installed! Error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ InferenceClient initialization failed: {e}")
+            return False
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
         """Convert text to 384-dimensional vector (Local or Cloud API).
@@ -88,11 +86,7 @@ class SemanticLinker:
             384-dim vector or None if generation fails (prevents database corruption)
         """
         if self.use_api:
-            if not self.api_token:
-                logger.error("❌ HF_TOKEN environment variable is not set!")
-                return None
-            if not self.hf_client:
-                logger.error("❌ InferenceClient not initialized (check logs above for reason)")
+            if not self._ensure_hf_client():
                 return None
             
             try:
