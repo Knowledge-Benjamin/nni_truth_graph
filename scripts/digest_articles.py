@@ -75,10 +75,15 @@ class DigestEngine:
             raise ValueError(error_msg)
         
         try:
+            logger.info(f"[DEBUG] Attempting to initialize Groq with API key length: {len(self.groq_api_key)}")
             self.groq_client = Groq(api_key=self.groq_api_key)
             logger.info("✅ Groq client initialized successfully")
         except Exception as e:
-            raise ValueError(f"❌ Failed to initialize Groq client: {e}")
+            import traceback
+            full_error = traceback.format_exc()
+            logger.error(f"❌ Failed to initialize Groq client: {e}")
+            logger.error(f"Full traceback:\n{full_error}")
+            raise ValueError(f"❌ Failed to initialize Groq client: {str(e)}\n\nFull error:\n{full_error}")
         
         try:
             self.linker = SemanticLinker() # Loads vector model (Local or API)
