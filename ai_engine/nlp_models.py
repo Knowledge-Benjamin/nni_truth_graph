@@ -25,7 +25,7 @@ class SemanticLinker:
 
         # Cloud mode MUST use API, not local models
         if execution_mode == "cloud":
-            logger.info("[INFO] Cloud mode: Using HuggingFace API for embeddings (no local models)")
+            logger.info("[INFO] ☁️  CLOUD MODE: Skipping local model download - using HuggingFace API only")
             self.use_api = True
             self.model = None
             
