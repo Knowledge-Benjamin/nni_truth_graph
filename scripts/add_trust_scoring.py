@@ -9,8 +9,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load Environment
+# CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
-load_dotenv(env_path)
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    logger.info(f"✅ Loaded .env from {env_path}")
+else:
+    logger.info("ℹ️ No .env file found - using system environment variables (Render deployment)")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def load_trusted_sources():

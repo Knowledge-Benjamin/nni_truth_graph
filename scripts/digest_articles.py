@@ -18,14 +18,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Load Environment - try local .env file first, then system env vars are auto-available via os.getenv()
+# CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
+# It only loads from .env files. On Render, system env vars are set by render.yaml
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
     logger.info(f"✅ Loaded .env from {env_path}")
 else:
-    # On Render, .env doesn't exist - system env vars are automatically available in the process
-    logger.info("ℹ️ No .env file found - reading from system environment variables")
+    logger.info("ℹ️ No .env file found - using system environment variables (Render deployment)")
 
+# Read from system environment variables (set by render.yaml or local .env)
 DATABASE_URL = os.getenv("DATABASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MAX_TOKENS = 8000  # Conservative limit for output

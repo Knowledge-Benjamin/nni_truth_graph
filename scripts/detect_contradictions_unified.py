@@ -33,12 +33,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load Environment - try local .env file first, then system env vars are auto-available
+# CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
+    logger.info(f"✅ Loaded .env from {env_path}")
 else:
-    # System environment variables are already available in the process on Render
-    pass
+    logger.info("ℹ️ No .env file found - using system environment variables (Render deployment)")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")

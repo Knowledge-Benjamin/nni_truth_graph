@@ -121,8 +121,12 @@ class PipelineOrchestrator:
         missing = []
         
         for var in required_vars:
-            if not os.getenv(var):
+            value = os.getenv(var)
+            if not value:
                 missing.append(var)
+                logger.error(f"❌ {var} not found in environment")
+            else:
+                logger.info(f"✅ {var} is set")
         
         if missing:
             logger.warning(f"⚠️  Missing environment variables: {', '.join(missing)}")

@@ -41,9 +41,15 @@ except Exception as e:
     
 NLP_AVAILABLE = True # Partial availability is acceptable
 
-print("DEBUG: Calling load_dotenv()...")
-load_dotenv()
-print("DEBUG: load_dotenv() complete.")
+# Load environment variables
+# CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
+# It only looks for .env in current directory. On Render, system env vars are already set
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    print(f"✅ Loaded .env from {env_path}")
+else:
+    print("ℹ️ No .env file found - using system environment variables (Render deployment)")
 
 # ===== ENVIRONMENT VALIDATION =====
 REQUIRED_ENV_VARS = ['DATABASE_URL']
