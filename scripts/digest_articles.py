@@ -207,13 +207,18 @@ class DigestEngine:
             
             # 1. Get Articles that need digestion
             logger.info("📋 Fetching unprocessed articles...")
-            cur.execute("""
-                SELECT id, url, title FROM articles 
-                WHERE processed_at IS NULL 
-                AND url IS NOT NULL
-                LIMIT %s;
-            """, (BATCH_SIZE,))
-            rows = cur.fetchall()
+            try:
+                cur.execute("""
+                    SELECT id, url, title FROM articles 
+                    WHERE processed_at IS NULL 
+                    AND url IS NOT NULL
+                    LIMIT %s;
+                """, (BATCH_SIZE,))
+                rows = cur.fetchall()
+                logger.info(f"📊 Fetched {len(rows)} articles from database")
+            except Exception as e:
+                logger.error(f"❌ Database fetch failed: {e}")
+                raise
             
             if not rows:
                 logger.info("✅ All articles processed.")
@@ -408,6 +413,9 @@ if __name__ == "__main__":
         logger.info("=" * 80)
         logger.info("✅ Batch processing completed successfully")
         logger.info("=" * 80)
+        
+        # Explicit success exit code
+        sys.exit(0)
     
     except Exception as e:
         import traceback
