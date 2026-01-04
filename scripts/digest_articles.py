@@ -17,9 +17,15 @@ from ai_engine.nlp_models import SemanticLinker
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load Environment
+# Load Environment - try local .env file first, then fall back to system env vars
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
-load_dotenv(env_path)
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    logger.info(f"✅ Loaded .env from {env_path}")
+else:
+    # On Render, .env doesn't exist - rely on environment variables set in dashboard
+    load_dotenv()  # This loads from system environment
+    logger.info("ℹ️ No .env file found - using system environment variables")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")

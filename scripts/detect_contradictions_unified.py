@@ -32,9 +32,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load Environment
+# Load Environment - try local .env file first, then fall back to system env vars
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
-load_dotenv(env_path)
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv()  # Load from system environment (Render)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
