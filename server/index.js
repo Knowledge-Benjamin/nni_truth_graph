@@ -266,6 +266,11 @@ app.get("/", async (req, res) => {
 app.post("/api/query/natural", async (req, res) => {
   let { query } = req.body;
 
+  // Ensure query is a string, not an object
+  if (typeof query !== 'string') {
+    query = String(query || '').trim();
+  }
+
   // Validate input using standardized validation
   const validation = validateQuery(query);
   if (!validation.valid) {
@@ -298,9 +303,11 @@ app.post("/api/query/natural", async (req, res) => {
       searchTerms = [...searchTerms, ...expansionResp.value.data.variations];
     }
     // Ensure all search terms are strings and non-empty
-    searchTerms = searchTerms.filter((t) => typeof t === "string" && t.trim().length > 0);
+    searchTerms = searchTerms.filter(
+      (t) => typeof t === "string" && t.trim().length > 0
+    );
     const fulltextQuery = searchTerms
-      .map((t) => `"${String(t).replace(/"/g, '')}"`)
+      .map((t) => `"${String(t).replace(/"/g, "")}"`)
       .join(" OR ");
     console.log(`   ✨ Expansion: ${searchTerms.join(", ")}`);
 
