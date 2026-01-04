@@ -16,7 +16,7 @@ neo4j==5.21.0
 google-genai==0.3.0
 huggingface-hub==1.2.3
 numpy==1.26.2
-groq==0.4.1
+groq==1.0.0
 # sentence-transformers==2.7.0 - ONLY for local mode, causes model downloads in cloud mode (disabled)
 
 # Web Scraping & Content Processing

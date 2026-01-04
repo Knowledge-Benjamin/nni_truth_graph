@@ -22,7 +22,7 @@ huggingface-hub==1.2.3
 # sentence-transformers==2.7.0 - Only needed for local embeddings, disabled in cloud mode
 
 # AI & LLM
-groq==0.4.1
+groq==1.0.0
 google-genai==0.3.0
 
 # Utilities
