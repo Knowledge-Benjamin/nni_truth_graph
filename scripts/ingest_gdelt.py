@@ -12,12 +12,10 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load Env - try local .env file first, then fall back to system env vars
+# Load Env - try local .env file first, then system env vars are auto-available
 env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
-else:
-    load_dotenv()  # Load from system environment (Render)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:

@@ -17,9 +17,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load Envs
-load_dotenv(os.path.join(os.path.dirname(__file__), '../ai_engine/.env'))
-load_dotenv('server/.env')  # Load Neo4j Creds
+# Load Environment - try local .env file first, then system env vars are auto-available
+env_path = os.path.join(os.path.dirname(__file__), '../ai_engine/.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
 
 # Use shared database utilities
 from db_utils import get_pg_connection, release_pg_connection, get_neo4j_driver, cleanup
