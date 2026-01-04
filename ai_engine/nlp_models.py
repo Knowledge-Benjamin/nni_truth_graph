@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 class SemanticLinker:
     """
     Generates semantic embeddings for claims and finds similar existing claims.
-    Uses sentence-transformers/all-MiniLM-L6-v2 (80MB, fast, free).
+    Uses sentence-transformers/all-MiniLM-L6-v2 (80MB, fast, free) in local mode only.
+    In cloud mode: Uses HuggingFace Inference API (no local models downloaded).
     """
     
     def __init__(self):
@@ -23,9 +24,9 @@ class SemanticLinker:
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
         execution_mode = os.getenv("EXECUTION_MODE", "heuristic")
 
-        # Cloud mode MUST use API, not local models
+        # Cloud mode MUST use API, not local models - NEVER download models in cloud
         if execution_mode == "cloud":
-            logger.info("[INFO] ☁️  CLOUD MODE: Skipping local model download - using HuggingFace API only")
+            logger.info("[INFO] ☁️  CLOUD MODE: Disabling local model download - using HuggingFace API only")
             self.use_api = True
             self.model = None
             
@@ -48,9 +49,10 @@ class SemanticLinker:
                     logger.error(f"❌ InferenceClient initialization failed: {e}")
                     self.hf_client = None
         else:
-            # Local mode: try to load local model
+            # Local or Heuristic mode: try to load local model (if sentence-transformers is installed)
             try:
                 from sentence_transformers import SentenceTransformer
+                logger.info("[INFO] sentence-transformers available - loading local model...")
                 self.model = SentenceTransformer('all-MiniLM-L6-v2')
                 logger.info("[SUCCESS] Semantic model ready (Local: 384-dim)")
             except ImportError:

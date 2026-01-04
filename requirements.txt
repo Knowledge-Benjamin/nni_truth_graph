@@ -15,9 +15,9 @@ neo4j==5.21.0
 # AI & NLP (wheel-distributed only)
 google-genai==0.3.0
 huggingface-hub==0.19.4
-sentence-transformers==2.7.0
 numpy==1.26.2
 groq==0.4.1
+# sentence-transformers==2.7.0 - ONLY for local mode, causes model downloads in cloud mode (disabled)
 
 # Web Scraping & Content Processing
 trafilatura==1.6.0
