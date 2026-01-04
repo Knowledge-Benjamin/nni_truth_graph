@@ -267,14 +267,18 @@ app.post("/api/query/natural", async (req, res) => {
   let { query } = req.body;
 
   // Debug: Log what we received
-  console.log(`DEBUG: query type: ${typeof query}, value: ${JSON.stringify(query).substring(0, 100)}`);
+  console.log(
+    `DEBUG: query type: ${typeof query}, value: ${JSON.stringify(
+      query
+    ).substring(0, 100)}`
+  );
 
   // Ensure query is a string, not an object
-  if (typeof query !== 'string') {
+  if (typeof query !== "string") {
     console.warn(`⚠️  Query is ${typeof query}, converting to string`);
-    query = String(query || '').trim();
+    query = String(query || "").trim();
   }
-  
+
   // Sanitize early to remove any whitespace
   query = query.trim();
 

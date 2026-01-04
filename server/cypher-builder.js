@@ -108,7 +108,10 @@ function buildGetNeighborsQuery(nodeId, limit = 25) {
       RETURN n, r, neighbor
       LIMIT $limit
     `,
-    params: { id: nodeId, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
+    params: {
+      id: nodeId,
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -207,7 +210,10 @@ function buildFactsBySubjectQuery(subject, limit = 20) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { subject, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
+    params: {
+      subject,
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -227,7 +233,10 @@ function buildContradictionsQuery(minConfidence = 0.5, limit = 50) {
       ORDER BY rel.weight DESC
       LIMIT $limit
     `,
-    params: { minConfidence, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
+    params: {
+      minConfidence,
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -246,7 +255,10 @@ function buildFactEvolutionQuery(factId, limit = 25) {
       ORDER BY distance
       LIMIT $limit
     `,
-    params: { id: factId, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
+    params: {
+      id: factId,
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
@@ -286,7 +298,10 @@ function buildSearchFactsByKeywordQuery({ searchTerm, limit = 1 } = {}) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { searchTerm, limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)) },
+    params: {
+      searchTerm,
+      limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
+    },
   };
 }
 
