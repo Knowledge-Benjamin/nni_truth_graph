@@ -61,41 +61,52 @@ DB_CONNECT_TIMEOUT = 10  # seconds
 class DigestEngine:
     def __init__(self):
         try:
-            logger.info("[STEP 1] Reading environment variables...")
+            logger.info("INIT-1")
             env_count = len(os.environ)
-            logger.info("[STEP 1a] env_count=" + str(env_count))
+            logger.info("INIT-2")
             
-            logger.info("[STEP 1b-START] About to read DATABASE_URL")
-            self.database_url = os.getenv("DATABASE_URL")
-            logger.info("[STEP 1b-DONE] DATABASE_URL read OK")
+            # Use try-except around each env var read to catch any issues
+            try:
+                logger.info("INIT-3-START")
+                self.database_url = os.getenv("DATABASE_URL")
+                logger.info("INIT-3-DONE")
+            except Exception as db_err:
+                logger.error("INIT-3-ERROR")
+                self.database_url = None
             
-            logger.info("[STEP 1c-START] About to read GROQ_API_KEY")
-            self.groq_api_key = os.getenv("GROQ_API_KEY")
-            logger.info("[STEP 1c-DONE] GROQ_API_KEY read OK")
+            try:
+                logger.info("INIT-4-START")
+                self.groq_api_key = os.getenv("GROQ_API_KEY")
+                logger.info("INIT-4-DONE")
+            except Exception as gq_err:
+                logger.error("INIT-4-ERROR")
+                self.groq_api_key = None
             
-            db_status = "YES" if self.database_url else "NO"
-            logger.info("[STEP 1d] db_url=" + db_status)
-            
-            gq_status = "YES" if self.groq_api_key else "NO"
-            logger.info("[STEP 1e] groq_key=" + gq_status)
+            logger.info("INIT-5")
             
             if not self.groq_api_key:
-                logger.error("[ERROR] GROQ_API_KEY is None")
                 raise ValueError("GROQ_API_KEY is not set")
             
             if not self.database_url:
-                logger.error("[ERROR] DATABASE_URL is None")
                 raise ValueError("DATABASE_URL is not set")
             
-            logger.info("[STEP 2] Config OK - initializing clients...")
+            logger.info("INIT-6")
             
-            logger.info("[STEP 3-START] Initializing Groq client")
-            self.groq_client = Groq(api_key=self.groq_api_key)
-            logger.info("[STEP 3-DONE] Groq initialized")
+            try:
+                logger.info("INIT-7-GRQ")
+                self.groq_client = Groq(api_key=self.groq_api_key)
+                logger.info("INIT-7-OK")
+            except Exception as groq_err:
+                logger.error("INIT-7-ERR")
+                raise
             
-            logger.info("[STEP 4-START] Initializing SemanticLinker")
-            self.linker = SemanticLinker()
-            logger.info("[STEP 4-DONE] SemanticLinker initialized")
+            try:
+                logger.info("INIT-8-LNK")
+                self.linker = SemanticLinker()
+                logger.info("INIT-8-OK")
+            except Exception as linker_err:
+                logger.error("INIT-8-ERR")
+                self.linker = None
             
         except Exception as e:
             import traceback
