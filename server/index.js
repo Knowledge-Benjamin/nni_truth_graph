@@ -290,7 +290,11 @@ app.post("/api/query/natural", async (req, res) => {
   }
 
   // Sanitize user input
-  query = sanitizeCypherInput(query);
+  const sanitizeResult = sanitizeCypherInput(query);
+  if (!sanitizeResult.valid) {
+    return sendError(res, sanitizeResult.error, "SANITIZE_FAILED", 400);
+  }
+  query = sanitizeResult.sanitized;
 
   try {
     console.log(`🔎 TruthRank: Processing "${query}"...`);
