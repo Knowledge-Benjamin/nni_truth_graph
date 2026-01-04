@@ -28,8 +28,19 @@ BATCH_SIZE = 5
 
 class DigestEngine:
     def __init__(self):
-        self.groq_client = Groq(api_key=GROQ_API_KEY)
-        self.linker = SemanticLinker() # Loads vector model (Local or API)
+        if not GROQ_API_KEY:
+            raise ValueError("❌ GROQ_API_KEY not set in environment variables. Cannot initialize Groq client.")
+        
+        try:
+            self.groq_client = Groq(api_key=GROQ_API_KEY)
+        except Exception as e:
+            raise ValueError(f"❌ Failed to initialize Groq client: {e}")
+        
+        try:
+            self.linker = SemanticLinker() # Loads vector model (Local or API)
+        except Exception as e:
+            logger.warning(f"⚠️  SemanticLinker init failed: {e}")
+            self.linker = None
         
     def fetch_fresh_content(self, url):
         """Fetches fresh HTML and extracts text using Trafilatura (Sync)."""

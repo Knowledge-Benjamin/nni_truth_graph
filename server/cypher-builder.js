@@ -26,7 +26,7 @@ function buildSearchFactsQuery({
 } = {}) {
   const params = {
     fulltextQuery: fulltextQuery || "",
-    limit,
+    limit: Math.floor(limit),  // Ensure limit is a non-negative integer
   };
 
   if (useHybrid) {
@@ -105,7 +105,7 @@ function buildGetNeighborsQuery(nodeId, limit = 25) {
       RETURN n, r, neighbor
       LIMIT $limit
     `,
-    params: { id: nodeId, limit },
+    params: { id: nodeId, limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -138,7 +138,7 @@ function buildListFactsQuery({ skip = 0, limit = 20 } = {}) {
       SKIP $skip
       LIMIT $limit
     `,
-    params: { skip, limit },
+    params: { skip: Math.floor(Number(skip)), limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -159,7 +159,7 @@ function buildListArticlesQuery({ skip = 0, limit = 20 } = {}) {
       SKIP $skip
       LIMIT $limit
     `,
-    params: { skip, limit },
+    params: { skip: Math.floor(Number(skip)), limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -198,7 +198,7 @@ function buildFactsBySubjectQuery(subject, limit = 20) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { subject, limit },
+    params: { subject, limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -218,7 +218,7 @@ function buildContradictionsQuery(minConfidence = 0.5, limit = 50) {
       ORDER BY rel.weight DESC
       LIMIT $limit
     `,
-    params: { minConfidence, limit },
+    params: { minConfidence, limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -237,7 +237,7 @@ function buildFactEvolutionQuery(factId, limit = 25) {
       ORDER BY distance
       LIMIT $limit
     `,
-    params: { id: factId, limit },
+    params: { id: factId, limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -277,7 +277,7 @@ function buildSearchFactsByKeywordQuery({ searchTerm, limit = 1 } = {}) {
       ORDER BY f.confidence DESC
       LIMIT $limit
     `,
-    params: { searchTerm, limit },
+    params: { searchTerm, limit: Math.floor(Number(limit)) },
   };
 }
 
@@ -606,7 +606,7 @@ function buildSampleAssertionsQuery(limit = 5) {
       RETURN a.title, f.text, a.is_reference
       LIMIT $limit
     `,
-    params: { limit },
+    params: { limit: Math.floor(Number(limit)) },
   };
 }
 
