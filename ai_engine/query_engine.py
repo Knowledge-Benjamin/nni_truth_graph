@@ -370,7 +370,7 @@ class GraphSearcher:
                 # Select search strategy based on embedding availability
                 if embedding and len(embedding) == 384:
                     cypher = """
-                        // Hybrid: Keyword + Vector similarity
+                        // Hybrid: Keyword + Vector similarity (native Cypher, no GDS)
                         MATCH (f:Fact)
                         WHERE toLower(f.text) CONTAINS toLower($query)
                            OR toLower(f.subject) CONTAINS toLower($query)
@@ -378,14 +378,23 @@ class GraphSearcher:
                         WITH f,
                              f.confidence AS keywordScore
                         
-                        // Vector similarity scoring
+                        // Vector similarity scoring (native Cypher cosine)
                         WITH f,
                              keywordScore,
-                             1 - gds.similarity.cosine(f.embedding, $embedding) AS vectorDistance
+                             reduce(sum=0, i in range(0, size(f.embedding)) | sum + f.embedding[i]*$embedding[i]) AS dotProduct,
+                             sqrt(reduce(sum=0, i in range(0, size(f.embedding)) | sum + f.embedding[i]*f.embedding[i])) AS factMag,
+                             sqrt(reduce(sum=0, i in range(0, size($embedding)) | sum + $embedding[i]*$embedding[i])) AS queryMag
+                        
+                        WITH f,
+                             keywordScore,
+                             CASE 
+                               WHEN factMag = 0 OR queryMag = 0 THEN 0
+                               ELSE dotProduct / (factMag * queryMag)
+                             END AS vectorSimilarity
                         
                         // Hybrid score (50/50 weight)
                         WITH f,
-                             (0.5 * keywordScore + 0.5 * (1 - vectorDistance)) AS hybridScore
+                             (0.5 * keywordScore + 0.5 * vectorSimilarity) AS hybridScore
                         
                         ORDER BY hybridScore DESC
                         LIMIT $limit

@@ -276,12 +276,9 @@ def expand_query_endpoint(request: QueryRequest):
 def embed_query_endpoint(request: QueryRequest):
     """
     Generates vector embedding for valid queries.
+    Cloud mode uses HuggingFace API, local mode uses local model.
     """
     if "semantic_linker" not in globals() or not semantic_linker:
-         # Mock embedding for cloud/heuristic mode if needed, or error
-         if EXECUTION_MODE == "cloud":
-             # In cloud mode, we might want to use an API or skip vector search
-             raise HTTPException(status_code=503, detail="Vector Search not supported in Cloud Mode yet (Need API)")
          raise HTTPException(status_code=503, detail="Semantic Linker Unavailable")
 
     try:
@@ -359,14 +356,13 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 if NLP_AVAILABLE:
     print(f"🔄 Initializing NLP Models (Mode: {EXECUTION_MODE})...")
     
-    # Semantic Linker (Embeddings) - Optional in Cloud Mode?
-    # Keeping for now if memory permits (80MB), but wrapping in try-catch
+    # Semantic Linker (Embeddings) - Cloud mode uses HuggingFace API, Local mode uses local model
+    # Both modes initialize SemanticLinker; it handles API vs local detection internally
     try:
         if 'SemanticLinker' in globals() and EXECUTION_MODE != "heuristic": # Skip in heuristic
-             if EXECUTION_MODE == "cloud":
-                  print("⚠️ Skipping SemanticLinker in Cloud Mode to save RAM (Use API if needed)")
-             else:
-                  semantic_linker = SemanticLinker()
+            if EXECUTION_MODE == "cloud":
+                print("☁️ Cloud Mode: SemanticLinker will use HuggingFace API for embeddings")
+            semantic_linker = SemanticLinker()
     except Exception as e:
         print(f"⚠️  Semantic Linker init failed: {e}")
 

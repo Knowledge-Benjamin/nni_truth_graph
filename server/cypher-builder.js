@@ -27,8 +27,15 @@ function buildSearchFactsQuery({
   useHybrid = true,
   limit = 15,
 } = {}) {
+  // Split the fulltext query into individual keywords
+  const keywords = (fulltextQuery || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((k) => k.trim().length > 0)
+    .slice(0, 10); // Limit to first 10 keywords to avoid excessive OR conditions
+
   const params = {
-    fulltextQuery: fulltextQuery || "",
+    keywords: keywords,
     limit: neo4j.int(parseInt(Math.floor(Number(limit)), 10)),
   };
 
@@ -38,10 +45,12 @@ function buildSearchFactsQuery({
       query: `
         // 1. Search Facts by fulltext (embedding index not yet implemented)
         MATCH (f:Fact)
-        WHERE toLower(f.text) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.subject) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.predicate) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.object) CONTAINS toLower($fulltextQuery)
+        WHERE ANY(kw IN $keywords WHERE 
+          toLower(f.text) CONTAINS kw
+          OR toLower(f.subject) CONTAINS kw
+          OR toLower(f.predicate) CONTAINS kw
+          OR toLower(f.object) CONTAINS kw
+        )
         
         // 2. TruthRank Scoring
         WITH f,
@@ -61,10 +70,12 @@ function buildSearchFactsQuery({
     return {
       query: `
         MATCH (f:Fact)
-        WHERE toLower(f.text) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.subject) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.predicate) CONTAINS toLower($fulltextQuery)
-           OR toLower(f.object) CONTAINS toLower($fulltextQuery)
+        WHERE ANY(kw IN $keywords WHERE 
+          toLower(f.text) CONTAINS kw
+          OR toLower(f.subject) CONTAINS kw
+          OR toLower(f.predicate) CONTAINS kw
+          OR toLower(f.object) CONTAINS kw
+        )
         RETURN f as fact, f.confidence as relevance
         ORDER BY relevance DESC
         LIMIT $limit
@@ -321,18 +332,27 @@ function buildVectorSearchQuery({
 } = {}) {
   return {
     query: `
-      // Vector similarity search using cosine distance
+      // Vector similarity search using native Cypher cosine similarity (no GDS required)
       MATCH (f:Fact)
       WHERE f.embedding IS NOT NULL
       WITH f,
-           1 - gds.similarity.cosine(f.embedding, $embedding) AS distance
+           $embedding AS queryVec,
+           f.embedding AS factVec,
+           // Calculate dot product: sum of element-wise products
+           reduce(sum=0, i in range(0, size(f.embedding)) | sum + f.embedding[i]*$embedding[i]) AS dotProduct,
+           // Calculate magnitude of fact embedding
+           sqrt(reduce(sum=0, i in range(0, size(f.embedding)) | sum + f.embedding[i]*f.embedding[i])) AS factMagnitude,
+           // Calculate magnitude of query embedding
+           sqrt(reduce(sum=0, i in range(0, size($embedding)) | sum + $embedding[i]*$embedding[i])) AS queryMagnitude
       WITH f,
-           distance,
-           (1 - distance) AS similarity
-      WHERE similarity >= $similarityThreshold
-      ORDER BY similarity DESC
+           CASE 
+             WHEN factMagnitude = 0 OR queryMagnitude = 0 THEN 0
+             ELSE dotProduct / (factMagnitude * queryMagnitude)
+           END AS cosine_similarity
+      WHERE cosine_similarity >= $similarityThreshold
+      ORDER BY cosine_similarity DESC
       LIMIT $limit
-      RETURN f as fact, similarity as relevance
+      RETURN f as fact, cosine_similarity as relevance
     `,
     params: {
       embedding,
@@ -362,7 +382,7 @@ function buildHybridSearchQuery({
 
   return {
     query: `
-      // Hybrid search: Combine keyword and vector similarity scoring
+      // Hybrid search: Combine keyword and vector similarity scoring (native Cypher, no GDS)
       
       // 1. Keyword search scoring
       MATCH (f1:Fact)
@@ -373,14 +393,25 @@ function buildHybridSearchQuery({
       WITH f1,
            $keywordWeight * f1.confidence AS keywordScore
       
-      // 2. Vector similarity scoring
+      // 2. Vector similarity scoring (native Cypher cosine)
       MATCH (f2:Fact)
       WHERE f2.embedding IS NOT NULL
       WITH f1, keywordScore, f2,
-           1 - gds.similarity.cosine(f2.embedding, $embedding) AS distance,
-           $vectorWeight * (1 - distance) AS vectorScore
+           // Calculate cosine similarity natively
+           reduce(sum=0, i in range(0, size(f2.embedding)) | sum + f2.embedding[i]*$embedding[i]) AS dotProduct,
+           sqrt(reduce(sum=0, i in range(0, size(f2.embedding)) | sum + f2.embedding[i]*f2.embedding[i])) AS factMag,
+           sqrt(reduce(sum=0, i in range(0, size($embedding)) | sum + $embedding[i]*$embedding[i])) AS queryMag
+      WITH f1, keywordScore, f2,
+           CASE 
+             WHEN factMag = 0 OR queryMag = 0 THEN 0
+             ELSE dotProduct / (factMag * queryMag)
+           END AS cosineSim,
+           $vectorWeight * CASE 
+             WHEN factMag = 0 OR queryMag = 0 THEN 0
+             ELSE dotProduct / (factMag * queryMag)
+           END AS vectorScore
       
-      // 3. Combine scores if same fact, or create separate results
+      // 3. Combine scores
       WITH COALESCE(f1, f2) as f,
            COALESCE(keywordScore, 0) + COALESCE(vectorScore, 0) AS hybridScore,
            COALESCE(f1.confidence, f2.confidence) AS confidence

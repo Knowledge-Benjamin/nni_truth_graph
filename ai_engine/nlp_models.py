@@ -21,24 +21,20 @@ class SemanticLinker:
         self.use_api = False
         self.api_token = os.getenv("HF_TOKEN")
         self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        execution_mode = os.getenv("EXECUTION_MODE", "heuristic")
 
-        try:
-            # Try loading local model
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("[SUCCESS] Semantic model ready (Local: 384-dim)")
-        except ImportError:
-            # Fallback to API using official client library
-            logger.warning("[WARN] Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
+        # Cloud mode MUST use API, not local models
+        if execution_mode == "cloud":
+            logger.info("[INFO] Cloud mode: Using HuggingFace API for embeddings (no local models)")
             self.use_api = True
+            self.model = None
             
-            # Debug token availability
+            # Initialize HuggingFace API client
             if not self.api_token:
                 logger.error("❌ HF_TOKEN is missing from environment variables!")
                 self.hf_client = None
             else:
                 logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
-                # Try to initialize HuggingFace client
                 try:
                     from huggingface_hub import InferenceClient
                     logger.info("✅ huggingface_hub library imported successfully")
@@ -51,6 +47,37 @@ class SemanticLinker:
                 except Exception as e:
                     logger.error(f"❌ InferenceClient initialization failed: {e}")
                     self.hf_client = None
+        else:
+            # Local mode: try to load local model
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("[SUCCESS] Semantic model ready (Local: 384-dim)")
+            except ImportError:
+                # Fallback to API using official client library
+                logger.warning("[WARN] Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
+                self.use_api = True
+                self.model = None
+                
+                # Debug token availability
+                if not self.api_token:
+                    logger.error("❌ HF_TOKEN is missing from environment variables!")
+                    self.hf_client = None
+                else:
+                    logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
+                    # Try to initialize HuggingFace client
+                    try:
+                        from huggingface_hub import InferenceClient
+                        logger.info("✅ huggingface_hub library imported successfully")
+                        self.hf_client = InferenceClient(token=self.api_token)
+                        logger.info("✅ HuggingFace InferenceClient initialized successfully")
+                    except ImportError as e:
+                        logger.error(f"❌ huggingface_hub not installed! Error: {e}")
+                        logger.error("Run: pip install huggingface_hub")
+                        self.hf_client = None
+                    except Exception as e:
+                        logger.error(f"❌ InferenceClient initialization failed: {e}")
+                        self.hf_client = None
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
         """Convert text to 384-dimensional vector (Local or Cloud API).

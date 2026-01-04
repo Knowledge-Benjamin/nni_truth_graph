@@ -321,9 +321,12 @@ app.post("/api/query/natural", async (req, res) => {
     searchTerms = searchTerms.filter(
       (t) => typeof t === "string" && t.trim().length > 0
     );
-    const fulltextQuery = searchTerms
-      .map((t) => `"${String(t).replace(/"/g, "")}"`)
-      .join(" OR ");
+
+    // Build search query for Cypher - use only the primary query and first variation
+    // to avoid too many OR conditions. Pass individual terms for better matching.
+    const primaryQuery = searchTerms[0]; // Original query
+    const fulltextQuery = primaryQuery; // Simple approach: use primary query
+
     console.log(`   ✨ Expansion: ${searchTerms.join(", ")}`);
 
     // Process Embedding
