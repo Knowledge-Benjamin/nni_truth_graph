@@ -177,6 +177,8 @@ class PipelineOrchestrator:
         
         try:
             # Run script and capture output
+            # CRITICAL: Pass parent process environment variables to subprocess
+            # Without this, env vars set on Render won't be available to child scripts
             result = subprocess.run(
                 ["python", script_path],
                 check=True,
@@ -184,7 +186,8 @@ class PipelineOrchestrator:
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=3600  # 1 hour timeout
+                timeout=3600,  # 1 hour timeout
+                env=os.environ.copy()  # Pass environment variables to subprocess
             )
             
             # Log only snippets to avoid spamming main log
