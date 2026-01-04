@@ -146,7 +146,8 @@ class DigestEngine:
                 ],
                 model="llama-3.3-70b-versatile",
                 temperature=0.0,  # Zero temp for max determinism
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                timeout=30  # 30 second timeout for API response
             )
             return json.loads(chat_completion.choices[0].message.content)
         except Exception as e:
