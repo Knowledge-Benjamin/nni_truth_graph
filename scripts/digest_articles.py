@@ -29,10 +29,24 @@ BATCH_SIZE = 5
 class DigestEngine:
     def __init__(self):
         if not GROQ_API_KEY:
-            raise ValueError("❌ GROQ_API_KEY not set in environment variables. Cannot initialize Groq client.")
+            error_msg = """
+            ❌ GROQ_API_KEY NOT SET
+            
+            To fix this on Render:
+            1. Go to https://render.com/dashboard
+            2. Click on 'truth-graph-ai' service
+            3. Click 'Environment' tab
+            4. Find GROQ_API_KEY - click it and enter your API key from https://console.groq.com
+            5. Deploy
+            
+            To fix locally:
+            - Create ai_engine/.env and add: GROQ_API_KEY=your_key_here
+            """
+            raise ValueError(error_msg)
         
         try:
             self.groq_client = Groq(api_key=GROQ_API_KEY)
+            logger.info("✅ Groq client initialized successfully")
         except Exception as e:
             raise ValueError(f"❌ Failed to initialize Groq client: {e}")
         
