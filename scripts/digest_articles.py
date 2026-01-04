@@ -34,56 +34,47 @@ DB_CONNECT_TIMEOUT = 10  # seconds
 
 class DigestEngine:
     def __init__(self):
-        logger.info("[STEP 1] Reading environment variables...")
-        # CRITICAL FIX: Read environment variables at __init__ time (runtime), not module import time
-        # This ensures Render's environment is fully initialized
-        logger.info("[STEP 1a] os.environ keys count: {}".format(len(os.environ)))
-        self.database_url = os.getenv("DATABASE_URL")
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        logger.info("[STEP 1b] DATABASE_URL read: {}".format("YES" if self.database_url else "NO"))
-        logger.info("[STEP 1c] GROQ_API_KEY read: {}".format("YES" if self.groq_api_key else "NO"))
-        
-        logger.info("[STEP 2] Validating DATABASE_URL...")
-        if self.database_url:
-            logger.info("[STEP 2a] DATABASE_URL is SET")
-            db_preview = self.database_url[:50] if len(self.database_url) > 50 else self.database_url
-            logger.info(f"[STEP 2b] DATABASE_URL preview: {db_preview}...")
-        else:
-            logger.error("[STEP 2a] DATABASE_URL is NOT SET")
-        
-        logger.info("[STEP 3] Validating GROQ_API_KEY...")
-        if self.groq_api_key:
-            logger.info(f"[STEP 3a] GROQ_API_KEY is SET (length: {len(self.groq_api_key)})")
-        else:
-            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET")
-            logger.error("[STEP 3b] Environment vars available: {}".format(len(os.environ)))
-            groq_vars = [k for k in os.environ.keys() if 'GROQ' in k.upper()]
-            logger.error("[STEP 3c] GROQ-related vars found: {}".format(groq_vars))
-        
-        if not self.groq_api_key:
-            raise ValueError("GROQ_API_KEY not found in environment")
-        
-        if not self.database_url:
-            raise ValueError("DATABASE_URL not found in environment")
-        
-        logger.info("[STEP 4] Initializing Groq client...")
         try:
+            logger.info("[STEP 1] Reading environment variables...")
+            # CRITICAL FIX: Read environment variables at __init__ time (runtime), not module import time
+            # This ensures Render's environment is fully initialized
+            env_count = len(os.environ)
+            logger.info("[STEP 1a] env_count=" + str(env_count))
+            
+            self.database_url = os.getenv("DATABASE_URL")
+            self.groq_api_key = os.getenv("GROQ_API_KEY")
+            
+            db_status = "YES" if self.database_url else "NO"
+            logger.info("[STEP 1b] db_url=" + db_status)
+            
+            gq_status = "YES" if self.groq_api_key else "NO"
+            logger.info("[STEP 1c] groq_key=" + gq_status)
+            
+            if not self.groq_api_key:
+                logger.error("[ERROR] GROQ_API_KEY is None")
+                raise ValueError("GROQ_API_KEY is not set")
+            
+            if not self.database_url:
+                logger.error("[ERROR] DATABASE_URL is None")
+                raise ValueError("DATABASE_URL is not set")
+            
+            logger.info("[STEP 2] Config OK - initializing clients...")
+            
+            logger.info("[STEP 3] Initializing Groq client...")
             self.groq_client = Groq(api_key=self.groq_api_key)
-            logger.info("[STEP 4a] ✅ Groq client initialized successfully")
+            logger.info("[STEP 3a] Groq OK")
+            
+            logger.info("[STEP 4] Initializing SemanticLinker...")
+            self.linker = SemanticLinker()
+            logger.info("[STEP 4a] SemanticLinker OK")
+            
         except Exception as e:
             import traceback
-            full_error = traceback.format_exc()
-            logger.error(f"[STEP 4a] ❌ Failed to initialize Groq client: {e}")
-            logger.error(f"Full traceback:\n{full_error}")
-            raise ValueError(f"❌ Failed to initialize Groq client: {str(e)}\n\nFull error:\n{full_error}")
-        
-        logger.info("[STEP 5] Initializing SemanticLinker...")
-        try:
-            self.linker = SemanticLinker() # Loads vector model (Local or API)
-            logger.info("[STEP 5a] ✅ SemanticLinker initialized successfully")
-        except Exception as e:
-            logger.warning(f"[STEP 5a] ⚠️  SemanticLinker init failed: {e}")
-            self.linker = None
+            logger.error("[ERROR] Initialization failed")
+            logger.error("[ERROR] Exception: " + str(type(e).__name__))
+            logger.error("[ERROR] Message: " + str(e))
+            logger.error("[ERROR] Traceback: " + traceback.format_exc())
+            raise
         
     def fetch_fresh_content(self, url):
         """Fetches fresh HTML and extracts text using Trafilatura."""
