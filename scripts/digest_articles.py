@@ -119,11 +119,12 @@ class DigestEngine:
             self.linker = None
         
     def fetch_fresh_content(self, url):
-        """Fetches fresh HTML and extracts text using Trafilatura with timeout."""
+        """Fetches fresh HTML and extracts text using Trafilatura."""
         try:
             logger.info(f"   📥 Fetching {url[:50]}...")
-            # trafilatura.fetch_url can hang, use timeout
-            downloaded = trafilatura.fetch_url(url, timeout=FETCH_TIMEOUT)
+            # trafilatura.fetch_url does not accept timeout parameter
+            # System connection timeout settings will apply instead
+            downloaded = trafilatura.fetch_url(url)
             if not downloaded:
                 logger.warning(f"   ⚠️  No content downloaded from {url}")
                 return None
@@ -224,7 +225,7 @@ class DigestEngine:
                     # Try to extract metadata if we got content
                     if full_text:
                         try:
-                            downloaded = trafilatura.fetch_url(url, timeout=FETCH_TIMEOUT)
+                            downloaded = trafilatura.fetch_url(url)
                             if downloaded:
                                 metadata = trafilatura.extract_metadata(downloaded)
                                 if metadata and metadata.date:
