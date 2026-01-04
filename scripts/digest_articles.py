@@ -43,14 +43,29 @@ class DigestEngine:
         logger.info("[STEP 2] Validating DATABASE_URL...")
         if self.database_url:
             logger.info("[STEP 2a] DATABASE_URL is SET")
+            db_preview = self.database_url[:50] if len(self.database_url) > 50 else self.database_url
+            logger.info(f"[STEP 2b] DATABASE_URL preview: {db_preview}...")
         else:
             logger.error("[STEP 2a] DATABASE_URL is NOT SET")
         
         logger.info("[STEP 3] Validating GROQ_API_KEY...")
         if self.groq_api_key:
             logger.info(f"[STEP 3a] GROQ_API_KEY is SET (length: {len(self.groq_api_key)})")
+            key_preview = self.groq_api_key[:10] if len(self.groq_api_key) > 10 else self.groq_api_key
+            logger.info(f"[STEP 3b] GROQ_API_KEY preview: {key_preview}...")
         else:
-            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET")
+            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET - Checking all env vars...")
+            # Debug: list all environment variables (first 10)
+            all_vars = list(os.environ.keys())
+            logger.error(f"[STEP 3c] Total env vars: {len(all_vars)}")
+            for i, var in enumerate(all_vars[:15]):
+                logger.error(f"[STEP 3d] Env var {i}: {var}")
+            
+            # Specifically check for GROQ variants
+            logger.error("[STEP 3e] Checking for GROQ variants...")
+            for key in os.environ.keys():
+                if 'GROQ' in key.upper():
+                    logger.error(f"[STEP 3f] Found: {key} = {os.environ[key][:20]}...")
         
         if not self.groq_api_key:
             error_msg = """
