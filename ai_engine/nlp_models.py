@@ -19,13 +19,21 @@ class SemanticLinker:
     """
     
     def __init__(self):
-        print("___SL_INIT_START___", flush=True)
+        # Write to both stdout and stderr with explicit flushing
+        import sys
+        
+        msg = ">>>SL_INIT_START<<<"
+        sys.stdout.write(msg + "\n")
+        sys.stderr.write(msg + "\n")
         sys.stdout.flush()
         sys.stderr.flush()
         
         try:
-            print("___SL_ENV_CHECK___", flush=True)
+            msg = ">>>SL_ENV_CHECK<<<"
+            sys.stdout.write(msg + "\n")
+            sys.stderr.write(msg + "\n")
             sys.stdout.flush()
+            sys.stderr.flush()
             
             logger.info("[INFO] Loading Semantic Similarity Model...")
             self.use_api = False
@@ -34,55 +42,86 @@ class SemanticLinker:
             self.hf_client = None  # Lazy initialization
             execution_mode = os.getenv("EXECUTION_MODE", "heuristic")
 
-            print(f"___SL_MODE_{execution_mode}___", flush=True)
+            msg = f">>>SL_MODE_{execution_mode}<<<"
+            sys.stdout.write(msg + "\n")
+            sys.stderr.write(msg + "\n")
             sys.stdout.flush()
+            sys.stderr.flush()
 
             # Cloud mode MUST use API, not local models - NEVER download models in cloud
             if execution_mode == "cloud":
-                print("___SL_CLOUD_MODE___", flush=True)
+                msg = ">>>SL_CLOUD_MODE<<<"
+                sys.stdout.write(msg + "\n")
+                sys.stderr.write(msg + "\n")
                 sys.stdout.flush()
+                sys.stderr.flush()
                 
                 logger.info("[INFO] ☁️  CLOUD MODE: Disabling local model download - using HuggingFace API only")
                 self.use_api = True
                 self.model = None
                 
-                print("___SL_CLOUD_VARS_CHECK___", flush=True)
+                msg = ">>>SL_CLOUD_VARS_CHECK<<<"
+                sys.stdout.write(msg + "\n")
+                sys.stderr.write(msg + "\n")
                 sys.stdout.flush()
+                sys.stderr.flush()
                 
                 # Defer InferenceClient initialization (avoid blocking on network calls)
                 if not self.api_token:
-                    print("___SL_NO_TOKEN___", flush=True)
+                    msg = ">>>SL_NO_TOKEN<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     logger.error("❌ HF_TOKEN is missing from environment variables!")
                 else:
-                    print(f"___SL_TOKEN_OK___len={len(self.api_token)}___", flush=True)
+                    token_len = len(self.api_token)
+                    msg = f">>>SL_TOKEN_OK_len={token_len}<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
                     logger.info("✅ HuggingFace API mode enabled - client will initialize on first use")
             else:
-                print("___SL_LOCAL_MODE___", flush=True)
+                msg = ">>>SL_LOCAL_MODE<<<"
+                sys.stdout.write(msg + "\n")
+                sys.stderr.write(msg + "\n")
                 sys.stdout.flush()
+                sys.stderr.flush()
                 
                 # Local or Heuristic mode: try to load local model (if sentence-transformers is installed)
                 try:
-                    print("___SL_IMPORTING_ST___", flush=True)
+                    msg = ">>>SL_IMPORTING_ST<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     
                     from sentence_transformers import SentenceTransformer
                     logger.info("[INFO] sentence-transformers available - loading local model...")
                     
-                    print("___SL_LOADING_ST_MODEL___", flush=True)
+                    msg = ">>>SL_LOADING_ST_MODEL<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     
                     self.model = SentenceTransformer('all-MiniLM-L6-v2')
                     logger.info("[SUCCESS] Semantic model ready (Local: 384-dim)")
                     
-                    print("___SL_ST_LOADED___", flush=True)
+                    msg = ">>>SL_ST_LOADED<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     
                 except ImportError:
-                    print("___SL_ST_NOTFOUND___", flush=True)
+                    msg = ">>>SL_ST_NOTFOUND<<<"
+                    sys.stdout.write(msg + "\n")
+                    sys.stderr.write(msg + "\n")
                     sys.stdout.flush()
+                    sys.stderr.flush()
                     
                     # Fallback to API using official client library
                     logger.warning("[WARN] Local 'sentence_transformers' not found. Switching to Cloud API Mode.")
@@ -91,24 +130,46 @@ class SemanticLinker:
                     
                     # Debug token availability
                     if not self.api_token:
-                        print("___SL_FALLBACK_NO_TOKEN___", flush=True)
+                        msg = ">>>SL_FALLBACK_NO_TOKEN<<<"
+                        sys.stdout.write(msg + "\n")
+                        sys.stderr.write(msg + "\n")
                         sys.stdout.flush()
+                        sys.stderr.flush()
                         logger.error("❌ HF_TOKEN is missing from environment variables!")
                     else:
-                        print(f"___SL_FALLBACK_TOKEN_OK___len={len(self.api_token)}___", flush=True)
+                        token_len = len(self.api_token)
+                        msg = f">>>SL_FALLBACK_TOKEN_OK_len={token_len}<<<"
+                        sys.stdout.write(msg + "\n")
+                        sys.stderr.write(msg + "\n")
                         sys.stdout.flush()
+                        sys.stderr.flush()
                         logger.info(f"✅ HF_TOKEN found (length: {len(self.api_token)} chars)")
                         logger.info("✅ HuggingFace API mode enabled - client will initialize on first use")
             
-            print("___SL_INIT_DONE___", flush=True)
+            msg = ">>>SL_INIT_DONE<<<"
+            sys.stdout.write(msg + "\n")
+            sys.stderr.write(msg + "\n")
             sys.stdout.flush()
+            sys.stderr.flush()
+            
+            # Force flush logger handlers
+            for handler in logger.handlers:
+                handler.flush()
             
         except Exception as e:
             import traceback
-            print(f"___SL_INIT_ERROR___: {str(e)}", flush=True)
+            msg = f">>>SL_INIT_ERROR: {str(e)}<<<"
+            sys.stdout.write(msg + "\n")
+            sys.stderr.write(msg + "\n")
             sys.stdout.flush()
-            print(traceback.format_exc(), flush=True)
+            sys.stderr.flush()
+            
+            tb = traceback.format_exc()
+            sys.stdout.write(tb + "\n")
+            sys.stderr.write(tb + "\n")
             sys.stdout.flush()
+            sys.stderr.flush()
+            
             raise
 
     def _ensure_hf_client(self):

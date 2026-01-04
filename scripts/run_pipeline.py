@@ -176,46 +176,56 @@ class PipelineOrchestrator:
         logger.info(f"▶️  Running: {script_name}...")
         
         try:
-            # Run script and capture output
-            # CRITICAL: Pass parent process environment variables to subprocess
-            # Without this, env vars set on Render won't be available to child scripts
-            result = subprocess.run(
+            # Use Popen.communicate() instead of subprocess.run(capture_output=True)
+            # to avoid pipe deadlock when subprocess generates large output
+            # communicate() reads stdout/stderr in parallel threads, preventing buffer overflow
+            proc = subprocess.Popen(
                 ["python", script_path],
-                check=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                timeout=3600,  # 1 hour timeout
                 env=os.environ.copy()  # Pass environment variables to subprocess
             )
             
-            # Log only snippets to avoid spamming main log
-            if result.stdout:
-                logger.info(f"✅ Finished: {script_name} (Output len: {len(result.stdout)})")
+            # communicate() safely handles large output without deadlock
+            stdout, stderr = proc.communicate(timeout=3600)  # 1 hour timeout
+            
+            # Log results
+            if stdout:
+                logger.info(f"✅ Finished: {script_name} (Output len: {len(stdout)} chars)")
             else:
                 logger.info(f"✅ Finished: {script_name}")
             
-            # Remove from failed list if it succeeds
+            # Check return code
+            if proc.returncode != 0:
+                # Log error (truncated to prevent spam)
+                if stderr:
+                    error_lines = stderr.split('\n')[:20]  # First 20 lines of error
+                    error_msg = '\n'.join(error_lines)
+                    logger.error(f"❌ Failed: {script_name}\nError: {error_msg}")
+                else:
+                    logger.error(f"❌ Failed: {script_name} (exit code: {proc.returncode})")
+                
+                # Retry logic for transient failures
+                if retry_count < max_retries:
+                    logger.info(f"🔄 Retrying {script_name} (attempt {retry_count + 1}/{max_retries + 1})...")
+                    time.sleep(5)  # Wait 5 seconds before retry
+                    return self.run_script(script_name, retry_count + 1, max_retries)
+                else:
+                    self.failed_scripts.add(script_name)
+                    return False
+            
+            # Success - remove from failed list
             self.failed_scripts.discard(script_name)
             return True
             
         except subprocess.TimeoutExpired:
             logger.error(f"❌ Timeout: {script_name} exceeded 1 hour execution time")
+            proc.kill()  # Kill the process if it times out
             self.failed_scripts.add(script_name)
             return False
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr[:500] if e.stderr else str(e)
-            logger.error(f"❌ Failed: {script_name}\nError: {error_msg}...")
-            
-            # Retry logic for transient failures
-            if retry_count < max_retries:
-                logger.info(f"🔄 Retrying {script_name} (attempt {retry_count + 1}/{max_retries + 1})...")
-                time.sleep(5)  # Wait 5 seconds before retry
-                return self.run_script(script_name, retry_count + 1, max_retries)
-            else:
-                self.failed_scripts.add(script_name)
-                return False
         except Exception as e:
             logger.error(f"❌ Unexpected error running {script_name}: {e}")
             self.failed_scripts.add(script_name)
