@@ -10,38 +10,12 @@ from groq import Groq
 from dotenv import load_dotenv
 
 # Import our existing AI Engine components
-import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from ai_engine.nlp_models import SemanticLinker
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Timeout handler for long-running operations
-class TimeoutError(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutError("Operation timed out")
-
-def with_timeout(seconds, func, *args, **kwargs):
-    """Execute function with timeout - fallback if signal unavailable"""
-    try:
-        # Set signal handler (Unix only)
-        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(seconds)
-        try:
-            result = func(*args, **kwargs)
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
-            return result
-        except TimeoutError:
-            logger.error("[TIMEOUT] Operation exceeded " + str(seconds) + " seconds")
-            raise
-    except (ValueError, AttributeError):
-        # signal not available (Windows), just run it
-        return func(*args, **kwargs)
 
 # Load Environment - try local .env file first, then system env vars are auto-available via os.getenv()
 # CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render
@@ -56,73 +30,60 @@ else:
 # Constants
 MAX_TOKENS = 8000  # Conservative limit for output
 BATCH_SIZE = 10
-FETCH_TIMEOUT = 15  # seconds
 DB_CONNECT_TIMEOUT = 10  # seconds
 
 class DigestEngine:
     def __init__(self):
+        print("[INIT-1]", flush=True)
+        sys.stdout.flush()
+        
         try:
-            logger.info("INIT-1")
-            sys.stdout.flush()
             env_count = len(os.environ)
-            logger.info("INIT-2")
+            print("[INIT-2] env=" + str(env_count), flush=True)
             sys.stdout.flush()
             
-            # Use try-except around each env var read to catch any issues
-            try:
-                logger.info("INIT-3-START")
-                sys.stdout.flush()
-                self.database_url = os.getenv("DATABASE_URL")
-                logger.info("INIT-3-DONE")
-                sys.stdout.flush()
-            except Exception as db_err:
-                logger.error("INIT-3-ERROR")
-                self.database_url = None
+            print("[INIT-3-DB-START]", flush=True)
+            sys.stdout.flush()
+            self.database_url = os.getenv("DATABASE_URL")
+            print("[INIT-3-DB-DONE]", flush=True)
+            sys.stdout.flush()
             
-            try:
-                logger.info("INIT-4-START")
-                sys.stdout.flush()
-                self.groq_api_key = os.getenv("GROQ_API_KEY")
-                logger.info("INIT-4-DONE")
-                sys.stdout.flush()
-            except Exception as gq_err:
-                logger.error("INIT-4-ERROR")
-                self.groq_api_key = None
-            
-            logger.info("INIT-5")
+            print("[INIT-4-GQ-START]", flush=True)
+            sys.stdout.flush()
+            self.groq_api_key = os.getenv("GROQ_API_KEY")
+            print("[INIT-4-GQ-DONE]", flush=True)
             sys.stdout.flush()
             
             if not self.groq_api_key:
-                raise ValueError("GROQ_API_KEY is not set")
-            
-            if not self.database_url:
-                raise ValueError("DATABASE_URL is not set")
-            
-            logger.info("INIT-6")
+                raise ValueError("GROQ_API_KEY missing")
+            print("[INIT-5-GQ-OK]", flush=True)
             sys.stdout.flush()
             
-            try:
-                logger.info("INIT-7-GRQ")
-                self.groq_client = Groq(api_key=self.groq_api_key)
-                logger.info("INIT-7-OK")
-            except Exception as groq_err:
-                logger.error("INIT-7-ERR")
-                raise
+            if not self.database_url:
+                raise ValueError("DATABASE_URL missing")
+            print("[INIT-6-DB-OK]", flush=True)
+            sys.stdout.flush()
             
-            try:
-                logger.info("INIT-8-LNK")
-                self.linker = SemanticLinker()
-                logger.info("INIT-8-OK")
-            except Exception as linker_err:
-                logger.error("INIT-8-ERR")
-                self.linker = None
+            print("[INIT-7-GRQ-INIT]", flush=True)
+            sys.stdout.flush()
+            self.groq_client = Groq(api_key=self.groq_api_key)
+            print("[INIT-8-GRQ-DONE]", flush=True)
+            sys.stdout.flush()
+            
+            print("[INIT-9-LNK-INIT]", flush=True)
+            sys.stdout.flush()
+            self.linker = SemanticLinker()
+            print("[INIT-10-LNK-DONE]", flush=True)
+            sys.stdout.flush()
+            
+            logger.info("[INIT] DigestEngine initialized successfully")
             
         except Exception as e:
             import traceback
-            logger.error("[ERROR] Initialization failed")
-            logger.error("[ERROR] Exception: " + str(type(e).__name__))
-            logger.error("[ERROR] Message: " + str(e))
-            logger.error("[ERROR] Traceback: " + traceback.format_exc())
+            print("[ERROR] " + str(type(e).__name__) + ": " + str(e), flush=True)
+            sys.stdout.flush()
+            print(traceback.format_exc(), flush=True)
+            sys.stdout.flush()
             raise
         
     def fetch_fresh_content(self, url):
@@ -403,7 +364,6 @@ if __name__ == "__main__":
         logger.error("=" * 80)
         
         # Also print to stderr so it appears in container logs
-        import sys
         print(f"\n❌ CRITICAL ERROR:\n{full_error}\n", file=sys.stderr)
         
         # Exit with error code
