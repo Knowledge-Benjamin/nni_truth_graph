@@ -5,7 +5,6 @@ import logging
 import psycopg2
 import trafilatura
 from groq import Groq
-from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 # Import our existing AI Engine components
@@ -29,7 +28,9 @@ else:
 
 # Constants
 MAX_TOKENS = 8000  # Conservative limit for output
-BATCH_SIZE = 5
+BATCH_SIZE = 10
+FETCH_TIMEOUT = 15  # seconds
+DB_CONNECT_TIMEOUT = 10  # seconds
 
 class DigestEngine:
     def __init__(self):
@@ -92,15 +93,20 @@ class DigestEngine:
             self.linker = None
         
     def fetch_fresh_content(self, url):
-        """Fetches fresh HTML and extracts text using Trafilatura (Sync)."""
+        """Fetches fresh HTML and extracts text using Trafilatura with timeout."""
         try:
-            downloaded = trafilatura.fetch_url(url)
+            logger.info(f"   📥 Fetching {url[:50]}...")
+            # trafilatura.fetch_url can hang, use timeout
+            downloaded = trafilatura.fetch_url(url, timeout=FETCH_TIMEOUT)
             if not downloaded:
+                logger.warning(f"   ⚠️  No content downloaded from {url}")
                 return None
             text = trafilatura.extract(downloaded, include_tables=False, include_comments=False)
+            if text:
+                logger.info(f"   ✅ Extracted {len(text)} chars")
             return text
         except Exception as e:
-            logger.warning(f"Trafilatura fetch failed for {url}: {e}")
+            logger.warning(f"   ❌ Trafilatura fetch failed for {url}: {e}")
             return None
 
     def extract_facts_with_llm(self, text):
@@ -139,138 +145,201 @@ class DigestEngine:
                     {"role": "user", "content": prompt}
                 ],
                 model="llama-3.3-70b-versatile",
-                temperature=0.0, # Zero temp for max determinism
+                temperature=0.0,  # Zero temp for max determinism
                 response_format={"type": "json_object"}
             )
             return json.loads(chat_completion.choices[0].message.content)
         except Exception as e:
             logger.error(f"Groq Extraction Failed: {e}")
-            return {"facts": []} # Fallback
+            return {"facts": []}  # Fallback
 
     async def process_batch(self):
-        conn = psycopg2.connect(self.database_url)
-        cur = conn.cursor()
+        """Process batch of articles, extract facts, deduplicate."""
+        conn = None
+        cur = None
         
-        # 1. Get Articles that need digestion
-        # processed_at IS NULL ensures we process queue
-        cur.execute("""
-            SELECT id, url, title FROM articles 
-            WHERE processed_at IS NULL 
-            AND url IS NOT NULL
-            LIMIT 10;
-        """)
-        rows = cur.fetchall()
-        
-        if not rows:
-            logger.info("✅ All articles processed.")
-            return
+        try:
+            logger.info("🔄 Connecting to database...")
+            conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
+            cur = conn.cursor()
+            logger.info("✅ Database connection established")
+            
+            # 1. Get Articles that need digestion
+            logger.info("📋 Fetching unprocessed articles...")
+            cur.execute("""
+                SELECT id, url, title FROM articles 
+                WHERE processed_at IS NULL 
+                AND url IS NOT NULL
+                LIMIT %s;
+            """, (BATCH_SIZE,))
+            rows = cur.fetchall()
+            
+            if not rows:
+                logger.info("✅ All articles processed.")
+                return
 
-        logger.info(f"🧠 Digesting {len(rows)} articles...")
-        
-        loop = asyncio.get_running_loop()
-        
-        for aid, url, title in rows:
-            safe_title = title if title else "Unknown Title"
-            logger.info(f"Processing {aid}: {safe_title[:30]}...")
+            logger.info(f"🧠 Digesting {len(rows)} articles...")
             
-            # A. Fetch Content & Metadata
-            # We prefer Trafilatura (Fresh) over DB raw_text (Stale/Truncated)
-            full_text = None
-            date_found = None
+            loop = asyncio.get_running_loop()
             
-            try:
-                downloaded = trafilatura.fetch_url(url)
-                if downloaded:
-                    full_text = trafilatura.extract(downloaded, include_tables=False, include_comments=False)
-                    metadata = trafilatura.extract_metadata(downloaded)
-                    if metadata and metadata.date:
-                        date_found = metadata.date
-            except Exception as e:
-                logger.warning(f"Fetch/Extract error for {aid}: {e}")
-            
-            # Update Date if found
-            if date_found:
-                 logger.info(f"📅 Updating date for {aid}: {date_found}")
-                 cur.execute("UPDATE articles SET published_date = %s WHERE id = %s", (date_found, aid))
-                 conn.commit()
+            # Process each article
+            for aid, url, title in rows:
+                safe_title = title if title else "Unknown Title"
+                logger.info(f"Processing {aid}: {safe_title[:30]}...")
+                
+                # A. Fetch Content & Metadata
+                full_text = None
+                date_found = None
+                
+                try:
+                    full_text = self.fetch_fresh_content(url)
+                    
+                    # Try to extract metadata if we got content
+                    if full_text:
+                        try:
+                            downloaded = trafilatura.fetch_url(url, timeout=FETCH_TIMEOUT)
+                            if downloaded:
+                                metadata = trafilatura.extract_metadata(downloaded)
+                                if metadata and metadata.date:
+                                    date_found = metadata.date
+                        except Exception as e:
+                            logger.warning(f"   ⚠️  Metadata extraction failed: {e}")
+                
+                except Exception as e:
+                    logger.warning(f"   ❌ Content fetch error for {aid}: {e}")
+                
+                # Update date if found
+                if date_found:
+                    try:
+                        logger.info(f"📅 Updating date for {aid}: {date_found}")
+                        cur.execute("UPDATE articles SET published_date = %s WHERE id = %s", (date_found, aid))
+                        conn.commit()
+                    except Exception as e:
+                        logger.warning(f"   ⚠️  Failed to update date: {e}")
 
-            if not full_text:
-                FULL_TEXT_FROM_DB = False 
-                # ... fall back to DB or skip logic ...
-                # For simplicity in this script, we skip if Trafilatura fails, or add fallback logic
-                logger.warning(f"⏩ Skipping {aid}: No fresh content available.")
-                cur.execute("UPDATE articles SET processed_at = NOW() WHERE id = %s", (aid,))
-                conn.commit()
-                continue
-                
-            # B. Extract Facts (LLM)
-            # Note: Groq call is sync in this SDK version, so run in executor
-            result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
-            
-            facts_list = result_json.get('facts', [])
-            # Fallback if top-level list
-            if isinstance(result_json, list): facts_list = result_json
-            
-            # C. Vectorize & Deduplicate with Vector Search Gate
-            fact_count = 0
-            duplicate_count = 0
-            
-            for fact in facts_list:
-                subj = fact.get('subject')
-                pred = fact.get('predicate')
-                obj = fact.get('object')
-                conf = fact.get('confidence', 0.5)
-                
-                if not (subj and pred and obj): continue
-                
-                statement = f"{subj} {pred} {obj}"
-                embedding = self.linker.get_embedding(statement)
-                
-                # DEDUPLICATION GATE: Check if semantically identical fact exists
-                # Convert embedding to pgvector format
-                if embedding is None:
-                    embedding_str = None
-                else:
-                    embedding_str = '[' + ','.join(map(str, embedding)) + ']'
-                
-                # DEDUPLICATION GATE: Check if semantically identical fact exists
-                existing_fact = None
-                if embedding_str is not None:
-                    cur.execute("""
-                        SELECT id, subject, predicate, object 
-                        FROM extracted_facts 
-                        WHERE embedding <=> %s::vector < 0.05
-                        LIMIT 1
-                    """, (embedding_str,))
-                    existing_fact = cur.fetchone()
-                
-                if existing_fact:
-                    # Duplicate detected - Don't insert, just log
-                    duplicate_count += 1
-                    existing_id, ex_subj, ex_pred, ex_obj = existing_fact
-                    logger.info(f"   🔁 Duplicate: '{statement}' → Existing Fact #{existing_id}")
-                    # Note: We could increment a 'source_count' here if we had that column
+                # Skip if no content
+                if not full_text:
+                    logger.warning(f"⏩ Skipping {aid}: No fresh content available.")
+                    try:
+                        cur.execute("UPDATE articles SET processed_at = NOW() WHERE id = %s", (aid,))
+                        conn.commit()
+                    except Exception as e:
+                        logger.warning(f"   ⚠️  Failed to mark as processed: {e}")
                     continue
                 
-                # New Unique Fact - Insert
-                cur.execute("""
-                    INSERT INTO extracted_facts 
-                    (article_id, subject, predicate, object, confidence, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s::vector)
-                """, (aid, subj, pred, obj, conf, embedding_str))
-                fact_count += 1
+                # B. Extract Facts (LLM)
+                logger.info(f"   🤖 Extracting facts from article {aid}...")
+                try:
+                    result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
+                except Exception as e:
+                    logger.error(f"   ❌ LLM extraction failed for {aid}: {e}")
+                    try:
+                        cur.execute("UPDATE articles SET processed_at = NOW() WHERE id = %s", (aid,))
+                        conn.commit()
+                    except:
+                        pass
+                    continue
                 
-            # D. Mark Done
-            cur.execute("UPDATE articles SET processed_at = NOW() WHERE id = %s", (aid,))
-            conn.commit()
-            
-            if duplicate_count > 0:
-                logger.info(f"✅ Article {aid}: {fact_count} new facts, {duplicate_count} duplicates skipped.")
-            else:
-                logger.info(f"✅ Article {aid}: Extracted {fact_count} facts.")
-            
-        cur.close()
-        conn.close()
+                # Parse facts
+                facts_list = result_json.get('facts', [])
+                if isinstance(result_json, list):
+                    facts_list = result_json
+                
+                # C. Vectorize & Deduplicate
+                fact_count = 0
+                duplicate_count = 0
+                
+                for fact in facts_list:
+                    try:
+                        subj = fact.get('subject', '').strip()
+                        pred = fact.get('predicate', '').strip()
+                        obj = fact.get('object', '').strip()
+                        conf = float(fact.get('confidence', 0.5))
+                        
+                        if not (subj and pred and obj):
+                            continue
+                        
+                        statement = f"{subj} {pred} {obj}"
+                        
+                        # Get embedding for deduplication
+                        embedding = None
+                        embedding_str = None
+                        try:
+                            if self.linker:
+                                embedding = self.linker.get_embedding(statement)
+                                if embedding:
+                                    embedding_str = '[' + ','.join(map(str, embedding)) + ']'
+                        except Exception as e:
+                            logger.warning(f"   ⚠️  Embedding generation failed: {e}")
+                        
+                        # Check for duplicates
+                        existing_fact = None
+                        if embedding_str:
+                            try:
+                                cur.execute("""
+                                    SELECT id, subject, predicate, object 
+                                    FROM extracted_facts 
+                                    WHERE embedding <=> %s::vector < 0.05
+                                    LIMIT 1
+                                """, (embedding_str,))
+                                existing_fact = cur.fetchone()
+                            except Exception as e:
+                                logger.warning(f"   ⚠️  Dedup check failed: {e}")
+                        
+                        if existing_fact:
+                            # Duplicate detected
+                            duplicate_count += 1
+                            existing_id = existing_fact[0]
+                            logger.info(f"   🔁 Duplicate: '{statement}' → Existing Fact #{existing_id}")
+                            continue
+                        
+                        # New Unique Fact - Insert
+                        try:
+                            cur.execute("""
+                                INSERT INTO extracted_facts 
+                                (article_id, subject, predicate, object, confidence, embedding)
+                                VALUES (%s, %s, %s, %s, %s, %s::vector)
+                            """, (aid, subj, pred, obj, conf, embedding_str))
+                            fact_count += 1
+                        except Exception as e:
+                            logger.warning(f"   ⚠️  Failed to insert fact: {e}")
+                    
+                    except Exception as e:
+                        logger.warning(f"   ⚠️  Error processing fact: {e}")
+                        continue
+                
+                # Mark article as processed
+                try:
+                    cur.execute("UPDATE articles SET processed_at = NOW() WHERE id = %s", (aid,))
+                    conn.commit()
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Failed to mark article processed: {e}")
+                
+                # Log results
+                if duplicate_count > 0:
+                    logger.info(f"✅ Article {aid}: {fact_count} new facts, {duplicate_count} duplicates.")
+                else:
+                    logger.info(f"✅ Article {aid}: Extracted {fact_count} facts.")
+        
+        except Exception as e:
+            logger.error(f"❌ Batch processing failed: {e}")
+            import traceback
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            raise
+        
+        finally:
+            # Clean up connections
+            if cur:
+                try:
+                    cur.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close cursor: {e}")
+            if conn:
+                try:
+                    conn.close()
+                    logger.info("✅ Database connection closed")
+                except Exception as e:
+                    logger.warning(f"Failed to close connection: {e}")
 
 if __name__ == "__main__":
     engine = DigestEngine()
