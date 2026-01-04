@@ -9,6 +9,20 @@ import trafilatura
 from groq import Groq
 from dotenv import load_dotenv
 
+# Signal handlers for graceful shutdown in Docker containers
+def signal_handler(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful container shutdown"""
+    msg = "\n[SIGNAL-HANDLER] Received signal - flushing and exiting gracefully\n"
+    sys.stdout.write(msg)
+    sys.stderr.write(msg)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    logging.shutdown()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 print("___SCRIPT_START___", flush=True)
 sys.stdout.flush()
 sys.stderr.flush()
@@ -34,9 +48,19 @@ except Exception as e:
     sys.stdout.flush()
     sys.exit(1)
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure Logging with explicit unbuffered handler
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    force=True
+)
 logger = logging.getLogger(__name__)
+
+# Force immediate flushing for all handlers
+for handler in logging.root.handlers:
+    handler.flush()
+    if hasattr(handler, 'setFormatter'):
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
 # Load Environment - try local .env file first, then system env vars are auto-available via os.getenv()
 # CRITICAL FIX: dotenv.load_dotenv() WITHOUT arguments does NOT load system env vars on Render

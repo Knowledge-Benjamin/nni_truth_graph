@@ -29,9 +29,14 @@ COPY --from=node-builder /app/server/node_modules ./server/node_modules
 # Copy application code
 COPY . .
 
+# Environment variables for optimal container execution
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MALLOC_TRIM_THRESHOLD_=128000
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import sys; sys.exit(0)" || exit 1
 
-# Run startup script
-CMD ["python", "scripts/run_pipeline.py"]
+# Run startup script with unbuffered output (-u flag)
+CMD ["python", "-u", "scripts/run_pipeline.py"]
