@@ -37,8 +37,11 @@ class DigestEngine:
         logger.info("[STEP 1] Reading environment variables...")
         # CRITICAL FIX: Read environment variables at __init__ time (runtime), not module import time
         # This ensures Render's environment is fully initialized
+        logger.info("[STEP 1a] os.environ keys count: {}".format(len(os.environ)))
         self.database_url = os.getenv("DATABASE_URL")
         self.groq_api_key = os.getenv("GROQ_API_KEY")
+        logger.info("[STEP 1b] DATABASE_URL read: {}".format("YES" if self.database_url else "NO"))
+        logger.info("[STEP 1c] GROQ_API_KEY read: {}".format("YES" if self.groq_api_key else "NO"))
         
         logger.info("[STEP 2] Validating DATABASE_URL...")
         if self.database_url:
@@ -51,53 +54,17 @@ class DigestEngine:
         logger.info("[STEP 3] Validating GROQ_API_KEY...")
         if self.groq_api_key:
             logger.info(f"[STEP 3a] GROQ_API_KEY is SET (length: {len(self.groq_api_key)})")
-            key_preview = self.groq_api_key[:10] if len(self.groq_api_key) > 10 else self.groq_api_key
-            logger.info(f"[STEP 3b] GROQ_API_KEY preview: {key_preview}...")
         else:
-            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET - Checking all env vars...")
-            # Debug: list all environment variables (first 10)
-            all_vars = list(os.environ.keys())
-            logger.error(f"[STEP 3c] Total env vars: {len(all_vars)}")
-            for i, var in enumerate(all_vars[:15]):
-                logger.error(f"[STEP 3d] Env var {i}: {var}")
-            
-            # Specifically check for GROQ variants
-            logger.error("[STEP 3e] Checking for GROQ variants...")
-            for key in os.environ.keys():
-                if 'GROQ' in key.upper():
-                    logger.error(f"[STEP 3f] Found: {key} = {os.environ[key][:20]}...")
+            logger.error("[STEP 3a] GROQ_API_KEY is NOT SET")
+            logger.error("[STEP 3b] Environment vars available: {}".format(len(os.environ)))
+            groq_vars = [k for k in os.environ.keys() if 'GROQ' in k.upper()]
+            logger.error("[STEP 3c] GROQ-related vars found: {}".format(groq_vars))
         
         if not self.groq_api_key:
-            error_msg = """
-            ❌ GROQ_API_KEY NOT SET AT RUNTIME
-            
-            Environment variables are read at initialization time.
-            If you see this error on Render, it means the environment variable is not available.
-            
-            To fix this on Render:
-            1. Go to https://render.com/dashboard
-            2. Click on 'truth-graph-ai' service
-            3. Click 'Environment' tab
-            4. Find GROQ_API_KEY - click it and enter your API key from https://console.groq.com
-            5. Redeploy the service
-            
-            To fix locally:
-            - Create ai_engine/.env and add: GROQ_API_KEY=your_key_here
-            """
-            raise ValueError(error_msg)
+            raise ValueError("GROQ_API_KEY not found in environment")
         
         if not self.database_url:
-            error_msg = """
-            ❌ DATABASE_URL NOT SET AT RUNTIME
-            
-            To fix this on Render:
-            1. Go to https://render.com/dashboard
-            2. Click on 'truth-graph-ai' service
-            3. Click 'Environment' tab
-            4. Ensure DATABASE_URL is set with your PostgreSQL connection string
-            5. Redeploy the service
-            """
-            raise ValueError(error_msg)
+            raise ValueError("DATABASE_URL not found in environment")
         
         logger.info("[STEP 4] Initializing Groq client...")
         try:
