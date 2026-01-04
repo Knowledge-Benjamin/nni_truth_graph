@@ -313,7 +313,7 @@ function buildVectorSearchQuery({
     params: {
       embedding,
       similarityThreshold,
-      limit,
+      limit: Math.floor(Number(limit)),
     },
   };
 }
@@ -380,7 +380,7 @@ function buildHybridSearchQuery({
       embedding,
       keywordWeight,
       vectorWeight,
-      limit,
+      limit: Math.floor(Number(limit)),
     },
   };
 }
