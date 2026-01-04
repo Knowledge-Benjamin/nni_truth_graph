@@ -9,9 +9,30 @@ import trafilatura
 from groq import Groq
 from dotenv import load_dotenv
 
-# Import our existing AI Engine components
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from ai_engine.nlp_models import SemanticLinker
+print("___SCRIPT_START___", flush=True)
+sys.stdout.flush()
+sys.stderr.flush()
+
+try:
+    print("___IMPORTING_MODULES___", flush=True)
+    sys.stdout.flush()
+    
+    # Import our existing AI Engine components
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    print("___SYSPATH_UPDATED___", flush=True)
+    sys.stdout.flush()
+    
+    from ai_engine.nlp_models import SemanticLinker
+    print("___SEMANTICLINKER_IMPORTED___", flush=True)
+    sys.stdout.flush()
+    
+except Exception as e:
+    import traceback
+    print("___IMPORT_ERROR___: " + str(e), flush=True)
+    sys.stdout.flush()
+    print(traceback.format_exc(), flush=True)
+    sys.stdout.flush()
+    sys.exit(1)
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -338,14 +359,26 @@ class DigestEngine:
                     logger.warning(f"Failed to close connection: {e}")
 
 if __name__ == "__main__":
+    print("___MAIN_BLOCK_START___", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    
     logger.info("[__MAIN__] Script entry point reached")
     try:
+        print("___ENGINE_INIT_START___", flush=True)
+        sys.stdout.flush()
         logger.info("[__MAIN__] Creating DigestEngine...")
         engine = DigestEngine()
+        print("___ENGINE_INIT_DONE___", flush=True)
+        sys.stdout.flush()
         logger.info("[__MAIN__] ✅ DigestEngine created successfully")
         
+        print("___PROCESS_BATCH_START___", flush=True)
+        sys.stdout.flush()
         logger.info("[__MAIN__] Starting async process_batch...")
         asyncio.run(engine.process_batch())
+        print("___PROCESS_BATCH_DONE___", flush=True)
+        sys.stdout.flush()
         logger.info("[__MAIN__] ✅ process_batch completed")
         
         logger.info("=" * 80)
@@ -364,7 +397,8 @@ if __name__ == "__main__":
         logger.error("=" * 80)
         
         # Also print to stderr so it appears in container logs
-        print(f"\n❌ CRITICAL ERROR:\n{full_error}\n", file=sys.stderr)
+        print(f"\n___CRITICAL_ERROR___\n{full_error}\n", flush=True, file=sys.stderr)
+        sys.stderr.flush()
         
         # Exit with error code
         sys.exit(1)
