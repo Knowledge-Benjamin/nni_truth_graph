@@ -26,7 +26,7 @@ function buildSearchFactsQuery({
 } = {}) {
   const params = {
     fulltextQuery: fulltextQuery || "",
-    limit: Math.floor(limit),  // Ensure limit is a non-negative integer
+    limit: Math.floor(Number(limit)),  // Ensure limit is a non-negative integer
   };
 
   if (useHybrid) {
