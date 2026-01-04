@@ -354,16 +354,15 @@ class DigestEngine:
                     logger.warning(f"Failed to close connection: {e}")
 
 if __name__ == "__main__":
+    logger.info("[__MAIN__] Script entry point reached")
     try:
-        logger.info("=" * 80)
-        logger.info("🚀 Starting digest_articles.py")
-        logger.info("=" * 80)
-        
+        logger.info("[__MAIN__] Creating DigestEngine...")
         engine = DigestEngine()
-        logger.info("✅ DigestEngine initialized successfully")
+        logger.info("[__MAIN__] ✅ DigestEngine created successfully")
         
-        logger.info("🔄 Starting async batch processing...")
+        logger.info("[__MAIN__] Starting async process_batch...")
         asyncio.run(engine.process_batch())
+        logger.info("[__MAIN__] ✅ process_batch completed")
         
         logger.info("=" * 80)
         logger.info("✅ Batch processing completed successfully")
