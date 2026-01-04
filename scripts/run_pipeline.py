@@ -94,7 +94,9 @@ PIPELINE_STAGES = [
 class PipelineOrchestrator:
     def __init__(self):
         self.running = True
-        self.last_run = {stage["name"]: 0 for stage in PIPELINE_STAGES}
+        # Initialize last_run with current time, so stages don't all run immediately on startup
+        current_time = time.time()
+        self.last_run = {stage["name"]: current_time for stage in PIPELINE_STAGES}
         self.failed_scripts = set()  # Track scripts that have failed
 
     def validate_script(self, script_name):
@@ -250,24 +252,45 @@ class PipelineOrchestrator:
         else:
             logger.info("✅ All scripts validated")
         
+        logger.info("🚀 Pipeline Orchestrator ready. Monitoring stages...")
+        
         while self.running:
-            now = time.time()
-            
-            for stage in PIPELINE_STAGES:
-                elapsed = now - self.last_run[stage["name"]]
+            try:
+                now = time.time()
                 
-                # Check if it's time to run this stage
-                if elapsed >= stage["frequency"]:
-                    self.run_stage(stage)
-                    self.last_run[stage["name"]] = now
-            
-            # Sleep to prevent tight loop
-            time.sleep(60)
+                for stage in PIPELINE_STAGES:
+                    # Skip stages with frequency=0 (disabled)
+                    if stage["frequency"] == 0:
+                        continue
+                    
+                    elapsed = now - self.last_run[stage["name"]]
+                    
+                    # Check if it's time to run this stage
+                    if elapsed >= stage["frequency"]:
+                        try:
+                            self.run_stage(stage)
+                            self.last_run[stage["name"]] = now
+                        except Exception as stage_error:
+                            logger.error(f"❌ Stage '{stage['name']}' encountered error: {stage_error}")
+                            # Don't stop the orchestrator, just log and continue
+                
+                # Sleep to prevent tight loop (check every 30 seconds for better responsiveness)
+                time.sleep(30)
+                
+            except KeyboardInterrupt:
+                logger.info("🛑 Pipeline interrupted by user")
+                self.running = False
+                break
+            except Exception as loop_error:
+                logger.error(f"❌ Orchestrator loop error: {loop_error}")
+                # Don't crash, just sleep and retry
+                time.sleep(30)
 
     def stop(self, signum, frame):
         logger.info("🛑 Pipeline Stopping...")
         self.running = False
-        sys.exit(0)
+        # DO NOT call sys.exit() - this crashes the entire FastAPI application!
+        # Just set running=False and let the main loop exit gracefully
 
 if __name__ == "__main__":
     orchestrator = PipelineOrchestrator()
