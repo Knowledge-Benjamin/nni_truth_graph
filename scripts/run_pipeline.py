@@ -4,6 +4,8 @@ import logging
 import os
 import signal
 import sys
+import asyncio
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 
 # Configure Logging
@@ -175,6 +177,51 @@ class PipelineOrchestrator:
         script_path = os.path.join(SCRIPTS_DIR, script_name)
         logger.info(f"▶️  Running: {script_name}...")
         
+        # SPECIAL CASE: Run digest_articles.py in-process instead of subprocess
+        # to avoid Render killing subprocesses after ~5 seconds
+        # This is a documented Render.com limitation where subprocesses are terminated
+        # if they don't produce output frequently enough or exceed resource thresholds
+        if script_name == "digest_articles.py":
+            try:
+                logger.info(f"📦 Running {script_name} in-process (avoiding subprocess timeout)...")
+                # Import and run the digest engine directly
+                import sys
+                import asyncio
+                
+                # Ensure scripts dir is in path
+                if SCRIPTS_DIR not in sys.path:
+                    sys.path.insert(0, SCRIPTS_DIR)
+                
+                # Import the digest engine module
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("digest_articles", script_path)
+                digest_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(digest_module)
+                
+                # Run the engine
+                engine = digest_module.DigestEngine()
+                asyncio.run(engine.process_batch())
+                
+                logger.info(f"✅ Finished: {script_name}")
+                self.failed_scripts.discard(script_name)
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ Failed: {script_name}")
+                logger.error(f"Error: {type(e).__name__}: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                
+                # Retry logic for transient failures
+                if retry_count < max_retries:
+                    logger.info(f"🔄 Retrying {script_name} (attempt {retry_count + 1}/{max_retries + 1})...")
+                    time.sleep(5)  # Wait 5 seconds before retry
+                    return self.run_script(script_name, retry_count + 1, max_retries)
+                else:
+                    self.failed_scripts.add(script_name)
+                    return False
+        
+        # For all other scripts, use subprocess
         try:
             # Use Popen.communicate() instead of subprocess.run(capture_output=True)
             # to avoid pipe deadlock when subprocess generates large output
