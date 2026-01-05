@@ -207,11 +207,15 @@ class DigestEngine:
             
             # 1. Get Articles that need digestion
             logger.info("📋 Fetching unprocessed articles...")
+            print(">>>DB_FETCH_START<<<", flush=True)
             sys.stdout.flush()
             sys.stderr.flush()
             
+            print(">>>DB_QUERY_PREP<<<", flush=True)
+            sys.stdout.flush()
+            
             try:
-                logger.info("  [DB-1] Preparing SQL query...")
+                print(">>>DB_TRY_START<<<", flush=True)
                 sys.stdout.flush()
                 
                 query = """
@@ -220,14 +224,16 @@ class DigestEngine:
                     AND url IS NOT NULL
                     LIMIT %s;
                 """
-                logger.info("  [DB-2] Executing query...")
+                print(">>>DB_QUERY_EXECUTE<<<", flush=True)
                 sys.stdout.flush()
                 
                 cur.execute(query, (BATCH_SIZE,))
-                logger.info("  [DB-3] Query executed, fetching results...")
+                print(">>>DB_QUERY_DONE<<<", flush=True)
                 sys.stdout.flush()
                 
                 rows = cur.fetchall()
+                print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
+                sys.stdout.flush()
                 logger.info(f"  [DB-4] Fetched {len(rows)} articles from database")
                 sys.stdout.flush()
                 
