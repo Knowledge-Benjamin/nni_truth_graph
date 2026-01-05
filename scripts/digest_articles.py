@@ -217,15 +217,26 @@ class DigestEngine:
             logger.info("✅ Database connection established")
             
             # 1. Get Articles that need digestion
-            logger.info("📋 Fetching unprocessed articles...")
+            print(">>>BEFORE_LOGGER_FETCH<<<", flush=True)
             sys.stdout.flush()
             sys.stderr.flush()
+            
+            logger.info("📋 Fetching unprocessed articles...")
+            print(">>>AFTER_LOGGER_FETCH<<<", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            
             print(">>>DB_FETCH_START<<<", flush=True)
             sys.stdout.flush()
             sys.stderr.flush()
             
             import time
+            print(">>>IMPORTING_TIME<<<", flush=True)
+            sys.stdout.flush()
+            
             fetch_start = time.time()
+            print(f">>>FETCH_START_TIME_{fetch_start}<<<", flush=True)
+            sys.stdout.flush()
             
             print(">>>DB_QUERY_PREP<<<", flush=True)
             sys.stdout.flush()
@@ -240,9 +251,11 @@ class DigestEngine:
                     AND url IS NOT NULL
                     LIMIT %s;
                 """
-                print(">>>DB_QUERY_EXECUTE<<<", flush=True)
+                print(">>>DB_QUERY_PREPARE<<<", flush=True)
                 sys.stdout.flush()
                 query_exec_start = time.time()
+                print(">>>DB_QUERY_EXECUTE<<<", flush=True)
+                sys.stdout.flush()
                 
                 # Execute query without artificial timeouts - let it take as long as needed
                 cur.execute(query, (BATCH_SIZE,))
@@ -261,6 +274,8 @@ class DigestEngine:
                 sys.stdout.flush()
                 
                 fetch_total = time.time() - fetch_start
+                print(f">>>FETCH_TOTAL_TIME_{fetch_total:.3f}s<<<", flush=True)
+                sys.stdout.flush()
                 logger.info(f"  [DB-4] Fetched {len(rows)} articles in {fetch_total:.2f}s (exec: {query_exec_time:.3f}s, fetch: {fetchall_time:.3f}s)")
                 sys.stdout.flush()
                 
