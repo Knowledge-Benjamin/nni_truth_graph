@@ -17,9 +17,9 @@ T+0s    logger.info("📋 Fetching articles...")
         └─ Writes to stderr                       ├─ Lock held briefly
                                                   │
         └─ Logging module releases lock ◄────────┘
-        
+
         cur.execute(query)  ← Executes quickly on local DB
-        
+
         Script continues normally...
         └─ Completes with exit(0)
         └─ All buffers flushed
@@ -52,7 +52,7 @@ T+5min  SIGTERM arrives (Render orchestrator timeout)
               │                       │
               └─ Already held by ◄────┘
                   cur.execute()
-              
+
               → No progress
               → Process appears hung
               → Logging doesn't complete
@@ -156,7 +156,7 @@ LOCAL EXECUTION
 T+0.1s   Script starts
          └─ Init logs: "___SCRIPT_START___", etc.
 
-T+1s     Database connects  
+T+1s     Database connects
          └─ "✅ Database connection established"
 
 T+2s     "📋 Fetching unprocessed articles..."
@@ -181,7 +181,7 @@ T+15.1s  All buffers flushed
          Output: COMPLETE ✓
 
 
-RENDER EXECUTION  
+RENDER EXECUTION
 ═════════════════════════════════════════════════════════════════
 
 T+0.1s   Script starts
@@ -284,7 +284,7 @@ logging._lock
   │
   └─ Requested by: logging.shutdown() in signal_handler()
      Status: WAITING - can never acquire
-     
+
      Reason: Same thread, different execution context
              Can't reacquire the same lock
              Even though RLock is reentrant, signal handler
@@ -576,4 +576,3 @@ Result:
 ---
 
 **These diagrams show exactly why the fixes work and why the current code fails.**
-

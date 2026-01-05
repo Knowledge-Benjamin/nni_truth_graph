@@ -9,6 +9,7 @@
 ## 📋 DOCUMENTS IN THIS ANALYSIS
 
 ### 1. **QUICK_FIX_GUIDE.md** ⭐ START HERE
+
 - **Purpose:** Immediate actionable fixes
 - **Time to read:** 5 minutes
 - **Contains:**
@@ -19,6 +20,7 @@
 - **Best for:** Getting a fast fix in place
 
 ### 2. **SILENT_FAILURE_RESEARCH.md** 📚 DETAILED ANALYSIS
+
 - **Purpose:** Comprehensive technical analysis
 - **Time to read:** 20-30 minutes
 - **Contains:**
@@ -32,6 +34,7 @@
 - **Best for:** Understanding the root cause deeply
 
 ### 3. **TECHNICAL_REFERENCE.md** 🔧 CODE EXAMPLES & SOLUTIONS
+
 - **Purpose:** Detailed code examples and working solutions
 - **Time to read:** 15-20 minutes
 - **Contains:**
@@ -49,19 +52,23 @@
 ## 🎯 KEY FINDINGS
 
 ### Root Cause (90% confidence)
+
 **Signal Handler + Logging Module Deadlock**
 
 Your code calls `logging.shutdown()` in a signal handler while the logging module's lock is held by a blocking database call. This causes a deadlock that appears as silent process termination when Render sends SIGKILL.
 
 ### Contributing Factors (70-85% confidence)
+
 1. Executor call (LLM extraction) with no timeout
 2. Database queries with no explicit timeout
 3. Network calls (trafilatura.fetch_url()) without timeout protection
 
 ### Why Output Disappears (95% confidence)
+
 When Render sends SIGKILL (-9), the kernel immediately terminates the process without flushing buffers. Only what was already written to the container log stream (538 chars ≈ 2-3 lines) remains.
 
 ### Why It Works Locally (99% confidence)
+
 - No orchestrator timeouts
 - Fast local database and network
 - Signal handlers don't fire
@@ -73,11 +80,13 @@ When Render sends SIGKILL (-9), the kernel immediately terminates the process wi
 
 **3 Critical Fixes (30 minutes total):**
 
-1. **Remove `logging.shutdown()` from signal handler** 
+1. **Remove `logging.shutdown()` from signal handler**
+
    - File: `scripts/digest_articles.py` line 20
    - Impact: Eliminates deadlock risk
 
 2. **Add timeout to executor calls**
+
    - File: `scripts/digest_articles.py` line 243
    - Impact: Prevents indefinite LLM wait
 
@@ -91,14 +100,14 @@ When Render sends SIGKILL (-9), the kernel immediately terminates the process wi
 
 ## 📊 PROBABILITY ANALYSIS
 
-| Finding | Probability | Impact |
-|---------|-----------|--------|
-| Signal handler deadlock is root cause | 90% | CRITICAL |
-| Executor timeout missing | 75% | HIGH |
-| DB query timeout missing | 72% | HIGH |
-| Render's SIGKILL behavior | 95% | CRITICAL |
-| Trafilatura timeout missing | 60% | MEDIUM |
-| Event loop issues | 40% | LOW |
+| Finding                               | Probability | Impact   |
+| ------------------------------------- | ----------- | -------- |
+| Signal handler deadlock is root cause | 90%         | CRITICAL |
+| Executor timeout missing              | 75%         | HIGH     |
+| DB query timeout missing              | 72%         | HIGH     |
+| Render's SIGKILL behavior             | 95%         | CRITICAL |
+| Trafilatura timeout missing           | 60%         | MEDIUM   |
+| Event loop issues                     | 40%         | LOW      |
 
 **Combined probability of at least one timeout issue:** 99%  
 **Combined probability of signal handler issue:** 90%
@@ -108,54 +117,67 @@ When Render sends SIGKILL (-9), the kernel immediately terminates the process wi
 ## 🔍 EVIDENCE SUMMARY
 
 ### Evidence Point #1: Signal Handler Location
+
 ```python
 # Lines 14-22 register signal handlers at module level
 # This happens during import, before asyncio.run() setup
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 ```
+
 → Signal handlers can fire during async execution
 
 ### Evidence Point #2: Logging in Signal Handler
+
 ```python
 # Line 20: logging.shutdown() is called in signal handler
 logging.shutdown()  # Tries to acquire module-level lock
 ```
+
 → Deadlock risk when signal arrives during logging operation
 
 ### Evidence Point #3: No Executor Timeout
+
 ```python
 # Line 243: no timeout specified
 result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
 ```
+
 → Can wait indefinitely for LLM response
 
 ### Evidence Point #4: No Query Timeout
+
 ```python
 # Line 210: no statement_timeout in connection or query
 cur.execute(query, (BATCH_SIZE,))
 ```
+
 → PostgreSQL query can hang indefinitely
 
 ### Evidence Point #5: Blocking I/O in Async
+
 ```python
 # Line 175: trafilatura.fetch_url() is blocking
 downloaded = trafilatura.fetch_url(url)
 ```
+
 → Network delays block entire event loop
 
 ### Evidence Point #6: Output Loss on SIGKILL
+
 From Render's container behavior:
+
 - 538 chars captured = ~2-3 log lines
 - "📋 Fetching articles..." would be near end
 - Nothing after that point = lost when process killed
-→ Matches exact symptoms
+  → Matches exact symptoms
 
 ---
 
 ## 🎓 LEARNING POINTS
 
 ### Why Signal Handlers + Logging Don't Mix
+
 ```
 Signal Handler Context:
 - Interrupts current execution
@@ -167,6 +189,7 @@ Solution: Use only sys.write() in signal handlers
 ```
 
 ### Why Asyncio Needs Timeouts
+
 ```
 Without timeout:
 - Executor call waits forever
@@ -181,6 +204,7 @@ With timeout:
 ```
 
 ### Why Docker Loses Output
+
 ```
 Process Memory:
 ├─ Running Code
@@ -201,12 +225,14 @@ SIGKILL:
 **After making fixes:**
 
 1. **Local test:**
+
    ```bash
    python scripts/digest_articles.py
    # Should see complete output, no hanging
    ```
 
 2. **Deploy:**
+
    ```bash
    git add scripts/digest_articles.py render.yaml
    git commit -m "fix: signal handler and executor timeouts"
@@ -214,6 +240,7 @@ SIGKILL:
    ```
 
 3. **Monitor:**
+
    ```bash
    render logs --follow
    # Should see script complete or timeout with clear error
@@ -231,17 +258,18 @@ SIGKILL:
 ```
 QUICK_FIX_GUIDE.md
     ↓ (Explains technical reasons for fixes)
-    
-SILENT_FAILURE_RESEARCH.md  
+
+SILENT_FAILURE_RESEARCH.md
     ↓ (Provides code examples for each finding)
-    
+
 TECHNICAL_REFERENCE.md
     ↓ (Full working implementation with extra fixes)
-    
+
 Your fixed code ✓
 ```
 
 **Reading order:**
+
 1. QUICK_FIX_GUIDE (5 min) → Understand what to fix
 2. SILENT_FAILURE_RESEARCH (20 min) → Understand why
 3. TECHNICAL_REFERENCE (15 min) → Implement fixes
@@ -252,6 +280,7 @@ Your fixed code ✓
 ## ⚠️ CRITICAL WARNINGS
 
 **DO NOT:**
+
 - ❌ Call `logging.shutdown()` in signal handlers
 - ❌ Use `await` on executor calls without timeout
 - ❌ Make database queries without statement timeout
@@ -259,6 +288,7 @@ Your fixed code ✓
 - ❌ Ignore "ThreadError" in logs related to logging
 
 **DO:**
+
 - ✅ Use `asyncio.wait_for()` for all executor calls
 - ✅ Add `statement_timeout` to PostgreSQL connection
 - ✅ Wrap network calls with timeout protection
@@ -270,12 +300,14 @@ Your fixed code ✓
 ## 📞 ADDITIONAL RESOURCES
 
 **For understanding the issues:**
+
 - Python logging docs: https://docs.python.org/3/library/logging.html#thread-safety
 - Asyncio documentation: https://docs.python.org/3/library/asyncio.html
 - Docker signal handling: https://docs.docker.com/engine/reference/run/#foreground-and-background
 - Psycopg2 connection timeout: https://www.psycopg.org/psycopg2/docs/module.html
 
 **Render-specific:**
+
 - Render docs: https://render.com/docs
 - Container lifecycle: https://render.com/docs/deploys
 
@@ -301,4 +333,3 @@ Your fixed code ✓
 **Analysis Version:** 1.0 - Complete  
 **Estimated Fix Time:** 30 minutes  
 **Estimated Testing Time:** 10-15 minutes per deploy
-

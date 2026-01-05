@@ -13,9 +13,11 @@ Your signal handler calls `logging.shutdown()` while the logging module's lock i
 ## THREE IMMEDIATE FIXES (30 minutes)
 
 ### Fix #1: Remove logging from signal handler
+
 **File:** `scripts/digest_articles.py` - Lines 14-22
 
 **BEFORE:**
+
 ```python
 def signal_handler(signum, frame):
     msg = "\n[SIGNAL-HANDLER] Received signal - flushing and exiting gracefully\n"
@@ -28,6 +30,7 @@ def signal_handler(signum, frame):
 ```
 
 **AFTER:**
+
 ```python
 def signal_handler(signum, frame):
     msg = "\n[SIGNAL-HANDLER] Received signal - exiting\n"
@@ -42,14 +45,17 @@ def signal_handler(signum, frame):
 ---
 
 ### Fix #2: Add timeout to LLM executor call
+
 **File:** `scripts/digest_articles.py` - Line 243
 
 **BEFORE:**
+
 ```python
 result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
 ```
 
 **AFTER:**
+
 ```python
 try:
     result_json = await asyncio.wait_for(
@@ -65,14 +71,17 @@ except asyncio.TimeoutError:
 ---
 
 ### Fix #3: Add timeout to database connection
+
 **File:** `render.yaml` (or environment settings)
 
 **ADD OR MODIFY DATABASE_URL:**
+
 ```yaml
 DATABASE_URL: "postgresql://user:pass@host/db?options=-c%20statement_timeout%3D60000"
 ```
 
 Or in Python connection code:
+
 ```python
 conn = psycopg2.connect(
     self.database_url,
@@ -88,12 +97,14 @@ conn = psycopg2.connect(
 After making changes:
 
 1. **Test locally:**
+
    ```bash
    python scripts/digest_articles.py
    # Should complete successfully or timeout gracefully
    ```
 
 2. **Deploy to Render:**
+
    ```bash
    git add scripts/digest_articles.py render.yaml
    git commit -m "fix: remove logging from signal handler, add executor timeouts"
@@ -110,21 +121,22 @@ After making changes:
 
 ## WHY THIS FIXES IT
 
-| Issue | Cause | Fix | Result |
-|-------|-------|-----|--------|
-| Silent death | Logging deadlock in signal handler | Remove `logging.shutdown()` | Signal handler no longer hangs |
-| No error output | Process killed before timeout | Add 30s executor timeout | Clear error message before SIGKILL |
-| Partial output | Output buffer lost on SIGKILL | Combined fixes reduce hanging | Less likely to hit SIGKILL |
-| Database hangs | No query timeout | Add `statement_timeout=60000` | Queries fail fast instead of hang |
+| Issue           | Cause                              | Fix                           | Result                             |
+| --------------- | ---------------------------------- | ----------------------------- | ---------------------------------- |
+| Silent death    | Logging deadlock in signal handler | Remove `logging.shutdown()`   | Signal handler no longer hangs     |
+| No error output | Process killed before timeout      | Add 30s executor timeout      | Clear error message before SIGKILL |
+| Partial output  | Output buffer lost on SIGKILL      | Combined fixes reduce hanging | Less likely to hit SIGKILL         |
+| Database hangs  | No query timeout                   | Add `statement_timeout=60000` | Queries fail fast instead of hang  |
 
 ---
 
 ## EXPECTED BEHAVIOR AFTER FIXES
 
 **Success Path:**
+
 ```
 ✅ Script starts
-✅ Database connects  
+✅ Database connects
 ✅ Articles fetched
 ✅ First article processed
 ✅ Facts extracted via LLM
@@ -134,6 +146,7 @@ After making changes:
 ```
 
 **Failure Path (instead of silent death):**
+
 ```
 ✅ Script starts
 ✅ Database connects
@@ -153,17 +166,20 @@ After making changes:
 **Check these in order:**
 
 1. **Verify database credentials** - Wrong password causes hang, not error
+
    ```bash
    render logs | grep "password authentication failed"
    ```
 
 2. **Check network connectivity** - Render to your database
+
    ```bash
    # In Render dashboard: check private network settings
    # Verify DATABASE_URL is correct for Render environment
    ```
 
 3. **Monitor execution time** - If script still slow
+
    ```bash
    render logs | grep "Processing.*seconds"
    # Should see reasonable timing per article
@@ -224,11 +240,13 @@ except asyncio.TimeoutError:
 10. Orchestrator sees "Failed" with only 538 chars of output
 
 **Why it works locally:**
+
 - Local database is instant, no long queries
 - Signal handlers don't fire (no orchestrator timeout)
 - Process completes naturally, all buffers flushed
 
 **Why it fails on Render:**
+
 - Network latency + multi-tenant DB = slow queries
 - Orchestrator enforces timeouts + sends SIGTERM
 - Signal handler + logging deadlock
@@ -241,10 +259,8 @@ except asyncio.TimeoutError:
 1. **`scripts/digest_articles.py`** (Main fix)
    - Remove `logging.shutdown()` from signal handler
    - Add `asyncio.wait_for()` timeout to executor call
-   
 2. **`render.yaml`** (Database timeout)
    - Add `statement_timeout` to DATABASE_URL
-   
 3. **`Dockerfile`** (Already correct)
    - `ENV PYTHONUNBUFFERED=1` ✓
    - `python -u` flag ✓
@@ -266,4 +282,3 @@ except asyncio.TimeoutError:
 **Status: READY FOR DEPLOYMENT**
 
 These three changes directly address the root cause and will prevent silent failure.
-

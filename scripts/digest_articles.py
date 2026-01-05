@@ -200,9 +200,10 @@ class DigestEngine:
         
         try:
             logger.info("🔄 Connecting to database...")
-            conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT,
-                                   options="-c statement_timeout=60000")
+            conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
             cur = conn.cursor()
+            # Set statement timeout via SQL (Neon pooled connections don't support startup options)
+            cur.execute("SET statement_timeout TO 60000")
             logger.info("✅ Database connection established")
             
             # 1. Get Articles that need digestion

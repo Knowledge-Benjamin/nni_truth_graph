@@ -9,9 +9,9 @@
 async def process_batch():
     logger.info("📋 Fetching unprocessed articles...")
     # ↓ This acquires logging._lock (reentrant lock)
-    # ↓ Calls StreamHandler.emit() 
+    # ↓ Calls StreamHandler.emit()
     # ↓ Writes to stderr
-    
+
     cur.execute(query, (BATCH_SIZE,))  # Blocking call!
     # If this hangs, the thread is blocked
     # Logging._lock is STILL HELD by the logging system
@@ -33,7 +33,7 @@ def signal_handler(signum, frame):
 ```
 logging._lock (RLock - Reentrant Lock)
 ├── Logger.handle() calls lock.acquire()
-├── StreamHandler.emit() calls lock.acquire()  
+├── StreamHandler.emit() calls lock.acquire()
 ├── formatter.format() might try to acquire lock
 └── logging.shutdown() tries to acquire lock
     └── For each handler: handler.close() which might try to acquire lock again
@@ -95,7 +95,7 @@ T+0s   Container receives SIGTERM signal
 
 T+grace_period   Process still running
        └─ Render issues SIGKILL (-9) to forcefully kill process
-       
+
 T+gracekill+1s   Process is dead
        └─ Output buffer is gone
        └─ No more output can be captured
@@ -297,7 +297,7 @@ async def fetch_fresh_content_async(self, url):
         )
         if not downloaded:
             return None
-        
+
         # Extract is also blocking, wrap it too
         text = await asyncio.wait_for(
             loop.run_in_executor(
@@ -335,13 +335,13 @@ def signal_handler(signum, frame):
     """Safe signal handler - never uses logging module"""
     sig_name = signal.Signals(signum).name
     msg = f"\n[SIGNAL] Received {sig_name} - shutting down\n"
-    
+
     # Use only sys.write(), NOT logging
     sys.stdout.write(msg)
     sys.stdout.flush()
     sys.stderr.write(msg)
     sys.stderr.flush()
-    
+
     # Don't call logging.shutdown() - it causes deadlock
     # Just exit cleanly
     sys.exit(0)
@@ -398,17 +398,17 @@ from urllib.parse import urlparse, parse_qs
 
 def create_db_connection(database_url: str) -> psycopg2.extensions.connection:
     """Create a database connection with proper timeouts"""
-    
+
     # Parse the URL
     parsed = urlparse(database_url)
-    
+
     # Extract components
     user = parsed.username
     password = parsed.password
     host = parsed.hostname
     port = parsed.port or 5432
     database = parsed.path.lstrip('/')
-    
+
     # Create connection with timeouts
     conn = psycopg2.connect(
         user=user,
@@ -419,7 +419,7 @@ def create_db_connection(database_url: str) -> psycopg2.extensions.connection:
         connect_timeout=10,  # Connection timeout
         options="-c statement_timeout=60000"  # Query timeout: 60 seconds
     )
-    
+
     return conn
 ```
 
@@ -430,44 +430,44 @@ async def process_batch_fixed(self):
     """Fixed version with timeouts and proper error handling"""
     conn = None
     cur = None
-    
+
     try:
         logger.info("🔄 Connecting to database...")
         conn = self.create_db_connection()  # Uses fixed function above
         cur = conn.cursor()
         logger.info("✅ Database connection established")
-        
+
         # 1. Fetch articles with timeout
         logger.info("📋 Fetching unprocessed articles...")
-        
+
         try:
             query = """
-                SELECT id, url, title FROM articles 
-                WHERE processed_at IS NULL 
+                SELECT id, url, title FROM articles
+                WHERE processed_at IS NULL
                 AND url IS NOT NULL
                 LIMIT %s;
             """
-            
+
             cur.execute(query, (BATCH_SIZE,))
             rows = cur.fetchall()
             logger.info(f"  Fetched {len(rows)} articles")
-            
+
         except psycopg2.errors.QueryCanceled:
             logger.error("Database query timeout - fetch took too long")
             return
         except Exception as e:
             logger.error(f"Database fetch failed: {e}")
             raise
-        
+
         if not rows:
             logger.info("✅ All articles processed")
             return
-        
+
         # 2. Process each article with timeouts
         for aid, url, title in rows:
             safe_title = title if title else "Unknown"
             logger.info(f"Processing {aid}: {safe_title[:30]}...")
-            
+
             # Fetch content with timeout
             try:
                 full_text = await asyncio.wait_for(
@@ -480,7 +480,7 @@ async def process_batch_fixed(self):
             except Exception as e:
                 logger.warning(f"Content fetch error: {e}")
                 full_text = None
-            
+
             if not full_text:
                 logger.warning(f"Skipping {aid}: No content")
                 try:
@@ -493,7 +493,7 @@ async def process_batch_fixed(self):
                     logger.warning(f"Failed to mark processed: {e}")
                     conn.rollback()
                 continue
-            
+
             # Extract facts with timeout
             try:
                 result_json = await asyncio.wait_for(
@@ -510,10 +510,10 @@ async def process_batch_fixed(self):
             except Exception as e:
                 logger.error(f"LLM extraction error: {e}")
                 result_json = {"facts": []}
-            
+
             # Process and store facts...
             # (rest of processing code)
-            
+
             # Mark as processed
             try:
                 cur.execute(
@@ -524,7 +524,7 @@ async def process_batch_fixed(self):
             except Exception as e:
                 logger.warning(f"Failed to mark processed: {e}")
                 conn.rollback()
-        
+
     except Exception as e:
         logger.error(f"Batch processing failed: {e}", exc_info=True)
         raise
@@ -546,12 +546,14 @@ async def process_batch_fixed(self):
 ## PART 5: VERIFICATION CHECKLIST
 
 ### Local Testing
+
 - [ ] Run script locally - verify all logs appear
 - [ ] Force SIGTERM locally - verify signal handler works
 - [ ] Simulate slow DB - verify timeouts trigger
 - [ ] Simulate slow LLM - verify executor timeout works
 
 ### Before Deploying to Render
+
 - [ ] Remove `logging.shutdown()` from signal handler
 - [ ] Add `asyncio.wait_for()` with timeout to all executor calls
 - [ ] Add statement timeout to DATABASE_URL or connection
@@ -560,6 +562,7 @@ async def process_batch_fixed(self):
 - [ ] Test graceful shutdown locally
 
 ### After Deploying to Render
+
 - [ ] Check Render logs for "📋 Fetching" message
 - [ ] Verify script completes or times out gracefully
 - [ ] Check for timeout errors in logs
@@ -571,6 +574,7 @@ async def process_batch_fixed(self):
 ## PART 6: DEBUGGING COMMANDS
 
 ### View Render Logs
+
 ```bash
 # Follow real-time logs
 render logs --follow
@@ -583,6 +587,7 @@ render logs --since "5 minutes ago"
 ```
 
 ### Test Locally with Timeouts
+
 ```python
 # Test if fetch_url hangs
 import signal
@@ -601,6 +606,7 @@ except TimeoutError:
 ```
 
 ### Monitor Async Tasks
+
 ```python
 import asyncio
 
@@ -622,17 +628,11 @@ async def debug_tasks():
 ## SUMMARY OF CHANGES NEEDED
 
 **Critical (do immediately):**
+
 1. Remove `logging.shutdown()` from signal handler
 2. Add `asyncio.wait_for(..., timeout=30)` to executor calls
 3. Add `statement_timeout=60000` to database connection
 
-**Important (do soon):**
-4. Wrap trafilatura.fetch_url() with timeout
-5. Add connection timeout to psycopg2.connect()
-6. Test graceful shutdown handling
+**Important (do soon):** 4. Wrap trafilatura.fetch_url() with timeout 5. Add connection timeout to psycopg2.connect() 6. Test graceful shutdown handling
 
-**Optional (improvements):**
-7. Use asyncpg instead of psycopg2 for async DB access
-8. Add explicit timeout handling at event loop level
-9. Implement structured logging with proper async support
-
+**Optional (improvements):** 7. Use asyncpg instead of psycopg2 for async DB access 8. Add explicit timeout handling at event loop level 9. Implement structured logging with proper async support
