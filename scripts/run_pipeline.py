@@ -190,7 +190,8 @@ class PipelineOrchestrator:
             )
             
             # communicate() safely handles large output without deadlock
-            stdout, stderr = proc.communicate(timeout=3600)  # 1 hour timeout
+            # No timeout - let scripts run as long as needed for completion
+            stdout, stderr = proc.communicate()
             
             # Log results
             if stdout:
@@ -222,7 +223,7 @@ class PipelineOrchestrator:
             return True
             
         except subprocess.TimeoutExpired:
-            logger.error(f"❌ Timeout: {script_name} exceeded 1 hour execution time")
+            logger.error(f"❌ Timeout: {script_name} exceeded execution time")
             proc.kill()  # Kill the process if it times out
             self.failed_scripts.add(script_name)
             return False

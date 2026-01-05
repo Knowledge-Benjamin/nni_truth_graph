@@ -30,8 +30,8 @@ BATCH_LIMIT = 50  # Articles to process per run
 AUTO_MODE = True  # Run continuously
 SLEEP_BETWEEN_RUNS = 120  # Sleep 2 min between runs when queue empty
 
-async def scrape_url(context, aid, url, timeout=20000):
-    """Scrape a single URL with timeout handling"""
+async def scrape_url(context, aid, url, timeout=None):
+    """Scrape a single URL - no timeout, let it complete naturally"""
     page = await context.new_page()
     try:
         # Random Delay (Human behavior)
@@ -39,14 +39,11 @@ async def scrape_url(context, aid, url, timeout=20000):
         
         logger.info(f"[VISIT] Article {aid}: {url[:50]}...")
         
-        # Go to page with timeout
+        # Go to page - no timeout, let it load completely
         try:
-            await asyncio.wait_for(
-                page.goto(url, wait_until="domcontentloaded"),
-                timeout=timeout/1000  # Convert to seconds
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"[TIMEOUT] Article {aid} exceeded {timeout}ms")
+            await page.goto(url, wait_until="domcontentloaded")
+        except Exception as e:
+            logger.warning(f"[LOAD_ERROR] Article {aid}: {str(e)[:60]}")
             return (aid, None)
         
         # Get rendered HTML
@@ -107,17 +104,14 @@ async def process_batch():
                 tasks = [scrape_url(context, r[0], r[1]) for r in chunk]
                 
                 try:
-                    results = await asyncio.wait_for(
-                        asyncio.gather(*tasks),
-                        timeout=120  # 2 minute timeout for entire chunk
-                    )
+                    # No timeout - let each chunk complete naturally
+                    results = await asyncio.gather(*tasks)
                     
                     for aid, text in results:
                         if text:
                             updates.append((text, aid))
-                except asyncio.TimeoutError:
-                    logger.warning("[CHUNK_TIMEOUT] Chunk exceeded timeout, moving to next")
-                    continue
+                except Exception as e:
+                    logger.warning(f"[CHUNK_ERROR] Chunk failed: {str(e)[:60]}, moving to next")
                 except Exception as e:
                     logger.error(f"[CHUNK_ERROR] {e}")
                     continue
