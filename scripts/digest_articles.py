@@ -17,7 +17,6 @@ def signal_handler(signum, frame):
     sys.stderr.write(msg)
     sys.stdout.flush()
     sys.stderr.flush()
-    logging.shutdown()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, signal_handler)
@@ -201,7 +200,8 @@ class DigestEngine:
         
         try:
             logger.info("🔄 Connecting to database...")
-            conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
+            conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT,
+                                   options="-c statement_timeout=60000")
             cur = conn.cursor()
             logger.info("✅ Database connection established")
             
@@ -302,7 +302,10 @@ class DigestEngine:
                 # B. Extract Facts (LLM)
                 logger.info(f"   🤖 Extracting facts from article {aid}...")
                 try:
-                    result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
+                    result_json = await asyncio.wait_for(
+                        loop.run_in_executor(None, self.extract_facts_with_llm, full_text),
+                        timeout=60.0
+                    )
                 except Exception as e:
                     logger.error(f"   ❌ LLM extraction failed for {aid}: {e}")
                     try:
