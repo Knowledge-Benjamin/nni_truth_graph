@@ -199,6 +199,10 @@ class DigestEngine:
         cur = None
         
         try:
+            print(">>>PROCESS_BATCH_START<<<", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            
             logger.info("🔄 Connecting to database...")
             conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
             cur = conn.cursor()
@@ -214,6 +218,8 @@ class DigestEngine:
             
             # 1. Get Articles that need digestion
             logger.info("📋 Fetching unprocessed articles...")
+            sys.stdout.flush()
+            sys.stderr.flush()
             print(">>>DB_FETCH_START<<<", flush=True)
             sys.stdout.flush()
             sys.stderr.flush()
@@ -408,9 +414,14 @@ class DigestEngine:
                     logger.info(f"✅ Article {aid}: Extracted {fact_count} facts.")
         
         except Exception as e:
-            logger.error(f"❌ Batch processing failed: {e}")
+            print(f"\n>>>PROCESS_BATCH_ERROR_{type(e).__name__}<<<\n", flush=True, file=sys.stderr)
+            sys.stderr.flush()
             import traceback
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            tb = traceback.format_exc()
+            print(f">>>TRACEBACK_START<<<\n{tb}\n>>>TRACEBACK_END<<<\n", flush=True, file=sys.stderr)
+            sys.stderr.flush()
+            logger.error(f"❌ Batch processing failed: {e}")
+            logger.error(f"Full traceback:\n{tb}")
             raise
         
         finally:
