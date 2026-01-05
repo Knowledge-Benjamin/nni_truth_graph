@@ -224,6 +224,9 @@ class DigestEngine:
             sys.stdout.flush()
             sys.stderr.flush()
             
+            import time
+            fetch_start = time.time()
+            
             print(">>>DB_QUERY_PREP<<<", flush=True)
             sys.stdout.flush()
             
@@ -239,18 +242,26 @@ class DigestEngine:
                 """
                 print(">>>DB_QUERY_EXECUTE<<<", flush=True)
                 sys.stdout.flush()
+                query_exec_start = time.time()
                 
                 # Execute query without artificial timeouts - let it take as long as needed
                 cur.execute(query, (BATCH_SIZE,))
+                query_exec_time = time.time() - query_exec_start
+                print(f">>>DB_QUERY_EXEC_TIME_{query_exec_time:.3f}s<<<", flush=True)
+                sys.stdout.flush()
                 print(">>>DB_QUERY_DONE<<<", flush=True)
                 sys.stdout.flush()
                 
                 print(">>>DB_FETCHALL_START<<<", flush=True)
                 sys.stdout.flush()
+                fetchall_start = time.time()
                 rows = cur.fetchall()
-                print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
+                fetchall_time = time.time() - fetchall_start
+                print(f">>>DB_FETCHALL_DONE_{len(rows)}_{fetchall_time:.3f}s<<<", flush=True)
                 sys.stdout.flush()
-                logger.info(f"  [DB-4] Fetched {len(rows)} articles from database")
+                
+                fetch_total = time.time() - fetch_start
+                logger.info(f"  [DB-4] Fetched {len(rows)} articles in {fetch_total:.2f}s (exec: {query_exec_time:.3f}s, fetch: {fetchall_time:.3f}s)")
                 sys.stdout.flush()
                 
             except Exception as e:
@@ -439,6 +450,8 @@ class DigestEngine:
                     logger.warning(f"Failed to close connection: {e}")
 
 if __name__ == "__main__":
+    import time
+    script_start_time = time.time()
     print("___MAIN_BLOCK_START___", flush=True)
     sys.stdout.flush()
     sys.stderr.flush()
@@ -456,14 +469,19 @@ if __name__ == "__main__":
         print("___PROCESS_BATCH_START___", flush=True)
         sys.stdout.flush()
         logger.info("[__MAIN__] Starting async process_batch...")
+        batch_start = time.time()
         asyncio.run(engine.process_batch())
+        batch_duration = time.time() - batch_start
         print("___PROCESS_BATCH_DONE___", flush=True)
         sys.stdout.flush()
-        logger.info("[__MAIN__] ✅ process_batch completed")
+        logger.info(f"[__MAIN__] ✅ process_batch completed in {batch_duration:.2f}s")
         
         logger.info("=" * 80)
         logger.info("✅ Batch processing completed successfully")
         logger.info("=" * 80)
+        
+        total_duration = time.time() - script_start_time
+        logger.info(f"[TIMING] Total script execution: {total_duration:.2f}s")
         
         # Explicit success exit code
         sys.exit(0)
