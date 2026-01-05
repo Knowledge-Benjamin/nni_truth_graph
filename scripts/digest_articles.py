@@ -203,7 +203,13 @@ class DigestEngine:
             conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
             cur = conn.cursor()
             # Set statement timeout via SQL (Neon pooled connections don't support startup options)
-            cur.execute("SET statement_timeout TO 60000")
+            # Note: Also run this once in Neon console for persistent role-level timeout:
+            # ALTER ROLE neondb_owner SET statement_timeout = '45s';
+            print(">>>SETTING_TIMEOUT<<<", flush=True)
+            sys.stdout.flush()
+            cur.execute("SET statement_timeout TO 45000")
+            print(">>>TIMEOUT_SET<<<", flush=True)
+            sys.stdout.flush()
             logger.info("✅ Database connection established")
             
             # 1. Get Articles that need digestion
@@ -228,10 +234,13 @@ class DigestEngine:
                 print(">>>DB_QUERY_EXECUTE<<<", flush=True)
                 sys.stdout.flush()
                 
+                # Execute with timeout via executor to prevent blocking
                 cur.execute(query, (BATCH_SIZE,))
                 print(">>>DB_QUERY_DONE<<<", flush=True)
                 sys.stdout.flush()
                 
+                print(">>>DB_FETCHALL_START<<<", flush=True)
+                sys.stdout.flush()
                 rows = cur.fetchall()
                 print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
                 sys.stdout.flush()
@@ -239,9 +248,13 @@ class DigestEngine:
                 sys.stdout.flush()
                 
             except Exception as e:
+                print(f">>>DB_FETCH_ERROR_TYPE_{type(e).__name__}<<<", flush=True)
+                sys.stdout.flush()
                 logger.error(f"❌ Database fetch failed: {type(e).__name__}: {e}")
                 import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                tb = traceback.format_exc()
+                logger.error(f"Traceback: {tb}")
+                print(f">>>DB_FETCH_ERROR_TRACE_{tb[:200]}<<<", flush=True)
                 sys.stdout.flush()
                 sys.stderr.flush()
                 raise
