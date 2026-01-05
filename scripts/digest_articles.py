@@ -203,11 +203,11 @@ class DigestEngine:
             conn = psycopg2.connect(self.database_url, connect_timeout=DB_CONNECT_TIMEOUT)
             cur = conn.cursor()
             # Set statement timeout via SQL (Neon pooled connections don't support startup options)
-            # Note: Also run this once in Neon console for persistent role-level timeout:
-            # ALTER ROLE neondb_owner SET statement_timeout = '45s';
+            # Role-level timeout configured in Neon console:
+            # ALTER ROLE neondb_owner SET statement_timeout = '70s';
             print(">>>SETTING_TIMEOUT<<<", flush=True)
             sys.stdout.flush()
-            cur.execute("SET statement_timeout TO 45000")
+            cur.execute("SET statement_timeout TO 70000")
             print(">>>TIMEOUT_SET<<<", flush=True)
             sys.stdout.flush()
             logger.info("✅ Database connection established")
@@ -234,16 +234,25 @@ class DigestEngine:
                 print(">>>DB_QUERY_EXECUTE<<<", flush=True)
                 sys.stdout.flush()
                 
-                # Execute with timeout via executor to prevent blocking
-                cur.execute(query, (BATCH_SIZE,))
-                print(">>>DB_QUERY_DONE<<<", flush=True)
-                sys.stdout.flush()
+                # Execute query with application-level timeout to catch hanging queries
+                async def execute_with_timeout():
+                    try:
+                        cur.execute(query, (BATCH_SIZE,))
+                        print(">>>DB_QUERY_DONE<<<", flush=True)
+                        sys.stdout.flush()
+                        
+                        print(">>>DB_FETCHALL_START<<<", flush=True)
+                        sys.stdout.flush()
+                        rows = cur.fetchall()
+                        print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
+                        sys.stdout.flush()
+                        return rows
+                    except Exception as e:
+                        print(f">>>DB_EXECUTE_ERROR_{type(e).__name__}<<<", flush=True)
+                        sys.stdout.flush()
+                        raise
                 
-                print(">>>DB_FETCHALL_START<<<", flush=True)
-                sys.stdout.flush()
-                rows = cur.fetchall()
-                print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
-                sys.stdout.flush()
+                rows = await asyncio.wait_for(execute_with_timeout(), timeout=75.0)
                 logger.info(f"  [DB-4] Fetched {len(rows)} articles from database")
                 sys.stdout.flush()
                 

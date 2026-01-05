@@ -3,7 +3,7 @@
 **Research Status:** ✅ **COMPLETE**  
 **Date Completed:** January 5, 2026  
 **Documents Created:** 5 comprehensive guides  
-**Total Research:** ~50 pages of analysis and solutions  
+**Total Research:** ~50 pages of analysis and solutions
 
 ---
 
@@ -12,18 +12,21 @@
 ### Core Research Documents
 
 1. **[RESEARCH_INDEX.md](RESEARCH_INDEX.md)** 🗂️
+
    - Navigation guide for all research documents
    - Quick reference tables
    - Reading paths based on your needs
    - Command reference and FAQ
 
 2. **[RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md)** ⭐
+
    - Executive summary of all findings
    - Key findings breakdown
    - Solutions overview
    - Next steps and action items
 
 3. **[NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md)** 📖
+
    - Complete technical analysis
    - Critical findings with proof
    - Supported/unsupported features
@@ -31,6 +34,7 @@
    - All 8 solutions explained
 
 4. **[DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md)** 🔍
+
    - Specific analysis of your code
    - Line-by-line explanation
    - Timeline of what happens
@@ -49,6 +53,7 @@
 ### Root Cause: SET Doesn't Persist on Pooled Connections
 
 **The Problem:**
+
 ```
 Neon uses PgBouncer in transaction mode
   → Connections reset after each transaction
@@ -78,48 +83,56 @@ cur.execute("SELECT ...")                       # ← Has NO timeout
 
 ### Key Findings
 
-| Finding | Impact | Solution |
-|---------|--------|----------|
-| SET doesn't persist on pooled | 🔴 CRITICAL | Use ALTER ROLE or direct connection |
-| statement_timeout ≠ lock wait timeout | 🔴 CRITICAL | Use app-level timeout wrapper |
-| Render timeout < PostgreSQL timeout | 🔴 CRITICAL | Set timeouts < 50 seconds |
-| Lock contention during network calls | 🟠 MODERATE | Move network calls outside transaction |
-| No app-level timeout protection | 🟠 MODERATE | Add asyncio.wait_for() wrapper |
+| Finding                               | Impact      | Solution                               |
+| ------------------------------------- | ----------- | -------------------------------------- |
+| SET doesn't persist on pooled         | 🔴 CRITICAL | Use ALTER ROLE or direct connection    |
+| statement_timeout ≠ lock wait timeout | 🔴 CRITICAL | Use app-level timeout wrapper          |
+| Render timeout < PostgreSQL timeout   | 🔴 CRITICAL | Set timeouts < 50 seconds              |
+| Lock contention during network calls  | 🟠 MODERATE | Move network calls outside transaction |
+| No app-level timeout protection       | 🟠 MODERATE | Add asyncio.wait_for() wrapper         |
 
 ---
 
 ## ✅ SOLUTIONS PROVIDED
 
 ### Quick Fix #1: Remove "-pooler" from Connection String
+
 - **Time:** 2 minutes
 - **Risk:** Medium
 - **See:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-1-remove--pooler-from-connection-string-easiest)
+
 ```python
 database_url = os.getenv("DATABASE_URL").replace("-pooler", "")
 ```
 
 ### Quick Fix #2: Use ALTER ROLE (RECOMMENDED)
+
 - **Time:** 5 minutes (one-time)
 - **Risk:** Low
 - **See:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-2-set-timeout-at-role-level-best)
+
 ```sql
 ALTER ROLE neondb_owner SET statement_timeout = '45s';
 ```
 
 ### Quick Fix #3: Application-Level Timeout Wrapper
+
 - **Time:** 15 minutes
 - **Risk:** Very Low
 - **See:** [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md#option-c-application-level-timeout-wrapper-most-reliable)
+
 ```python
 rows = execute_with_timeout(conn, query, timeout_seconds=50)
 ```
 
 ### Quick Fix #4: Retry Logic with Exponential Backoff
+
 - **Time:** 10 minutes
 - **Risk:** Very Low
 - **See:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-5-retry-logic-for-render-timeouts)
 
 ### Quick Fix #5: Async with Psycopg3
+
 - **Time:** 30 minutes
 - **Risk:** Medium
 - **See:** [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md#option-d-switch-to-psycopg3-with-async-best-long-term)
@@ -142,35 +155,39 @@ rows = execute_with_timeout(conn, query, timeout_seconds=50)
 
 ## 📊 DOCUMENT COMPARISON
 
-| Document | Length | Purpose | Best For |
-|----------|--------|---------|----------|
-| RESEARCH_INDEX.md | 5 min | Navigation | Quick reference |
-| RESEARCH_SUMMARY.md | 5 min | Overview | Quick understanding |
-| NEON_POOLED_TIMEOUT_RESEARCH.md | 20 min | Technical depth | Understanding WHY |
-| DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md | 15 min | Your code | Your specific issue |
-| NEON_POOLED_IMPLEMENTATION.md | 30 min | Working code | Implementing solutions |
+| Document                            | Length | Purpose         | Best For               |
+| ----------------------------------- | ------ | --------------- | ---------------------- |
+| RESEARCH_INDEX.md                   | 5 min  | Navigation      | Quick reference        |
+| RESEARCH_SUMMARY.md                 | 5 min  | Overview        | Quick understanding    |
+| NEON_POOLED_TIMEOUT_RESEARCH.md     | 20 min | Technical depth | Understanding WHY      |
+| DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md | 15 min | Your code       | Your specific issue    |
+| NEON_POOLED_IMPLEMENTATION.md       | 30 min | Working code    | Implementing solutions |
 
 ---
 
 ## 🚀 HOW TO USE THESE DOCUMENTS
 
 ### If You Have 5 Minutes
+
 1. Read [RESEARCH_INDEX.md](RESEARCH_INDEX.md) (this file)
 2. Pick solution from [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-2-set-timeout-at-role-level-best)
 3. Implement Quick Fix #2
 
 ### If You Have 15 Minutes
+
 1. Read [RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md)
 2. Choose solution from [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md)
 3. Implement and test
 
 ### If You Have 30 Minutes
+
 1. Read [RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md) (5 min)
 2. Read [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) (10 min)
 3. Implement from [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) (15 min)
 4. Test
 
 ### If You Have 60+ Minutes
+
 1. Complete deep-dive in [NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md) (20 min)
 2. Review specific code issues in [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) (15 min)
 3. Implement best solution from [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) (25 min)
@@ -183,24 +200,31 @@ rows = execute_with_timeout(conn, query, timeout_seconds=50)
 Your original research request had 7 questions. All have been fully answered:
 
 ✅ **Q1: Why do queries hang without error in pooled connections?**
+
 - Answer in: [NEON_POOLED_TIMEOUT_RESEARCH.md - Finding #1](NEON_POOLED_TIMEOUT_RESEARCH.md#critical-finding-1-set-statements-dont-work-on-pooled-connections)
 
 ✅ **Q2: What's the difference between statement_timeout in pooled vs unpooled?**
+
 - Answer in: [NEON_POOLED_TIMEOUT_RESEARCH.md - Finding #2](NEON_POOLED_TIMEOUT_RESEARCH.md#critical-finding-2-supported-features-in-pgbouncer-transaction-mode)
 
 ✅ **Q3: Best practices for handling hanging database queries?**
+
 - Answer in: [NEON_POOLED_QUICK_FIX.md - Best Practices](NEON_POOLED_QUICK_FIX.md#best-practices-for-neon-pooled-connections)
 
 ✅ **Q4: Do pooled connections handle statement_timeout differently?**
+
 - Answer in: [NEON_POOLED_TIMEOUT_RESEARCH.md - Finding #3](NEON_POOLED_TIMEOUT_RESEARCH.md#critical-finding-3-why-queries-appear-to-hang-without-timeout)
 
 ✅ **Q5: Examples of timeout handling that work with Neon pooled?**
+
 - Answer in: [NEON_POOLED_IMPLEMENTATION.md - Options A-D](NEON_POOLED_IMPLEMENTATION.md)
 
 ✅ **Q6: Known issues with Neon pooler and complex queries?**
+
 - Answer in: [NEON_POOLED_TIMEOUT_RESEARCH.md - Findings](NEON_POOLED_TIMEOUT_RESEARCH.md#the-sequence-of-events-in-your-case)
 
 ✅ **Q7: asyncio + psycopg2 timeout patterns?**
+
 - Answer in: [NEON_POOLED_IMPLEMENTATION.md - Option D](NEON_POOLED_IMPLEMENTATION.md#option-d-async-with-proper-timeout-most-reliable) and [NEON_POOLED_QUICK_FIX.md - Quick Fix #4](NEON_POOLED_QUICK_FIX.md#quick-fix-4-async-with-proper-timeout-best-for-render)
 
 ---
@@ -235,16 +259,19 @@ All findings are based on:
 ## 🎯 IMMEDIATE ACTION ITEMS
 
 **TODAY:**
+
 - [ ] Choose one quick fix from [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md)
 - [ ] Implement it (5-15 minutes)
 - [ ] Test it (5 minutes)
 
 **THIS WEEK:**
+
 - [ ] Read [NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md) for understanding
 - [ ] Implement solution #2 or #3 for robustness
 - [ ] Add monitoring queries from [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md)
 
 **THIS MONTH:**
+
 - [ ] Consider migrating to psycopg3 for better async support
 - [ ] Implement comprehensive retry logic
 - [ ] Set up monitoring dashboard for slow queries
@@ -254,24 +281,28 @@ All findings are based on:
 ## 📞 QUICK REFERENCE
 
 ### Finding Role Name
+
 ```sql
 SELECT current_user;
 ```
 
 ### Setting Role Timeout
+
 ```sql
 ALTER ROLE role_name SET statement_timeout = '45s';
 ```
 
 ### Monitoring Slow Queries
+
 ```sql
-SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start)) 
-FROM pg_stat_activity 
+SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start))
+FROM pg_stat_activity
 WHERE state != 'idle'
 ORDER BY query_start DESC;
 ```
 
 ### Testing Timeout
+
 ```python
 cur.execute("SET statement_timeout TO 5000")
 cur.execute("SELECT pg_sleep(120)")  # Should timeout
@@ -281,39 +312,45 @@ cur.execute("SELECT pg_sleep(120)")  # Should timeout
 
 ## 📈 RESEARCH STATISTICS
 
-| Metric | Value |
-|--------|-------|
-| Documents created | 5 |
-| Total lines written | ~3,500 |
-| Code examples provided | 15+ |
-| Solutions documented | 5 |
-| Root causes identified | 5 |
-| Best practices listed | 20 |
-| Diagnostic queries provided | 10 |
-| Implementation time (fastest) | 2 minutes |
-| Implementation time (best) | 15 minutes |
-| Understanding time | 20 minutes |
+| Metric                        | Value      |
+| ----------------------------- | ---------- |
+| Documents created             | 5          |
+| Total lines written           | ~3,500     |
+| Code examples provided        | 15+        |
+| Solutions documented          | 5          |
+| Root causes identified        | 5          |
+| Best practices listed         | 20         |
+| Diagnostic queries provided   | 10         |
+| Implementation time (fastest) | 2 minutes  |
+| Implementation time (best)    | 15 minutes |
+| Understanding time            | 20 minutes |
 
 ---
 
 ## ✨ RECOMMENDATIONS
 
 ### IMMEDIATE FIX (Do This Now)
+
 Use **Quick Fix #2**: Set timeout at role level with `ALTER ROLE`
+
 - 5 minutes to implement
 - Works with pooled connections
 - No code changes needed
 - Most reliable quick fix
 
 ### SHORT-TERM FIX (Do This Soon)
+
 Add **Option C** timeout wrapper around database calls
+
 - 15 minutes to implement
 - Provides application-level safety net
 - Works with any connection type
 - Improves error reporting
 
 ### LONG-TERM SOLUTION (Plan This)
+
 Migrate to **Option D** (Psycopg3 with async)
+
 - 30 minutes to implement
 - Best architecture
 - Proper timeout handling
@@ -333,6 +370,7 @@ Current workspace contains these research documents:
 6. ✅ [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) - Full code implementations
 
 **Plus related existing research:**
+
 - [SILENT_FAILURE_RESEARCH.md](SILENT_FAILURE_RESEARCH.md) - Signal handler deadlock analysis
 - [SUBPROCESS_TECHNICAL_REFERENCE.md](SUBPROCESS_TECHNICAL_REFERENCE.md) - Process handling
 - [QUICK_FIX_GUIDE.md](QUICK_FIX_GUIDE.md) - General quick fixes
@@ -357,6 +395,7 @@ Current workspace contains these research documents:
 ## ✅ RESEARCH COMPLETE
 
 All 7 research questions have been thoroughly answered with:
+
 - ✅ Root cause analysis
 - ✅ Technical explanations
 - ✅ Real code examples
@@ -374,4 +413,3 @@ You have everything you need to fix your hanging query issue.
 
 **Last Updated:** January 5, 2026  
 **Status:** ✅ Complete and ready for implementation
-

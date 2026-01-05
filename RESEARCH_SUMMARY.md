@@ -21,6 +21,7 @@ You reported that SELECT queries hang silently in Neon pooled connections after 
 **Source:** Neon Official Documentation - [Connection Pooling Guide](https://neon.com/docs/connect/connection-pooling)
 
 **The Issue:**
+
 ```
 Neon uses PgBouncer in TRANSACTION MODE (pool_mode=transaction)
 └─ Connections are allocated PER TRANSACTION
@@ -31,6 +32,7 @@ Neon uses PgBouncer in TRANSACTION MODE (pool_mode=transaction)
 ```
 
 **Your Code:**
+
 ```python
 cur.execute("SET statement_timeout TO 60000")  # ← Only lasts for THIS transaction
 cur.execute("SELECT ...")                       # ← Next query has NO timeout!
@@ -45,6 +47,7 @@ cur.execute("SELECT ...")                       # ← Next query has NO timeout!
 **The Symptom:** Query "hangs" for 1 second, then process dies
 
 **What's Actually Happening:**
+
 1. SELECT query is sent to PostgreSQL
 2. Query waits for a lock on the `articles` table
 3. `statement_timeout` covers QUERY EXECUTION, not LOCK ACQUISITION
@@ -54,6 +57,7 @@ cur.execute("SELECT ...")                       # ← Next query has NO timeout!
 7. Process gets SIGKILL, no error logged
 
 **Why Lock Contention?**
+
 - Your code holds database transaction open during network calls
 - While waiting for URLs to download and LLM to respond, connection is idle but transaction is active
 - Other processes can't get locks on `articles` table
@@ -64,6 +68,7 @@ cur.execute("SELECT ...")                       # ← Next query has NO timeout!
 ### Finding #3: statement_timeout Behavior in Pooled vs Direct ✅
 
 **Pooled Connection (❌ Doesn't Work):**
+
 ```
 SET statement_timeout TO 60000
 │
@@ -74,6 +79,7 @@ SET statement_timeout TO 60000
 ```
 
 **Direct Connection (✅ Works):**
+
 ```
 SET statement_timeout TO 60000
 │
@@ -84,6 +90,7 @@ SET statement_timeout TO 60000
 ```
 
 **Role-Level Setting (✅ Best):**
+
 ```
 ALTER ROLE your_role SET statement_timeout = '60s'
 │
@@ -98,6 +105,7 @@ ALTER ROLE your_role SET statement_timeout = '60s'
 ### Finding #4: Render Container Timeout Compounds the Issue ✅
 
 **Render's Behavior:**
+
 ```
 T=0s    Process starts
 T=55s   Render sends SIGTERM (graceful shutdown)
@@ -105,6 +113,7 @@ T=60s   Render sends SIGKILL (force kill)
 ```
 
 **Your Problem:**
+
 ```
 T=0s    digest_articles starts
 T=0.1s  Connection established
@@ -115,6 +124,7 @@ T=1.0s  Render kills process (no error message)
 ```
 
 **Why No Error Message?**
+
 - Process is killed with SIGKILL (signal 9)
 - stdout/stderr buffers not flushed
 - Exception handler never runs
@@ -125,6 +135,7 @@ T=1.0s  Render kills process (no error message)
 ### Finding #5: Best Practices Not Followed ✅
 
 **What You're Doing Wrong:**
+
 1. ❌ Using `SET statement_timeout` on pooled connections
 2. ❌ Assuming timeout works across transactions
 3. ❌ Holding database transaction open during network calls
@@ -133,6 +144,7 @@ T=1.0s  Render kills process (no error message)
 6. ❌ Calling `logging.shutdown()` in signal handler (deadlock risk)
 
 **What You Should Do:**
+
 1. ✅ Use `ALTER ROLE SET statement_timeout` or direct connection
 2. ✅ Implement application-level timeout wrapper
 3. ✅ Keep database transactions short
@@ -145,6 +157,7 @@ T=1.0s  Render kills process (no error message)
 ## SUPPORTED vs UNSUPPORTED IN NEON POOLED MODE
 
 ### ❌ EXPLICITLY NOT SUPPORTED:
+
 - SET / RESET statements
 - LISTEN / NOTIFY
 - WITH HOLD CURSOR
@@ -154,6 +167,7 @@ T=1.0s  Render kills process (no error message)
 - LOAD statement
 
 ### ✅ FULLY SUPPORTED:
+
 - SELECT, INSERT, UPDATE, DELETE
 - Protocol-level prepared statements (psycopg2 parameterized queries)
 - Short transactions
@@ -204,31 +218,34 @@ T=1.0s  Render kills process (no error message)
 
 ## COMPARISON: Root Causes
 
-| Layer | Issue | Symptom | Solution |
-|-------|-------|---------|----------|
-| **PgBouncer** | SET statement_timeout resets per transaction | Timeout never applied | Use direct connection or ALTER ROLE |
-| **PostgreSQL** | Query waits for lock (not executing) | statement_timeout doesn't fire | Shorten transactions, use app-level timeout |
-| **Render** | Process timeout ~1 second | SIGKILL with no error | Set timeouts <50 seconds |
-| **psycopg2** | No built-in timeout on execute() | Exception never raised | Use asyncio.wait_for() wrapper |
-| **Your Code** | Holds transaction open during network calls | Lock contention increases | Move network calls outside transaction |
+| Layer          | Issue                                        | Symptom                        | Solution                                    |
+| -------------- | -------------------------------------------- | ------------------------------ | ------------------------------------------- |
+| **PgBouncer**  | SET statement_timeout resets per transaction | Timeout never applied          | Use direct connection or ALTER ROLE         |
+| **PostgreSQL** | Query waits for lock (not executing)         | statement_timeout doesn't fire | Shorten transactions, use app-level timeout |
+| **Render**     | Process timeout ~1 second                    | SIGKILL with no error          | Set timeouts <50 seconds                    |
+| **psycopg2**   | No built-in timeout on execute()             | Exception never raised         | Use asyncio.wait_for() wrapper              |
+| **Your Code**  | Holds transaction open during network calls  | Lock contention increases      | Move network calls outside transaction      |
 
 ---
 
 ## SOLUTIONS PROVIDED
 
 ### Solution 1: Remove "-pooler" from Connection String
+
 - **File:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) - Quick Fix #1
 - **Time:** 2 minutes
 - **Pros:** Immediate fix
 - **Cons:** Uses limited direct connections
 
 ### Solution 2: Use ALTER ROLE Set statement_timeout
+
 - **File:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) - Quick Fix #2
 - **Time:** 5 minutes (one-time)
 - **Pros:** Works with pooled connections permanently
 - **Cons:** Requires SQL setup
 
 ### Solution 3: Application-Level Timeout Wrapper
+
 - **File:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) - Quick Fix #3 & #5
 - **File:** [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) - Option C
 - **Time:** 15 minutes
@@ -236,12 +253,14 @@ T=1.0s  Render kills process (no error message)
 - **Cons:** Code changes required
 
 ### Solution 4: Async with Psycopg3
+
 - **File:** [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) - Option D
 - **Time:** 30 minutes
 - **Pros:** Best architecture, proper async support
 - **Cons:** Library upgrade required
 
 ### Solution 5: Retry Logic with Exponential Backoff
+
 - **File:** [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) - Quick Fix #5
 - **Time:** 10 minutes
 - **Pros:** Handles Render orchestrator timeouts gracefully
@@ -254,6 +273,7 @@ T=1.0s  Render kills process (no error message)
 I've created 4 comprehensive research documents:
 
 ### 1. **NEON_POOLED_TIMEOUT_RESEARCH.md** (Main Research)
+
 - Complete root cause analysis
 - Why queries hang without timing out
 - Pooled vs direct connection behavior
@@ -261,6 +281,7 @@ I've created 4 comprehensive research documents:
 - References and best practices
 
 ### 2. **NEON_POOLED_QUICK_FIX.md** (Quick Solutions)
+
 - 6 quick fixes you can implement immediately
 - Decision tree for choosing the right solution
 - Key numbers for Render timing
@@ -268,6 +289,7 @@ I've created 4 comprehensive research documents:
 - Diagnostic queries
 
 ### 3. **DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md** (Your Code Analysis)
+
 - Specific analysis of digest_articles.py
 - Where exactly your code hangs
 - Why the logs stop at certain points
@@ -275,6 +297,7 @@ I've created 4 comprehensive research documents:
 - Detailed explanation of the problem
 
 ### 4. **NEON_POOLED_IMPLEMENTATION.md** (Implementation Guide)
+
 - 5 implementation options with full code
 - Copy-paste ready examples
 - Step-by-step instructions
@@ -288,31 +311,36 @@ I've created 4 comprehensive research documents:
 ### Priority 1: Stop the Hanging (Choose One)
 
 **Option A: Fastest Fix (2 min)**
+
 ```python
 # In digest_articles.py __init__():
 self.database_url = os.getenv("DATABASE_URL").replace("-pooler", "")
 ```
 
 **Option B: Best Quick Fix (5 min)**
+
 ```sql
 -- Run once in Neon SQL Editor:
 ALTER ROLE neondb_owner SET statement_timeout = '45s';
 ```
 
 **Option C: Most Reliable (15 min)**
+
 - Copy implementation from [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) - Option C
 - Wrap your database calls in `execute_with_timeout()`
 
 ### Priority 2: Add Monitoring
+
 ```python
 # Diagnostic query to see what's happening:
-SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start)) 
-FROM pg_stat_activity 
+SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start))
+FROM pg_stat_activity
 WHERE state != 'idle'
 ORDER BY query_start;
 ```
 
 ### Priority 3: Optimize for Render
+
 - Set all timeouts < 50 seconds (leave 10s margin)
 - Implement retry logic with backoff
 - Keep database transactions short
@@ -324,11 +352,13 @@ ORDER BY query_start;
 **Problem:** Lines 220-245 execute a SELECT query with `SET statement_timeout`, but the timeout doesn't work on pooled connections.
 
 **Quick Fixes:**
+
 1. Remove `-pooler` from DATABASE_URL
 2. Use `ALTER ROLE` to set persistent timeout
 3. Wrap database calls in timeout function
 
 **Root Causes in Your Code:**
+
 1. Using pooled connection with SET statement
 2. Holding transaction open during network calls
 3. No application-level timeout protection
@@ -341,6 +371,7 @@ ORDER BY query_start;
 ## KEY TAKEAWAYS
 
 ### ❌ Don't Do This (On Pooled Connections)
+
 ```python
 cur.execute("SET statement_timeout TO 60000")  # Doesn't persist!
 cur.execute("SELECT ...")  # Query has NO timeout
@@ -349,16 +380,19 @@ cur.execute("SELECT ...")  # Query has NO timeout
 ### ✅ Do This Instead
 
 **Option 1 - Direct Connection:**
+
 ```python
 database_url = os.getenv("DATABASE_URL").replace("-pooler", "")
 ```
 
 **Option 2 - Role-Level Timeout:**
+
 ```sql
 ALTER ROLE your_role SET statement_timeout = '45s';
 ```
 
 **Option 3 - Application-Level Protection:**
+
 ```python
 rows = execute_with_timeout(conn, query, timeout_seconds=50)
 ```
@@ -404,17 +438,20 @@ except Exception as e:
 ## Questions Answered
 
 ✅ **Why the query might hang without timing out**
+
 - SET statement_timeout doesn't persist on pooled connections
 - Lock contention blocks query execution
 - statement_timeout covers execution, not lock wait time
 
 ✅ **Whether pooled connections handle statement_timeout differently**
+
 - YES - drastically different
 - Pooled: SET only lasts one transaction
 - Direct: SET lasts entire session
 - Role-level: SET persists forever
 
 ✅ **Workarounds or alternative approaches**
+
 - Use direct connection for admin tasks
 - Set timeout at role level with ALTER ROLE
 - Implement application-level timeout wrapper
@@ -422,6 +459,7 @@ except Exception as e:
 - Implement retry logic with exponential backoff
 
 ✅ **Best practices for ensuring query execution completes or fails with clear errors**
+
 - Always set timeouts < 50s for Render
 - Use application-level timeout wrappers
 - Keep database transactions short
@@ -441,4 +479,3 @@ Your queries hang because **SET statement_timeout doesn't work on Neon's pooled 
 **Best fix:** Implement application-level timeout wrapper for robust error handling.
 
 All solutions, code examples, and implementation guides are provided in the accompanying documents.
-

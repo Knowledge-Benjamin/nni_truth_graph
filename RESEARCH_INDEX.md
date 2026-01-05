@@ -8,20 +8,24 @@
 ## Quick Navigation
 
 ### 🚀 Start Here (5 minutes)
+
 → [RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md) - Overview of findings and solutions
 
 ### 🔧 Need to Fix It Now? (Choose Your Path)
+
 1. **Fastest Fix (2 min)** → [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-1-remove--pooler-from-connection-string-easiest)
 2. **Best Quick Fix (5 min)** → [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#quick-fix-2-set-timeout-at-role-level-best)
 3. **Most Reliable (15 min)** → [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md#option-c-application-level-timeout-wrapper-most-reliable)
 4. **Best Architecture (30 min)** → [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md#option-d-switch-to-psycopg3-with-async-best-long-term)
 
 ### 📚 Understanding the Problem
+
 - **General Analysis** → [NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md)
 - **Your Code Specific** → [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md)
 - **Best Practices** → [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md#best-practices-for-neon-pooled-connections)
 
 ### 💻 Implementation Code
+
 - **Quick Fixes** → [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) (Copy-paste ready)
 - **Detailed Options** → [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) (Full working code)
 
@@ -30,9 +34,11 @@
 ## Document Descriptions
 
 ### 1. RESEARCH_SUMMARY.md ⭐ START HERE
+
 **Length:** 5 min read  
 **Purpose:** Executive summary of all findings  
 **Contains:**
+
 - Key findings (5 major discoveries)
 - Root cause explanation
 - All 5 solutions overview
@@ -45,9 +51,11 @@
 ---
 
 ### 2. NEON_POOLED_TIMEOUT_RESEARCH.md 📖 DEEP DIVE
+
 **Length:** 20 min read  
 **Purpose:** Comprehensive technical analysis  
 **Contains:**
+
 - Executive summary
 - Critical findings (3 major issues)
 - Supported vs unsupported features
@@ -62,9 +70,11 @@
 ---
 
 ### 3. DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md 🔍 YOUR CODE
+
 **Length:** 15 min read  
 **Purpose:** Specific analysis of your digest_articles.py  
 **Contains:**
+
 - Problem in your code (exact lines)
 - Connection string analysis
 - Timeline of what happens
@@ -79,9 +89,11 @@
 ---
 
 ### 4. NEON_POOLED_QUICK_FIX.md ⚡ QUICK SOLUTIONS
+
 **Length:** 10 min read  
 **Purpose:** 6 quick fixes you can implement immediately  
 **Contains:**
+
 - TL;DR of the problem
 - Quick Fix #1: Remove -pooler (2 min)
 - Quick Fix #2: ALTER ROLE (5 min)
@@ -99,9 +111,11 @@
 ---
 
 ### 5. NEON_POOLED_IMPLEMENTATION.md 🛠️ IMPLEMENTATION
+
 **Length:** 30 min read + 30 min implementation  
 **Purpose:** Full working code for all 5 solutions  
 **Contains:**
+
 - Option A: Remove -pooler (with full example)
 - Option B: ALTER ROLE (with setup steps)
 - Option C: Timeout wrapper (with complete module)
@@ -146,11 +160,13 @@ Why:
 **Choose ONE:**
 
 1. **Remove `-pooler` from connection string** (2 min)
+
    ```python
    database_url = os.getenv("DATABASE_URL").replace("-pooler", "")
    ```
 
 2. **Set timeout at role level** (5 min, one-time setup)
+
    ```sql
    ALTER ROLE your_role SET statement_timeout = '45s';
    ```
@@ -167,26 +183,31 @@ Why:
 ## Key Findings
 
 ### Finding #1: SET Doesn't Persist on Pooled Connections
+
 - **Impact:** 🔴 CRITICAL
 - **Why:** PgBouncer resets connections after each transaction
 - **Solution:** Use ALTER ROLE or direct connection
 
 ### Finding #2: statement_timeout Covers Execution, Not Locks
+
 - **Impact:** 🔴 CRITICAL
 - **Why:** Query waits for lock, not executing code
 - **Solution:** Move network calls outside transaction, implement app-level timeout
 
 ### Finding #3: Render Timeout Fires Before PostgreSQL Timeout
+
 - **Impact:** 🔴 CRITICAL
 - **Why:** Process killed after ~1 second, no time for 60s timeout
 - **Solution:** Set all timeouts < 50 seconds
 
 ### Finding #4: Signal Handler Deadlock Risk
+
 - **Impact:** 🟠 MODERATE
 - **Why:** Calling logging.shutdown() in signal handler with asyncio
 - **Solution:** Don't call logging.shutdown() in signal handlers
 
 ### Finding #5: Missing Application-Level Timeout
+
 - **Impact:** 🟠 MODERATE
 - **Why:** No wrapper around database calls
 - **Solution:** Use asyncio.wait_for() or timeout wrapper
@@ -196,6 +217,7 @@ Why:
 ## Reading Paths Based on Your Need
 
 ### "I Just Need to Fix It"
+
 1. Read [NEON_POOLED_QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md)
 2. Pick solution (A, B, or C)
 3. Copy code from [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md)
@@ -207,6 +229,7 @@ Why:
 ---
 
 ### "I Need to Understand What's Happening"
+
 1. Read [RESEARCH_SUMMARY.md](RESEARCH_SUMMARY.md) (5 min)
 2. Read [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) (10 min)
 3. Skim [NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md) (15 min)
@@ -217,6 +240,7 @@ Why:
 ---
 
 ### "I Need Complete Technical Analysis"
+
 1. Read [NEON_POOLED_TIMEOUT_RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md) (20 min)
 2. Read [DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) (15 min)
 3. Read [NEON_POOLED_IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) (20 min)
@@ -228,14 +252,14 @@ Why:
 
 ## Quick Reference: Which Fix for Which Situation
 
-| Situation | Best Solution | Document |
-|-----------|--|---|
-| Production is down, need hotfix NOW | Quick Fix #1 or #2 | [QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) |
-| Small script, low traffic | Quick Fix #2 (ALTER ROLE) | [QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md) |
+| Situation                               | Best Solution              | Document                                           |
+| --------------------------------------- | -------------------------- | -------------------------------------------------- |
+| Production is down, need hotfix NOW     | Quick Fix #1 or #2         | [QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md)           |
+| Small script, low traffic               | Quick Fix #2 (ALTER ROLE)  | [QUICK_FIX.md](NEON_POOLED_QUICK_FIX.md)           |
 | Critical application, needs reliability | Option C (Timeout wrapper) | [IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) |
-| Want best architecture | Option D (Psycopg3 async) | [IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) |
-| Need to understand before fixing | Research guide | [RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md) |
-| Want to diagnose the issue | Analysis | [ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) |
+| Want best architecture                  | Option D (Psycopg3 async)  | [IMPLEMENTATION.md](NEON_POOLED_IMPLEMENTATION.md) |
+| Need to understand before fixing        | Research guide             | [RESEARCH.md](NEON_POOLED_TIMEOUT_RESEARCH.md)     |
+| Want to diagnose the issue              | Analysis                   | [ANALYSIS.md](DIGEST_ARTICLES_TIMEOUT_ANALYSIS.md) |
 
 ---
 
@@ -269,6 +293,7 @@ RESEARCH_SUMMARY.md (YOU ARE HERE)
 ## Command Reference
 
 ### Check Your Connection Type
+
 ```python
 # Is your connection pooled?
 database_url = os.getenv("DATABASE_URL")
@@ -277,25 +302,29 @@ print(f"Pooled: {is_pooled}")
 ```
 
 ### Find Your Role Name
+
 ```sql
 SELECT current_user;  -- Shows something like: neondb_owner
 ```
 
 ### Set Role-Level Timeout
+
 ```sql
 ALTER ROLE neondb_owner SET statement_timeout = '45s';
 ```
 
 ### Monitor Slow Queries
+
 ```sql
-SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start))::int 
-FROM pg_stat_activity 
-WHERE state != 'idle' 
+SELECT pid, query, state, EXTRACT(EPOCH FROM (now() - query_start))::int
+FROM pg_stat_activity
+WHERE state != 'idle'
 AND EXTRACT(EPOCH FROM (now() - query_start)) > 2
 ORDER BY query_start DESC;
 ```
 
 ### Test Timeout Works
+
 ```python
 # Should timeout after 5 seconds
 cur.execute("SET statement_timeout TO 5000")
@@ -366,7 +395,7 @@ A: You can upgrade to psycopg3, but it requires code changes. Psycopg2 works fin
 ✅ Diagnostic tools  
 ✅ Decision trees  
 ✅ Copy-paste ready code  
-✅ Implementation guides  
+✅ Implementation guides
 
 ---
 
@@ -387,6 +416,7 @@ All 7 research questions from your request have been answered with detailed info
 ## Feedback & Updates
 
 This research is **complete and comprehensive**. All findings are based on:
+
 - Official Neon documentation
 - PgBouncer configuration standards
 - PostgreSQL behavior documentation
@@ -394,4 +424,3 @@ This research is **complete and comprehensive**. All findings are based on:
 - Industry best practices
 
 Last updated: January 5, 2026
-
