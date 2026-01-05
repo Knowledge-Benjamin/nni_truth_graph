@@ -207,17 +207,36 @@ class DigestEngine:
             
             # 1. Get Articles that need digestion
             logger.info("📋 Fetching unprocessed articles...")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            
             try:
-                cur.execute("""
+                logger.info("  [DB-1] Preparing SQL query...")
+                sys.stdout.flush()
+                
+                query = """
                     SELECT id, url, title FROM articles 
                     WHERE processed_at IS NULL 
                     AND url IS NOT NULL
                     LIMIT %s;
-                """, (BATCH_SIZE,))
+                """
+                logger.info("  [DB-2] Executing query...")
+                sys.stdout.flush()
+                
+                cur.execute(query, (BATCH_SIZE,))
+                logger.info("  [DB-3] Query executed, fetching results...")
+                sys.stdout.flush()
+                
                 rows = cur.fetchall()
-                logger.info(f"📊 Fetched {len(rows)} articles from database")
+                logger.info(f"  [DB-4] Fetched {len(rows)} articles from database")
+                sys.stdout.flush()
+                
             except Exception as e:
-                logger.error(f"❌ Database fetch failed: {e}")
+                logger.error(f"❌ Database fetch failed: {type(e).__name__}: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                sys.stdout.flush()
+                sys.stderr.flush()
                 raise
             
             if not rows:
@@ -225,6 +244,7 @@ class DigestEngine:
                 return
 
             logger.info(f"🧠 Digesting {len(rows)} articles...")
+            sys.stdout.flush()
             
             loop = asyncio.get_running_loop()
             
