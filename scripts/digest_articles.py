@@ -207,7 +207,7 @@ class DigestEngine:
             # ALTER ROLE neondb_owner SET statement_timeout = '70s';
             print(">>>SETTING_TIMEOUT<<<", flush=True)
             sys.stdout.flush()
-            cur.execute("SET statement_timeout TO 70000")
+            cur.execute("SET statement_timeout TO 600000")  # 10 minutes - allow long-running queries
             print(">>>TIMEOUT_SET<<<", flush=True)
             sys.stdout.flush()
             logger.info("✅ Database connection established")
@@ -234,25 +234,16 @@ class DigestEngine:
                 print(">>>DB_QUERY_EXECUTE<<<", flush=True)
                 sys.stdout.flush()
                 
-                # Execute query with application-level timeout to catch hanging queries
-                async def execute_with_timeout():
-                    try:
-                        cur.execute(query, (BATCH_SIZE,))
-                        print(">>>DB_QUERY_DONE<<<", flush=True)
-                        sys.stdout.flush()
-                        
-                        print(">>>DB_FETCHALL_START<<<", flush=True)
-                        sys.stdout.flush()
-                        rows = cur.fetchall()
-                        print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
-                        sys.stdout.flush()
-                        return rows
-                    except Exception as e:
-                        print(f">>>DB_EXECUTE_ERROR_{type(e).__name__}<<<", flush=True)
-                        sys.stdout.flush()
-                        raise
+                # Execute query without artificial timeouts - let it take as long as needed
+                cur.execute(query, (BATCH_SIZE,))
+                print(">>>DB_QUERY_DONE<<<", flush=True)
+                sys.stdout.flush()
                 
-                rows = await asyncio.wait_for(execute_with_timeout(), timeout=75.0)
+                print(">>>DB_FETCHALL_START<<<", flush=True)
+                sys.stdout.flush()
+                rows = cur.fetchall()
+                print(f">>>DB_FETCHALL_DONE_{len(rows)}<<<", flush=True)
+                sys.stdout.flush()
                 logger.info(f"  [DB-4] Fetched {len(rows)} articles from database")
                 sys.stdout.flush()
                 
@@ -325,10 +316,7 @@ class DigestEngine:
                 # B. Extract Facts (LLM)
                 logger.info(f"   🤖 Extracting facts from article {aid}...")
                 try:
-                    result_json = await asyncio.wait_for(
-                        loop.run_in_executor(None, self.extract_facts_with_llm, full_text),
-                        timeout=60.0
-                    )
+                    result_json = await loop.run_in_executor(None, self.extract_facts_with_llm, full_text)
                 except Exception as e:
                     logger.error(f"   ❌ LLM extraction failed for {aid}: {e}")
                     try:
