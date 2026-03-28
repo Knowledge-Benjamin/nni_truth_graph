@@ -1,0 +1,32 @@
+name: Deploy Vision Server to Hugging Face Spaces
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create HF Space if not exists
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          curl -s -o /dev/null -X POST https://huggingface.co/api/repos/create \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"type":"space","name":"VisionInferenceServer","organization":"KnowledgeBenji","sdk":"docker","private":false}' || true
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git remote add hf https://KnowledgeBenji:${HF_TOKEN}@huggingface.co/spaces/KnowledgeBenji/VisionInferenceServer
+          git push hf main --force

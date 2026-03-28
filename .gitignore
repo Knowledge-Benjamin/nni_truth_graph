@@ -1,0 +1,118 @@
+# ─── Environment & Secrets ────────────────────────────────────────────────────
+.env
+*.env
+.env.*
+!.env.example
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+*.whl
+pip-wheel-metadata/
+.installed.cfg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# ─── Node.js ──────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.pnpm-debug.log*
+
+# ─── Build Outputs ────────────────────────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+client/dist/
+client/build/
+server/dist/
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Database Reset Scripts (LOCAL USE ONLY) ───────────────────────────────────
+reset_postgres.py
+reset_neo4j.py
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ─── Credentials & Keys ───────────────────────────────────────────────────────
+*.pem
+*.key
+*.cert
+*.p12
+credentials.json
+service_account.json
+secrets/
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Temporary / Test files ───────────────────────────────────────────────────
+temp_*.py
+test_*.py
+*.tmp
+
+# ─── Database Dumps ───────────────────────────────────────────────────────────
+*.sql
+*.dump
+*.db
+*.sqlite3
+*.sqlite
+
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ─── ML/AI Model artifacts ────────────────────────────────────────────────────
+*.pt
+*.bin
+*.onnx
+*.safetensors
+models/
+.cache/
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+# NOTE: .dockerignore itself must NOT be ignored, only docker build artifacts
+*.tar
+
+# ─── Seeder Data Cache (auto-downloaded at runtime, never commit) ──────────────
+# These JSON files are large and re-downloaded automatically by seed_baseline_knowledge.py
+ai_engine/scripts/dictionary.json
+ai_engine/scripts/bible.json
+ai_engine/scripts/capitals.json
+ai_engine/scripts/quran_en.json
+ai_engine/scripts/quran_en_translation.json
+ai_engine/scripts/bhagavad_gita.json
+ai_engine/scripts/country_religion.json
+ai_engine/scripts/country_population.json
+ai_engine/scripts/country_language.json
+ai_engine/scripts/country_currency.json
+ai_engine/scripts/country_area.json
+ai_engine/scripts/country_continent.json
+ai_engine/scripts/nobel_prizes.json
+ai_engine/scripts/world_leaders.json

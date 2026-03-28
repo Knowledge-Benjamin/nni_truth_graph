@@ -1,0 +1,14 @@
+[submodule "InferenceServer"]
+	path = InferenceServer
+	url = https://github.com/Knowledge-Benjamin/InferenceServer.git
+	branch = main
+
+[submodule "SearchServer"]
+	path = SearchServer
+	url = https://github.com/Knowledge-Benjamin/SearchServer.git
+	branch = main
+
+[submodule "VisionInferenceServer"]
+	path = VisionInferenceServer
+	url = https://github.com/Knowledge-Benjamin/VisionInferenceServer.git
+	branch = main

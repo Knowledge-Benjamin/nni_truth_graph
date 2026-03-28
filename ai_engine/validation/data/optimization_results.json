@@ -1,0 +1,18 @@
+{
+    "baseline": {
+        "brier": 0.04541285302819264,
+        "roc_auc": 0.9993906085694606
+    },
+    "optimized": {
+        "brier": 0.005741151069614631,
+        "roc_auc": 1.0
+    },
+    "optimal_weights": {
+        "alpha_weight": 0.7869931097681276,
+        "beta_weight": 0.271428362246052,
+        "gamma_corrob_factor": 0.44993164710485817,
+        "gamma_contra_factor": 0.5,
+        "max_corrob_bonus": 0.5,
+        "delta_decay_rate": 0.060606068672404666
+    }
+}

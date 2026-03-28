@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+torch
+transformers
+Pillow
+loguru
+requests
+ImageHash

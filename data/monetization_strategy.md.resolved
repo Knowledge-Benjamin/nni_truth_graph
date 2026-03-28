@@ -1,0 +1,48 @@
+# Monetization Strategy: The "Living Truth Graph"
+
+To keep the core frontend search completely free for the public (like Google Search or Wikipedia) while building a sustainable and highly profitable business model, you need a strategy that monetizes **power users, data access, and institutions**, not the everyday citizen trying to verify a fact.
+
+Here is a 3-tier monetization strategy perfectly suited for your graph architecture:
+
+---
+
+## Tier 1: The B2B API (Data as a Service)
+Your biggest asset isn't the React frontend; it's the parsed, structured, and scored Knowledge Graph (`extracted_claims` in Neo4j). 
+
+**Target Audience:**
+Hedge funds, algorithmic trading firms, journalists, OSINT (Open Source Intelligence) organizations, and other AI companies (who need clean data to train their own models).
+
+**The Product:**
+A high-throughput REST or GraphQL API that allows programmatic access to the truth graph.
+*   **Pricing Model:** Pay-as-you-go per API call (e.g., $0.005 per claim retrieved) or Monthly usage tiers ($499/mo for 100k requests).
+*   **Use Case:** A hedge fund wants real-time alerts the millisecond an `EMPIRICAL` claim regarding "Tesla" and "Acquisition" drops into the `CANONICAL` state with an Epistemic Trust score > 85%.
+
+## Tier 2: Truth Pro (Frontend Subscription for Power Users)
+Keep the `ExplorerPane` (graph visualization) and `ArticleRenderer` (narrative articles) 100% free. Monetize the depth of the data and advanced tooling on the frontend.
+
+**Target Audience:**
+Researchers, academia, independent journalists, and obsessive fact-checkers.
+
+**The Product:**
+A $15 - $30 / month "Pro" subscription that unlocks advanced UI tools within the exist React application ([App.jsx](file:///c:/Users/TempAdmin/Desktop/nni_truth_graph/client/src/App.jsx)).
+*   **Time Machine (Temporal Queries):** Free users see the graph *today*. Pro users get a slider to see what the truth graph looked like on *August 14th, 2024*.
+*   **Deep Provenance:** Free users see the final Epistemic Score (e.g., 92%). Pro users can click the score to see the full mathematical breakdown, including exactly which sources pulled the score down, and access the raw `quote_context` from every single supporting and contradicting article in the database.
+*   **Custom Alerts/Watchlists:** Pro users can "Subscribe" to an entity (e.g., "OpenAI") and receive email/push notifications whenever a new fact modifies the entity's network.
+
+## Tier 3: Institutional Verification & Private Graphs (Enterprise SaaS)
+Institutions are currently struggling with internal knowledge silos and verifiable truth in the age of AI hallucinations.
+
+**Target Audience:**
+Large corporations, media conglomerates, and enterprise platforms.
+
+**The Product:**
+*   **Source Verification Badges:** Allow news organizations and data providers to pay for a "Verified Source" API integration. They push their articles directly into your Stage 1 ingest queue. If their data continually scores high on your Epistemic Trust Algorithm, they earn a visible "Highly Trusted Provider" badge on the public frontend. 
+*   **Private Graph Instances:** Sell the entire 9-stage AI Engine (your Python backend) as a localized enterprise deployment. A law firm or medical research facility could deploy a private "Truth Graph" on their own servers, feeding it only their internal PDF documents and case files to create a hallucination-free internal search engine.
+
+---
+
+### Implementation in Current Codebase
+Because you already use `authApi` and a `ProtectedRoute` component in React, implementing this is straightforward:
+1.  Integrate Stripe for handling the "Truth Pro" subscription tier.
+2.  In [server/routes/graph.js](file:///c:/Users/TempAdmin/Desktop/nni_truth_graph/server/routes/graph.js), check the user's role/subscription flag in the database before returning the deep metadata (like the full array of `quote_context` or historical `valid_from` ranges).
+3.  Generate distinct API keys for B2B clients that hit a separate set of rate-limited, metered Express routes.

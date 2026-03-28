@@ -1,0 +1,16 @@
+{
+  "include": [
+    "ai_engine",
+    "scripts",
+    "server",
+    "client"
+  ],
+  "extraPaths": [
+    ".",
+    "scripts"
+  ],
+  "pythonVersion": "3.11",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportAttributeAccessIssue": "none"
+}

@@ -1,0 +1,57 @@
+# ─── Secrets & Environment ─────────────────────────────────────────────────
+.env
+*.env
+.env.*
+
+# ─── Node / Frontend (not needed in AI engine Docker image) ────────────────
+node_modules/
+client/
+server/
+
+# ─── Python Cache ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ─── Git & CI ──────────────────────────────────────────────────────────────
+.git/
+.github/
+.gitignore
+
+# ─── OS / Editor ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ─── Logs ──────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Seeder Data Cache (re-downloaded automatically at runtime) ─────────────
+ai_engine/scripts/dictionary.json
+ai_engine/scripts/bible.json
+ai_engine/scripts/capitals.json
+ai_engine/scripts/quran_en.json
+ai_engine/scripts/quran_en_translation.json
+ai_engine/scripts/bhagavad_gita.json
+ai_engine/scripts/country_religion.json
+ai_engine/scripts/country_population.json
+ai_engine/scripts/country_language.json
+ai_engine/scripts/country_currency.json
+ai_engine/scripts/country_area.json
+ai_engine/scripts/country_continent.json
+ai_engine/scripts/nobel_prizes.json
+ai_engine/scripts/world_leaders.json
+
+# ─── Render config (Render is for Node API, not for the Docker AI engine) ──
+render.yaml
+
+# ─── Test & Temp files ─────────────────────────────────────────────────────
+test_*.py
+temp_*.py
+*.tmp

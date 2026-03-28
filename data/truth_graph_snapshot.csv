@@ -1,0 +1,251 @@
+id,subject,predicate,object_entity,epistemic_score,temporal_anchor,spatial_anchor,quote_context,valid_from,valid_until,created_at
+1183,Brazil,HAS_CAPITAL,Brasília,0.9299999999999999,"","","'which hosts the capital, Brasília'",,,2026-03-16 19:46:21.716112+00
+4,United Kingdom,SHARES_BORDER_WITH,Republic of Ireland,0.7801029995663982,"",Northwestern Europe,'It shares a land border with the Republic of Ireland',,,2026-03-16 19:03:16.670205+00
+6,United Kingdom,WAS_CONQUERED_BY,Roman Empire,0.7801029995663982,AD 43,Britain,'In AD 43 the Roman conquest of Britain began',,,2026-03-16 19:03:16.670205+00
+5,London,IS_CAPITAL_OF,United Kingdom,0.7801029995663982,"",England,'The capital and largest city of England and the UK is London',,,2026-03-16 19:03:16.670205+00
+21,Elon Musk,FOUNDED,The Boring Company,0.95,2017,"","the tunneling company the Boring Company, which he founded in 2017",,,2026-03-16 19:03:26.595916+00
+30,Belarus,SHARES_BORDER_WITH,Ukraine,0.95,"",South,'It is bordered by Ukraine to the south',,,2026-03-16 19:04:10.329443+00
+37,Byelorussian SSR,BECAME_PART_OF,Soviet Union,0.95,1922,"","'the Byelorussian SSR, which became a founding constituent republic of the Soviet Union in 1922'",,,2026-03-16 19:04:10.329443+00
+1247,Cocos Islands,DISCOVERED_BY,William Keeling,0.95,1609,"",'discovered in 1609 by the British sea captain William Keeling',,,2026-03-16 19:47:34.284984+00
+1266,Croatia,DECLARED_INDEPENDENCE,Yugoslavia,0.95,25 June 1991,"",'Croatia declared its independence from Yugoslavia',,,2026-03-16 19:47:42.96906+00
+50,France,SHARES_BORDER_WITH,Andorra,0.95,"",Metropolitan France,'Andorra and Spain to the south;',,,2026-03-16 19:04:31.235776+00
+62,France,EXPERIENCED,French Revolution,0.95,1789,"",'The French Revolution of 1789 overthrew the Ancien Régime',,,2026-03-16 19:04:31.235776+00
+79,Jerusalem,IS,government seat,0.95,"","","'Jerusalem is the government seat and proclaimed capital, while Tel Aviv is Israel's largest urban area and economic centre.'",,,2026-03-16 19:05:01.414762+00
+96,Kievan Rus',WAS_ESTABLISHED_IN,9th century,0.95,9th century,"",The emergence of the East Slavs as a prominent group in Europe between the 3rd and 8th centuries AD led to the creation of Kievan Rus' in the 9th century.,,,2026-03-16 19:05:22.939392+00
+101,Russian Revolution,OCCURRED_IN,1917,0.95,1917,"",The Russian Revolution of 1917 led to the abolition of monarchic rule and the creation of the first constitutionally socialist state in the world.,,,2026-03-16 19:05:22.939392+00
+19,Elon Musk,CO_FOUNDED,OpenAI,0.7801029995663982,2015,"","In 2015, he co-founded OpenAI to advance artificial intelligence (AI) research",,,2026-03-16 19:03:26.595916+00
+41,Belarus,SIGNED_TREATY_WITH,Russia,0.9299999999999999,2000,"","'In 2000, Belarus and Russia signed a treaty for greater cooperation'",,,2026-03-16 19:04:10.329443+00
+42,Belarus,HAS_LIMITED_RELATIONSHIP_WITH,Council of Europe,0.95,"","",'Belarus is among the only three European countries not a member of the Council of Europe',,,2026-03-16 19:04:10.329443+00
+1246,Cocos Islands,PART_OF,Australian Indian Ocean Territories,0.9299999999999999,"","",'forms the Australian Indian Ocean Territories administrative grouping',,,2026-03-16 19:47:34.284984+00
+1265,"State of Slovenes, Croats, and Serbs",WAS_PROCLAIMED,Independent,0.95,October 1918,Zagreb,"'The State of Slovenes, Croats, and Serbs, independent from the Habsburg Empire, was proclaimed in Zagreb'",,,2026-03-16 19:47:42.96906+00
+61,France,WAS_SUCCESSFUL_IN,Thirty Years' War,0.95,"","",'France was successful in the Thirty Years' War',,,2026-03-16 19:04:31.235776+00
+80,Tel Aviv,IS,Israel's largest urban area,0.95,"","","'Jerusalem is the government seat and proclaimed capital, while Tel Aviv is Israel's largest urban area and economic centre.'",,,2026-03-16 19:05:01.414762+00
+102,Soviet Union,WAS_ESTABLISHED,Russian Civil War,0.95,"","","Following the Russian Civil War, Russia established the Soviet Union as its largest and principal constituent.",,,2026-03-16 19:05:22.939392+00
+116,Modern humans,ARRIVED_IN,Indian subcontinent,0.95,"55,000 years ago",Africa,"'Modern humans arrived on the Indian subcontinent from Africa no later than 55,000 years ago.'",,,2026-03-16 19:05:46.902192+00
+43,France,IS_LOCATED_IN,Western Europe,0.95,"",Western Europe,"'France, officially the French Republic, is a country primarily located in Western Europe.'",,,2026-03-16 19:04:31.235776+00
+64,France,WAS_PART_OF,World War I,0.95,"","",'France was one of the major participants of World War I',,,2026-03-16 19:04:31.235776+00
+68,France,RETAINS_STATUS_AS,"global centre of art, science, and philosophy",0.95,"","","'France retains its centuries-long status as a global centre of art, science, and philosophy.'",,,2026-03-16 19:04:31.235776+00
+117,India,BECAME,Most populous democracy,0.95,1947,"","'since its independence in 1947, the world's most populous democracy.'",,,2026-03-16 19:05:46.902192+00
+69,France,HOSTS,UNESCO World Heritage Sites,0.95,"","","'It hosts the fourth-largest number of UNESCO World Heritage Sites, with 54 in total'",,,2026-03-16 19:04:31.235776+00
+83,Israel,SIGNED_PEACE,Egypt,0.95,1979,"",'Peace was signed with Egypt in 1979 (the Sinai being returned in 1982) and Jordan in 1994.',,,2026-03-16 19:05:01.414762+00
+84,Israel,SIGNED_PEACE,Jordan,0.95,1994,"",'Peace was signed with Egypt in 1979 (the Sinai being returned in 1982) and Jordan in 1994.',,,2026-03-16 19:05:01.414762+00
+105,Russian Federation,EMERGED_FROM,Soviet Union,0.95,1991,"","In 1991, Soviet Russia emerged from the dissolution of the Soviet Union as the independent Russian Federation.",,,2026-03-16 19:05:22.939392+00
+120,India,REDUCED_POVERTY_RATE,Poverty,0.95,"","","'India has reduced its poverty rate,'",,,2026-03-16 19:05:46.902192+00
+128,Japanese Paleolithic,STARTED_AT,"36,000 BC",0.97,Upper Paleolithic,"","'The beginning of the Japanese Paleolithic dating to c. 36,000 BC.'",,,2026-03-16 19:05:55.083814+00
+1255,Croatia,BORDERS,Hungary,0.95,"",Northeast,'It borders Hungary to the northeast',,,2026-03-16 19:47:42.96906+00
+136,Iran,IS_A,Country,0.95,2026-03-16,West Asia,"'Iran, officially the Islamic Republic of Iran, and also known as Persia, is a country in West Asia.'",,,2026-03-16 19:06:06.752027+00
+149,Kenya,HAS_POPULATION,53.3 million,0.95,mid-2025,"",With an estimated population of more than 53.3 million as of mid-2025,,,2026-03-16 19:06:33.269809+00
+197,Ukrainian Soviet Socialist Republic,BECAME,constituent republic of the Soviet Union,0.97,1922,Soviet Union,"the Ukrainian Soviet Socialist Republic, which became a constituent republic of the Soviet Union in 1922.",,,2026-03-16 19:07:05.253404+00
+82,Zionist movement,GAINED_SUPPORT,British,0.95,1917,"","'19th-century European antisemitism fuelled the Zionist movement for a Jewish homeland, which gained British support with the 1917 Balfour Declaration.'",,,2026-03-16 19:05:01.414762+00
+115,India,SHARES_BORDER_WITH,Bangladesh,0.95,"",East,'and Bangladesh and Myanmar to the east.',,,2026-03-16 19:05:46.902192+00
+1254,Croatia,BORDERS,Slovenia,0.95,"",Northwest,'It borders Slovenia to the northwest',,,2026-03-16 19:47:42.96906+00
+103,Joseph Stalin,LED,Soviet Union,0.95,1930s,"","Amidst rapid industrialisation in the 1930s, the Soviet Union saw deaths of millions under the totalitarianism of Joseph Stalin.",,,2026-03-16 19:05:22.939392+00
+113,India,SHARES_BORDER_WITH,Pakistan,0.95,"",West,'it shares land borders with Pakistan to the west;',,,2026-03-16 19:05:46.902192+00
+1253,Croatia,IS_A,Country,0.95,"",Central and Southeast Europe,"'Croatia, officially the Republic of Croatia, is a country in Central and Southeast Europe'",,,2026-03-16 19:47:42.96906+00
+1256,Croatia,BORDERS,Serbia,0.95,"",East,'It borders Serbia to the east',,,2026-03-16 19:47:42.96906+00
+122,Japan,IS_A,island country,0.97,"",East Asia,'Japan is an island country in East Asia.',,,2026-03-16 19:05:55.083814+00
+135,Japan,HAS_ECONOMY,one of the world's largest economies,0.97,"","",'A developed country with one of the world's largest economies by nominal GDP',,,2026-03-16 19:05:55.083814+00
+150,Nairobi,IS_CAPITAL_OF,Kenya,0.95,"",Kenya,Kenya's capital and largest city is Nairobi.,,,2026-03-16 19:06:33.269809+00
+173,Kenya,HAS_ECONOMY,lower-middle-income economy,0.95,"","","With a per-capita Gross National Income of $2,110, the country is a lower-middle-income economy",,,2026-03-16 19:06:33.269809+00
+151,Mombasa,IS_OLDEST_CITY_IN,Kenya,0.95,"",Kenya,The second-largest and oldest city is Mombasa,,,2026-03-16 19:06:33.269809+00
+169,Kenya,IS_MEMBER_OF,World Trade Organization,0.95,"","",The country is a member of ... the World Trade Organization,,,2026-03-16 19:06:33.269809+00
+191,Ukraine,HAS_CAPITAL,Kyiv,0.97,"","","Kyiv is the nation's capital and largest city,",,,2026-03-16 19:07:05.253404+00
+193,Humans,INHABITED,Ukraine,0.97,"32,000 BC",Ukraine,"Humans have inhabited Ukraine since 32,000 BC.",,,2026-03-16 19:07:05.253404+00
+58,France,WAS_ANNEXED_BY,Rome,0.95,51 BC,"",'before Rome annexed the area in 51 BC',,,2026-03-16 19:04:31.235776+00
+228,Tanzania,RULED_BY,Chama Cha Mapinduzi,0.95,"","","'For decades, Tanzania has been ruled by the Chama Cha Mapinduzi (CCM) as a de facto one-party state.'",,,2026-03-16 19:07:32.594428+00
+152,Kenya,BORDERED_BY,South Sudan,0.95,"",northwest,"Going clockwise, Kenya is bordered by South Sudan to the northwest",,,2026-03-16 19:06:33.269809+00
+170,Kenya,IS_MEMBER_OF,COMESA,0.95,"","",The country is a member of ... COMESA,,,2026-03-16 19:06:33.269809+00
+174,Kenya,HAS_PER_CAPITA_GNI,"$2,110",0.95,"","","With a per-capita Gross National Income of $2,110",,,2026-03-16 19:06:33.269809+00
+194,Kievan Rus',EMERGED_IN,9th century,0.97,9th century,Ukraine,"Kievan Rus', which emerged in the 9th century,",,,2026-03-16 19:07:05.253404+00
+209,Ukraine,HAS_GDP,lowest nominal GDP per capita in Europe,0.97,2024,Europe,Ukraine has a transition economy and has the lowest nominal GDP per capita in Europe as of 2024.,,,2026-03-16 19:07:05.253404+00
+503,Rishi Sunak,WORKED_FOR,Goldman Sachs,0.97,"","",'worked for Goldman Sachs',,,2026-03-16 19:20:37.474277+00
+3179,Narges Mohammadi,IS_VICE_PRESIDENT_OF,Defenders of Human Rights Center,0.97,"","",'vice president of the Defenders of Human Rights Center (DHRC)',,,2026-03-16 21:19:09.482737+00
+3182,Narges Mohammadi,WROTE_FOR,Message of Syndicate,0.97,"",Tehran,"'wrote for the magazine Message of Syndicate, edited by Robert Bruchim in Tehran'",,,2026-03-16 21:19:09.482737+00
+3183,Narges Mohammadi,AWARDED,2023 Nobel Peace Prize,0.97,October 2023,"",'awarded the 2023 Nobel Peace Prize',,,2026-03-16 21:19:09.482737+00
+3185,Narges Mohammadi,UNDERWENT_SURGERY,complex surgery,0.97,19 November 2024,Iran,'underwent a complex surgery in Iran',,,2026-03-16 21:19:09.482737+00
+3187,Narges Mohammadi,SENTENCED_TO,seven and a half years in prison,0.97,"February 8, 2026","",'sentenced to seven and a half years in prison',,,2026-03-16 21:19:09.482737+00
+3186,Nobel Committee,URGED,Iran,0.97,"December 12, 2025","",'the Nobel Committee urging Iran to disclose her whereabouts',,,2026-03-16 21:19:09.482737+00
+3184,Ministry of Foreign Affairs of Iran,CONDEMNED,2023 Nobel Peace Prize decision,0.97,October 2023,"",'The Ministry of Foreign Affairs of Iran condemned the decision',,,2026-03-16 21:19:09.482737+00
+10,Elon Musk,BORN_ON,"June 28, 1971",0.7801029995663982,"June 28, 1971","Pretoria, South Africa","Elon Reeve Musk ( EE-lon; born June 28, 1971) is a businessman and entrepreneur",,,2026-03-16 19:03:26.595916+00
+8,British Empire,WAS,Leading Economic Power,0.7801029995663982,19th century,World,'The British Empire was the leading economic power for most of the 19th century',,,2026-03-16 19:03:16.670205+00
+12,Elon Musk,RECEIVED_DEGREE_FROM,University of Pennsylvania,0.7801029995663982,1997,University of Pennsylvania,He received bachelor's degrees in 1997 from the University of Pennsylvania,,,2026-03-16 19:03:26.595916+00
+13,Elon Musk,CO_FOUNDED,Zip2,0.7801029995663982,1995,"","In 1995, Musk co-founded the software company Zip2",,,2026-03-16 19:03:26.595916+00
+14,Elon Musk,CO_FOUNDED,X.com,0.7801029995663982,1999,"","he co-founded X.com, an online payment company that later merged to form PayPal",,,2026-03-16 19:03:26.595916+00
+16,Elon Musk,FOUNDED,SpaceX,0.7801029995663982,2002,"","In 2002, Musk founded the space technology company SpaceX",,,2026-03-16 19:03:26.595916+00
+17,Elon Musk,INVESTED_IN,Tesla,0.7801029995663982,2004,"",Musk joined the automaker Tesla as an early investor in 2004,,,2026-03-16 19:03:26.595916+00
+18,Elon Musk,BECAME_CEO_OF,Tesla,0.7801029995663982,2008,"",became its CEO and product architect in 2008,,,2026-03-16 19:03:26.595916+00
+20,Elon Musk,FOUNDED,Neuralink,0.7801029995663982,2016,"","His other businesses include the neurotechnology company Neuralink, which he co-founded in 2016",,,2026-03-16 19:03:26.595916+00
+9,United Kingdom,IS,Constitutional Monarchy,0.7801029995663982,"","",'The UK is a constitutional monarchy and parliamentary democracy',,,2026-03-16 19:03:16.670205+00
+15,Elon Musk,BECAME_CITIZEN_OF,United States,0.7801029995663982,2002,United States,Musk also became an American citizen in 2002,,,2026-03-16 19:03:26.595916+00
+25,Elon Musk,SERVED_AS,Senior Advisor to the President,0.95,2025,United States,"After Trump was inaugurated as president in early 2025, Musk served as Senior Advisor to the President",,,2026-03-16 19:03:26.595916+00
+26,Elon Musk,LEFT,Trump administration,0.95,2025,United States,"After a public feud with Trump, Musk left the Trump administration",,,2026-03-16 19:03:26.595916+00
+27,Elon Musk,RECEIVED,$1 trillion pay package,0.95,2025,"","In November 2025, a Tesla pay package worth $1 trillion for Musk was approved",,,2026-03-16 19:03:26.595916+00
+29,Belarus,SHARES_BORDER_WITH,Russia,0.95,"",East and Northeast,'It is bordered by Russia to the east and northeast',,,2026-03-16 19:04:10.329443+00
+32,Belarus,SHARES_BORDER_WITH,Lithuania,0.95,"",Northwest,'It is bordered by Lithuania and Latvia to the northwest',,,2026-03-16 19:04:10.329443+00
+31,Belarus,SHARES_BORDER_WITH,Poland,0.95,"",West,'It is bordered by Poland to the west',,,2026-03-16 19:04:10.329443+00
+34,Belarus,HAS_POPULATION,9.1 million,0.95,"","",'with a population of 9.1 million',,,2026-03-16 19:04:10.329443+00
+33,Belarus,HAS_AREA,207600 square kilometres,0.95,"","","'Belarus spans an area of 207,600 square kilometres'",,,2026-03-16 19:04:10.329443+00
+35,Minsk,IS_CAPITAL_OF,Belarus,0.95,"","",'Minsk is the capital and largest city',,,2026-03-16 19:04:10.329443+00
+38,Belarus,LOST_TERRITORY_TO,Poland,0.9299999999999999,1918-1921,"","'After the Polish-Soviet War (1918–1921), Belarus lost almost half of its territory to Poland'",,,2026-03-16 19:04:10.329443+00
+36,Grand Duchy of Lithuania,RULED,Belarus,0.9299999999999999,1300,"",'Around 1300 these lands came fully under the Grand Duchy of Lithuania',,,2026-03-16 19:04:10.329443+00
+39,Alexander Lukashenko,WAS_ELECTED_PRESIDENT_OF,Belarus,0.95,"","",'Alexander Lukashenko was elected Belarus's first president',,,2026-03-16 19:04:10.329443+00
+40,Belarus,IS_MEMBER_OF,United Nations,0.95,"","",'The country has been a member of the United Nations since its founding',,,2026-03-16 19:04:10.329443+00
+28,Belarus,IS_LOCATED_IN,Eastern Europe,0.95,"",Eastern Europe,"'Belarus, officially the Republic of Belarus, is a landlocked country in Eastern Europe.'",,,2026-03-16 19:04:10.329443+00
+1249,Cocos Islands,TRANSFERRED_TO,Australia,0.95,1955,"",'The territory was transferred to Australia in 1955',,,2026-03-16 19:47:34.284984+00
+1250,Cocos Islands,POPULATED_BY,Cocos Malays,0.9299999999999999,"","",'the population of around 600 people consists mainly of Cocos Malays',,,2026-03-16 19:47:34.284984+00
+1252,Cocos Islands,USES,Western Australian postcodes,0.9299999999999999,"","",'the territory also uses Western Australian postcodes',,,2026-03-16 19:47:34.284984+00
+1251,Cocos Malays,PRACTISE,Sunni Islam,0.9299999999999999,"","",'who mostly practise Sunni Islam',,,2026-03-16 19:47:34.284984+00
+1258,Zagreb,IS_CAPITAL_OF,Croatia,0.95,"","","'Its capital and largest city, Zagreb'",,,2026-03-16 19:47:42.96906+00
+1260,Croats,ARRIVED_IN,Croatia,0.95,Late 6th century,"","'The Croats arrived in modern-day Croatia, then part of Roman Illyria, in the late 6th century'",,,2026-03-16 19:47:42.96906+00
+1259,Croatia,HAS_POPULATION,3.9 million,0.95,"","",'The country has a population of nearly 3.9 million',,,2026-03-16 19:47:42.96906+00
+1261,Croatia,WAS_INTERNATIONALLY_RECOGNIZED,Independent,0.95,7 June 879,"",'Croatia was first internationally recognized as independent on 7 June 879',,,2026-03-16 19:47:42.96906+00
+1262,Tomislav,BECAME_KING_OF,Croatia,0.95,By 925,"",'Tomislav became the first king by 925',,,2026-03-16 19:47:42.96906+00
+1264,Croatian Parliament,ELECTED,Ferdinand I of Austria,0.95,1527,"",'The Croatian Parliament elected Ferdinand I of Austria to the Croatian throne',,,2026-03-16 19:47:42.96906+00
+1263,Croatia,ENTERED_PERSONAL_UNION,Hungary,0.95,1102,"",'Croatia entered a personal union with Hungary in 1102',,,2026-03-16 19:47:42.96906+00
+1257,Croatia,SHARES_MARITIME_BORDER,Italy,0.95,"",West,'It shares a maritime border with Italy to the west',,,2026-03-16 19:47:42.96906+00
+1243,Cocos Islands,LOCATED_IN,Indian Ocean,0.95,"",Indian Ocean,'located in the Indian Ocean',,,2026-03-16 19:47:34.284984+00
+52,France,HAS_MARITIME_BORDER_WITH,United Kingdom,0.95,"",Metropolitan France,'a maritime border with the United Kingdom and the Republic of Ireland to the northwest;',,,2026-03-16 19:04:31.235776+00
+53,France,HAS_MARITIME_BORDER_WITH,Republic of Ireland,0.95,"",Metropolitan France,'a maritime border with the United Kingdom and the Republic of Ireland to the northwest;',,,2026-03-16 19:04:31.235776+00
+49,France,SHARES_BORDER_WITH,Monaco,0.95,"",Metropolitan France,'Italy and Monaco to the southeast;',,,2026-03-16 19:04:31.235776+00
+51,France,SHARES_BORDER_WITH,Spain,0.95,"",Metropolitan France,'Andorra and Spain to the south;',,,2026-03-16 19:04:31.235776+00
+54,France,HAS_CAPITAL,Paris,0.95,"","","'Its capital, largest city and main cultural and economic centre is Paris.'",,,2026-03-16 19:04:31.235776+00
+55,France,HAS_POPULATION,69.1 million,0.95,2026,"",'with a total population estimated at 69.1 million in 2026.',,,2026-03-16 19:04:31.235776+00
+56,France,HAS_AREA,"632,702 km2",0.95,"","","'span a combined area of 632,702 km2 (244,288 sq mi)'",,,2026-03-16 19:04:31.235776+00
+59,France,WAS_PART_OF,Carolingian Empire,0.95,Early Middle Ages,"","'the Franks formed the kingdom of Francia, which became the heartland of the Carolingian Empire.'",,,2026-03-16 19:04:31.235776+00
+57,France,WAS_SETTLED_BY,Celtic tribes,0.95,Iron Age,"",'Metropolitan France was settled during the Iron Age by Celtic tribes known as Gauls',,,2026-03-16 19:04:31.235776+00
+60,France,WAS_INVOLVED_IN,Hundred Years' War,0.95,mid-14th to mid-15th centuries,"",'France was plunged into a dynastic conflict with England known as the Hundred Years' War.',,,2026-03-16 19:04:31.235776+00
+48,France,SHARES_BORDER_WITH,Italy,0.95,"",Metropolitan France,'Italy and Monaco to the southeast;',,,2026-03-16 19:04:31.235776+00
+44,France,SHARES_BORDER_WITH,Belgium,0.95,"",Metropolitan France,'Metropolitan France shares borders with Belgium and Luxembourg to the north;',,,2026-03-16 19:04:31.235776+00
+46,France,SHARES_BORDER_WITH,Germany,0.95,"",Metropolitan France,'Germany to the northeast;',,,2026-03-16 19:04:31.235776+00
+65,France,WAS_PART_OF,World War II,0.95,"","",'It was among the Allies of World War II',,,2026-03-16 19:04:31.235776+00
+67,France,HAS_CURRENT_SYSTEM,Fifth Republic,0.95,1958,"","'The current Fifth Republic, a semi-presidential system, was formed in 1958 by Charles de Gaulle.'",,,2026-03-16 19:04:31.235776+00
+71,Israel,LOCATED_IN,Southern Levant,0.95,"",West Asia,"'Israel, officially the State of Israel, is a country in the Southern Levant region of West Asia.'",,,2026-03-16 19:05:01.414762+00
+72,Israel,BORDERED_BY,Lebanon,0.95,"",north,"'It is bordered by Lebanon to the north, Syria to the northeast, Jordan to the east, and Egypt to the southwest.'",,,2026-03-16 19:05:01.414762+00
+70,France,RECEIVED,102 million foreign visitors,0.95,2025,"","'the world's leading tourist destination, having received 102 million foreign visitors in 2025.'",,,2026-03-16 19:04:31.235776+00
+73,Israel,BORDERED_BY,Syria,0.95,"",northeast,"'It is bordered by Lebanon to the north, Syria to the northeast, Jordan to the east, and Egypt to the southwest.'",,,2026-03-16 19:05:01.414762+00
+75,Israel,BORDERED_BY,Egypt,0.95,"",southwest,"'It is bordered by Lebanon to the north, Syria to the northeast, Jordan to the east, and Egypt to the southwest.'",,,2026-03-16 19:05:01.414762+00
+76,Israel,OCCUPIES,West Bank,0.95,"","","'Israel occupies the West Bank and the Gaza Strip of the Palestinian territories, as well as the Syrian Golan Heights.'",,,2026-03-16 19:05:01.414762+00
+77,Israel,OCCUPIES,Gaza Strip,0.95,"","","'Israel occupies the West Bank and the Gaza Strip of the Palestinian territories, as well as the Syrian Golan Heights.'",,,2026-03-16 19:05:01.414762+00
+78,Israel,OCCUPIES,Syrian Golan Heights,0.95,"","","'Israel occupies the West Bank and the Gaza Strip of the Palestinian territories, as well as the Syrian Golan Heights.'",,,2026-03-16 19:05:01.414762+00
+190,Ukraine,BORDERS,Moldova,0.97,"",southwest,"Hungary, Romania and Moldova to the southwest;",,,2026-03-16 19:07:05.253404+00
+74,Israel,BORDERED_BY,Jordan,0.95,"",east,"'It is bordered by Lebanon to the north, Syria to the northeast, Jordan to the east, and Egypt to the southwest.'",,,2026-03-16 19:05:01.414762+00
+91,Russia,IS_LOCATED_IN,North Asia,0.95,"",North Asia,"Russia, or the Russian Federation, is a country in Eastern Europe and North Asia.",,,2026-03-16 19:05:22.939392+00
+88,Israel,HAS_ECONOMY,one of the Middle East's largest economies,0.95,"","","'Israel has one of the Middle East's largest economies, one of Asia's highest living standards, and globally ranks 26th in nominal GDP and 14th in nominal GDP per capita.'",,,2026-03-16 19:05:01.414762+00
+87,Knesset,IS,proportionally elected parliament,0.95,"","",'The Basic Laws of Israel establish the Knesset as a proportionally elected parliament.',,,2026-03-16 19:05:01.414762+00
+92,Russia,HAS_POPULATION,140 million,0.95,"","","With a population of over 140 million, Russia is the most populous country in Europe and the ninth-most populous in the world.",,,2026-03-16 19:05:22.939392+00
+95,Saint Petersburg,IS_SECOND_LARGEST_CITY_OF,Russia,0.95,"","","Moscow, the most populous metropolitan area in Europe, is the capital and largest city of Russia, while Saint Petersburg is its second-largest city and a major cultural centre.",,,2026-03-16 19:05:22.939392+00
+94,Moscow,IS_CAPITAL_OF,Russia,0.95,"","","Moscow, the most populous metropolitan area in Europe, is the capital and largest city of Russia, while Saint Petersburg is its second-largest city and a major cultural centre.",,,2026-03-16 19:05:22.939392+00
+93,Russia,IS_RANKED,ninth-most populous,0.95,"",world,"With a population of over 140 million, Russia is the most populous country in Europe and the ninth-most populous in the world.",,,2026-03-16 19:05:22.939392+00
+90,Russia,IS_LOCATED_IN,Eastern Europe,0.95,"",Eastern Europe,"Russia, or the Russian Federation, is a country in Eastern Europe and North Asia.",,,2026-03-16 19:05:22.939392+00
+99,Tsardom of Russia,WAS_FORMED_IN,1547,0.95,1547,"","Following its disintegration, the Grand Principality of Moscow began the process of unifying Russian lands in the late 13th century, leading to the formation of the Tsardom of Russia in 1547.",,,2026-03-16 19:05:22.939392+00
+100,Russian Empire,WAS_PROCLAIMED_IN,1721,0.95,1721,"","It was proclaimed as the Russian Empire in 1721, which remains the third-largest in history.",,,2026-03-16 19:05:22.939392+00
+104,Soviet Union,PLAYED_DECISIVE_ROLE_IN,World War II,0.95,World War II,Eastern Front,It played a decisive role for the Allies in World War II by leading large-scale efforts on the Eastern Front.,,,2026-03-16 19:05:22.939392+00
+107,Russia,IS_CONSIDERED,great power,0.95,"","","Russia is generally considered a great power and wields significant regional influence in Europe, possessing the largest stockpile of nuclear weapons and having the third-highest military expenditure in the world.",,,2026-03-16 19:05:22.939392+00
+106,Vladimir Putin,HAS_DOMINATED,Russia,0.95,turn of the century,"","Since the turn of the century, the political system of Russia has been dominated by Vladimir Putin, under whose leadership it has experienced democratic backsliding and has been transformed into an authoritarian regime.",,,2026-03-16 19:05:22.939392+00
+108,Russia,HAS_STOCKPILE_OF,nuclear weapons,0.95,"","","Russia is generally considered a great power and wields significant regional influence in Europe, possessing the largest stockpile of nuclear weapons and having the third-highest military expenditure in the world.",,,2026-03-16 19:05:22.939392+00
+109,Russia,RANKS_LOW_IN,democracy,0.95,"","","Russia continues to rank very low in measurements of democracy, human rights and media freedom, while having high levels of corruption.",,,2026-03-16 19:05:22.939392+00
+110,Russia,IS_MEMBER_OF,United Nations Security Council,0.95,"","","As the successor state of the Soviet Union, it retains its seat as a permanent member of the United Nations Security Council and is a member state of several international organisations.",,,2026-03-16 19:05:22.939392+00
+111,Russia,HAS_UNESCO_WORLD_HERITAGE_SITES,32,0.95,"","",Russia is also home to 32 UNESCO World Heritage Sites.,,,2026-03-16 19:05:22.939392+00
+112,India,IS_A,Country,0.95,"",South Asia,"'India, officially the Republic of India, is a country in South Asia.'",,,2026-03-16 19:05:46.902192+00
+124,Japanese archipelago,CONSISTS_OF,four major islands,0.97,"","","'The Japanese archipelago consists of four major islands alongside 14,121 smaller islands.'",,,2026-03-16 19:05:55.083814+00
+125,Japan,DIVIDED_INTO,47 administrative prefectures,0.97,"","",'Japan is divided into 47 administrative prefectures and eight traditional regions',,,2026-03-16 19:05:55.083814+00
+127,Tokyo,IS_CAPITAL_OF,Japan,0.97,"","",'Tokyo is the country's capital and largest city.',,,2026-03-16 19:05:55.083814+00
+126,Japan,HAS_POPULATION,123 million,0.97,2026,"",'With a population of almost 123 million as of 2026',,,2026-03-16 19:05:55.083814+00
+129,Japan,UNIFIED_IN,1600,0.97,"","",'Japan was unified in 1600 by the Tokugawa shogunate',,,2026-03-16 19:05:55.083814+00
+133,Japan,IS_A,constitutional monarchy,0.97,"","",'Japan is a constitutional monarchy with a bicameral legislature known as the National Diet.',,,2026-03-16 19:05:55.083814+00
+131,Japan,ATTACKED,U.S. and European colonial powers,0.97,1941,"",'attacked the U.S. and European colonial powers in 1941',,,2026-03-16 19:05:55.083814+00
+132,Japan,SURRENDERED_IN,1945,0.97,"","",'Japan surrendered in 1945',,,2026-03-16 19:05:55.083814+00
+134,Japan,HAS_MILITARY,one of the world's strongest militaries,0.97,"","",'it maintains one of the world's strongest militaries',,,2026-03-16 19:05:55.083814+00
+138,Iran,HAS_POPULATION,92 million,0.95,2026-03-16,"","'With a population of over 92 million, Iran ranks 17th globally in both geographic size and population and is the sixth-largest country in Asia.'",,,2026-03-16 19:06:06.752027+00
+139,Tehran,IS_CAPITAL_OF,Iran,0.95,2026-03-16,"","'Tehran is the nation's capital, largest city, and financial center.'",,,2026-03-16 19:06:06.752027+00
+140,Medes,UNIFIED,Iran,0.9299999999999999,7th century BC,"","'Iran was first united as a nation by the Medes under Cyaxares in the 7th century BC and reached its territorial height in the 6th century BC, when Cyrus the Great founded the Achaemenid Empire.'",,,2026-03-16 19:06:06.752027+00
+145,Iran,IS_MEMBER_OF,United Nations,0.95,2026-03-16,"",'It is a founding member of the UN and a member state of numerous international organisations.',,,2026-03-16 19:06:06.752027+00
+141,Cyrus the Great,FOUNDED,Achaemenid Empire,0.9299999999999999,6th century BC,"","'Iran was first united as a nation by the Medes under Cyaxares in the 7th century BC and reached its territorial height in the 6th century BC, when Cyrus the Great founded the Achaemenid Empire.'",,,2026-03-16 19:06:06.752027+00
+143,Iran,HAS_GOVERNMENT,Theocratic Islamic Republic,0.95,2026-03-16,"","'Iran's government is a theocratic Islamic republic governed by elected and unelected institutions, with ultimate authority vested in the supreme leader.'",,,2026-03-16 19:06:06.752027+00
+144,Iran,HAS_ECONOMY,Centrally Planned Economy,0.95,2026-03-16,"","'Iran maintains a centrally planned economy with significant state ownership in key sectors, though private enterprise exists alongside this.'",,,2026-03-16 19:06:06.752027+00
+142,Alexander the Great,CONQUERED,Achaemenid Empire,0.9299999999999999,4th century BC,"",'Alexander the Great conquered the empire in the 4th century BC.',,,2026-03-16 19:06:06.752027+00
+146,Iran,HAS_NUCLEAR_PROGRAM,Nuclear Program,0.9299999999999999,2026-03-16,"","'Iran is a threshold state with one of the most scrutinized nuclear programs, which it claims is solely for civilian purposes; however, the IAEA, a United Nations (UN) agency tasked with monitoring the production of nuclear weapons, has on two occasions found Iran to be non-compliant with its safeguards obligations.'",,,2026-03-16 19:06:06.752027+00
+147,Mojtaba Khamenei,BECAME_SUPREME_LEADER_OF,Iran,0.95,March 2026,"","'Mojtaba Khamenei became the country's new supreme leader in March 2026 following the assassination of his father, Ali Khamenei, in those strikes.'",,,2026-03-16 19:06:06.752027+00
+148,Kenya,IS_LOCATED_IN,East Africa,0.95,"",East Africa,"Kenya, officially the Republic of Kenya, is a country located in East Africa.",,,2026-03-16 19:06:33.269809+00
+159,Cushitic speakers,SETTLED_IN,Kenya,0.95,"3,200-1,300 BC",lowlands,"Cushitic speakers first settled in the region's lowlands between 3,200 and 1,300 BC",,,2026-03-16 19:06:33.269809+00
+160,Nilotic-speaking pastoralists,MIGRATED_TO,Kenya,0.95,around 500 BC,from South Sudan,Nilotic-speaking pastoralists (ancestral to Kenya's Nilotic speakers) began migrating from present-day South Sudan into Kenya around 500 BC,,,2026-03-16 19:06:33.269809+00
+163,British Empire,ESTABLISHED,Kenya Colony,0.95,1920,Kenya,"Modern-day Kenya emerged from a protectorate, established by the British Empire in 1895, and the subsequent Kenya Colony, which began in 1920",,,2026-03-16 19:06:33.269809+00
+161,Bantu people,SETTLED_IN,Kenya,0.95,250 BC-500 AD,coast and interior,Bantu people settled at the coast and the interior between 250 BC and 500 AD,,,2026-03-16 19:06:33.269809+00
+162,European contact,BEGAN_IN,Kenya,0.95,1500 AD,"",European contact began in 1500 AD with the Portuguese Empire,,,2026-03-16 19:06:33.269809+00
+164,Mau Mau revolution,BEGAN_IN,Kenya,0.95,1952,"","Numerous disputes between the UK and the colony led to the Mau Mau revolution, which began in 1952",,,2026-03-16 19:06:33.269809+00
+166,Kenya,IS_MEMBER_OF,United Nations,0.95,"","",The country is a member of the United Nations,,,2026-03-16 19:06:33.269809+00
+165,Kenya,IS_MEMBER_OF,Commonwealth of Nations,0.95,"","","After independence, Kenya remained a member of the Commonwealth of Nations",,,2026-03-16 19:06:33.269809+00
+167,Kenya,IS_MEMBER_OF,World Bank,0.95,"","",The country is a member of ... the World Bank,,,2026-03-16 19:06:33.269809+00
+168,Kenya,IS_MEMBER_OF,International Monetary Fund,0.95,"","",The country is a member of ... the International Monetary Fund,,,2026-03-16 19:06:33.269809+00
+155,Kenya,BORDERED_BY,Indian Ocean,0.95,"",southeast,"Going clockwise, Kenya is bordered by ... the Indian Ocean to the southeast",,,2026-03-16 19:06:33.269809+00
+176,Tea,IS_TRADITIONAL_CASH_CROP_IN,Kenya,0.95,"","",tea and coffee are the sector's traditional cash crops,,,2026-03-16 19:06:33.269809+00
+177,Coffee,IS_TRADITIONAL_CASH_CROP_IN,Kenya,0.95,"","",tea and coffee are the sector's traditional cash crops,,,2026-03-16 19:06:33.269809+00
+179,Tourism,IS_MAJOR_ECONOMIC_DRIVER_IN,Kenya,0.95,"","","The service industry, particularly tourism, is also one of the country's major economic drivers",,,2026-03-16 19:06:33.269809+00
+182,European Union,IS_SECOND_LARGEST_EXPORT_MARKET_FOR,Kenya,0.95,"","",followed by the European Union,,,2026-03-16 19:06:33.269809+00
+178,Fresh flowers,ARE_FAST_GROWING_EXPORT_IN,Kenya,0.95,"","",while fresh flowers are a fast-growing export,,,2026-03-16 19:06:33.269809+00
+181,Africa,IS_LARGEST_EXPORT_MARKET_FOR,Kenya,0.95,"","",Africa is Kenya's largest export market,,,2026-03-16 19:06:33.269809+00
+180,Kenya,IS_MEMBER_OF,East African Community,0.95,"","",Kenya is a member of the East African Community trade bloc,,,2026-03-16 19:06:33.269809+00
+184,Ukraine,BORDERS,Russia,0.97,"",east and northeast,"It is the second-largest country in Europe after Russia, which borders it to the east and northeast.",,,2026-03-16 19:07:05.253404+00
+186,Ukraine,BORDERS,Poland,0.97,"",west,Ukraine also borders Belarus to the north; Poland and Slovakia to the west;,,,2026-03-16 19:07:05.253404+00
+188,Ukraine,BORDERS,Hungary,0.97,"",southwest,"Hungary, Romania and Moldova to the southwest;",,,2026-03-16 19:07:05.253404+00
+187,Ukraine,BORDERS,Slovakia,0.97,"",west,Ukraine also borders Belarus to the north; Poland and Slovakia to the west;,,,2026-03-16 19:07:05.253404+00
+189,Ukraine,BORDERS,Romania,0.97,"",southwest,"Hungary, Romania and Moldova to the southwest;",,,2026-03-16 19:07:05.253404+00
+183,Ukraine,IS_LOCATED_IN,Eastern Europe,0.97,"",Eastern Europe,Ukraine is a country in Eastern Europe.,,,2026-03-16 19:07:05.253404+00
+172,Kenya,IS_MAJOR_NON_NATO_ALLY_OF,United States,0.95,"","",It is also a major non-NATO ally of the United States,,,2026-03-16 19:06:33.269809+00
+196,Ukrainian People's Republic,WAS_FORMED,1917,0.97,1917,Ukraine,"following the Russian Revolution in 1917, the short-lived Ukrainian People's Republic was formed.",,,2026-03-16 19:07:05.253404+00
+198,Ukraine,GAINED_INDEPENDENCE,1991,0.97,1991,Ukraine,"Ukraine gained independence in 1991 as the Soviet Union dissolved,",,,2026-03-16 19:07:05.253404+00
+199,Ukraine,DECLARED,neutral,0.97,1991,Ukraine,"Ukraine gained independence in 1991 as the Soviet Union dissolved, declaring itself neutral.",,,2026-03-16 19:07:05.253404+00
+200,Ukraine,ADOPTED,new constitution,0.97,1996,Ukraine,A new constitution was adopted in 1996 as the country transitioned to a free market liberal democracy,,,2026-03-16 19:07:05.253404+00
+203,Russia,OCCUPIED,Crimean Peninsula,0.97,2014,Crimean Peninsula,"at the end of which Russia unilaterally occupied and annexed Ukraine's Crimean Peninsula,",,,2026-03-16 19:07:05.253404+00
+204,Russia,ANNEXED,Crimean Peninsula,0.97,2014,Crimean Peninsula,"at the end of which Russia unilaterally occupied and annexed Ukraine's Crimean Peninsula,",,,2026-03-16 19:07:05.253404+00
+201,Orange Revolution,OCCURRED,2004-2005,0.97,2004-2005,Ukraine,The Orange Revolution of 2004–2005 ushered electoral and constitutional reforms.,,,2026-03-16 19:07:05.253404+00
+205,Russia,INVADED,Ukraine,0.97,2022,Ukraine,The 2022 Russian invasion of Ukraine began the current phase of the war.,,,2026-03-16 19:07:05.253404+00
+202,Euromaidan,OCCURRED,2014,0.97,2014,Ukraine,"Resurgent political crises prompted a series of mass demonstrations in 2014 known as the Euromaidan,",,,2026-03-16 19:07:05.253404+00
+206,Ukraine,IS,unitary state,0.97,"",Ukraine,Ukraine is a unitary state and its system of government is a semi-presidential republic.,,,2026-03-16 19:07:05.253404+00
+207,Ukraine,HAS_SYSTEM_OF_GOVERNMENT,semi-presidential republic,0.97,"",Ukraine,Ukraine is a unitary state and its system of government is a semi-presidential republic.,,,2026-03-16 19:07:05.253404+00
+208,Ukraine,HAS_ECONOMY,transition economy,0.97,"",Ukraine,Ukraine has a transition economy and has the lowest nominal GDP per capita in Europe as of 2024.,,,2026-03-16 19:07:05.253404+00
+486,Belgium,BORDERED_BY,Germany,0.95,2026-03-16,East,'it is bordered by ... Germany to the east',,,2026-03-16 19:19:55.005088+00
+2528,Lebanon,WAS_OCCUPIED_BY,Israel,0.95,1985-2000,"",'and Israel from 1985 to 2000.',,,2026-03-16 20:57:22.318221+00
+2980,Qatar,RANKS,42nd in Human Development Index,0.95,"",Arab world,"'It ranks 42nd in the Human Development Index, the third-highest HDI in the Arab world'",,,2026-03-16 21:12:23.461772+00
+2981,Qatar,HAS_ECONOMY,high-income economy,0.95,"","","'It is a high-income economy, backed by the world's third-largest natural gas reserves and oil reserves'",,,2026-03-16 21:12:23.461772+00
+2983,Qatar,HAS_GDP,fourth-highest GDP (PPP) per capita,0.95,"",world,'The country has the fourth-highest GDP (PPP) per capita in the world',,,2026-03-16 21:12:23.461772+00
+2982,Qatar,EMERGED_AS,major non-NATO ally of the United States,0.95,21st century,"","'In the 21st century, Qatar emerged as both a major non-NATO ally of the United States'",,,2026-03-16 21:12:23.461772+00
+3180,Narges Mohammadi,WORKED_WITH,Shirin Ebadi,0.97,"","","'headed by her fellow Nobel Peace Prize laureate, Shirin Ebadi'",,,2026-03-16 21:19:09.482737+00
+3181,Narges Mohammadi,SENTENCED_TO,16 years imprisonment,0.97,May 2016,Tehran,'sentenced in Tehran to 16 years' imprisonment',,,2026-03-16 21:19:09.482737+00
+2,United Kingdom,COMPRISING,"England, Scotland, Wales, Northern Ireland",0.7801029995663982,"","","'It comprises England, Scotland, Wales and Northern Ireland'",,,2026-03-16 19:03:16.670205+00
+3,United Kingdom,HAS_POPULATION,69 million,0.7801029995663982,2024,"",'a population of over 69 million in 2024',,,2026-03-16 19:03:16.670205+00
+7,United Kingdom,BECAME,First Industrialised Country,0.7801029995663982,19th century,"",'The UK became the first industrialised country',,,2026-03-16 19:03:16.670205+00
+11,Elon Musk,EMIGRATED_TO,Canada,0.7801029995663982,1989,Canada,"Born into a wealthy family in Pretoria, South Africa, Musk emigrated in 1989 to Canada",,,2026-03-16 19:03:26.595916+00
+22,Elon Musk,ACQUIRED,Twitter,0.95,2022,"","In 2022, he acquired the social network Twitter",,,2026-03-16 19:03:26.595916+00
+23,Elon Musk,REBRANDED,Twitter,0.95,2023,"","implementing significant changes, and rebranding it as X in 2023",,,2026-03-16 19:03:26.595916+00
+24,Elon Musk,SUPPORTED,Donald Trump,0.95,2024,United States,"Musk was the largest donor in the 2024 U.S. presidential election, where he supported Donald Trump",,,2026-03-16 19:03:26.595916+00
+1244,Cocos Islands,COMPRISING,27 coral islands,0.9299999999999999,"","",'comprising a small archipelago approximately midway between Australia and Sri Lanka',,,2026-03-16 19:47:34.284984+00
+1245,Cocos Islands,ADMINISTERED_BY,Australian federal government,0.95,"","","'administered by the Australian federal government's Department of Infrastructure, Transport, Regional Development, Communications and the Arts'",,,2026-03-16 19:47:34.284984+00
+1248,Cocos Islands,ANNEXED_BY,British,0.95,1857,"",'The British annexed the islands in 1857',,,2026-03-16 19:47:34.284984+00
+45,France,SHARES_BORDER_WITH,Luxembourg,0.95,"",Metropolitan France,'Metropolitan France shares borders with Belgium and Luxembourg to the north;',,,2026-03-16 19:04:31.235776+00
+47,France,SHARES_BORDER_WITH,Switzerland,0.95,"",Metropolitan France,'Switzerland to the east;',,,2026-03-16 19:04:31.235776+00
+63,France,REACHED_ZENITH_UNDER,Napoleon Bonaparte,0.95,early 19th century,"",'France reached its political and military zenith in the early 19th century under Napoleon Bonaparte',,,2026-03-16 19:04:31.235776+00
+66,France,WAS_LIBERATED_IN,1944,0.95,1944,"",'Following its liberation in 1944',,,2026-03-16 19:04:31.235776+00
+81,Land of Israel,WAS_HOME_TO,ancient Canaanites,0.95,"","","'The Land of Israel, also called Palestine or the Holy Land, was home to the ancient Canaanites and later the kingdoms of Israel and Judah.'",,,2026-03-16 19:05:01.414762+00
+85,Israel,INTRODUCED,limited Palestinian self-rule,0.95,1993,West Bank and Gaza,"'The 1993 Oslo Accords introduced limited Palestinian self-rule in the West Bank and Gaza, while the 2020 Abraham Accords normalised ties with more Arab states, but the Israeli–Palestinian conflict persists.'",,,2026-03-16 19:05:01.414762+00
+86,Israel,NORMALISED_TIES,Arab states,0.95,2020,"","'The 1993 Oslo Accords introduced limited Palestinian self-rule in the West Bank and Gaza, while the 2020 Abraham Accords normalised ties with more Arab states, but the Israeli–Palestinian conflict persists.'",,,2026-03-16 19:05:01.414762+00
+89,Israel,ALLOCATES,larger share of its economy to research and development,0.95,"","","'One of the world's most technologically advanced countries, Israel allocates a larger share of its economy to research and development than any other state and is believed to possess nuclear weapons.'",,,2026-03-16 19:05:01.414762+00
+97,Rus',ADOPTED,Orthodox Christianity,0.95,988,"",Rus' adopted Orthodox Christianity from the Byzantine Empire in 988.,,,2026-03-16 19:05:22.939392+00
+98,Grand Principality of Moscow,BEGAN_UNIFYING,Russian lands,0.95,late 13th century,"","Following its disintegration, the Grand Principality of Moscow began the process of unifying Russian lands in the late 13th century, leading to the formation of the Tsardom of Russia in 1547.",,,2026-03-16 19:05:22.939392+00
+114,India,SHARES_BORDER_WITH,China,0.95,"",North,"'China, Nepal, and Bhutan to the north;'",,,2026-03-16 19:05:46.902192+00
+119,India,IS_A,Federal republic,0.95,1950,"","'India has been a federal republic since 1950,'",,,2026-03-16 19:05:46.902192+00
+121,India,HAS_NUCLEAR_WEAPONS,Nuclear weapons,0.95,"","",'It is a nuclear-weapon state',,,2026-03-16 19:05:46.902192+00
+118,India,HAS_POPULATION_OF,1.4 billion,0.95,2023,"",'India's population grew from 361 million in 1951 to over 1.4 billion in 2023.',,,2026-03-16 19:05:46.902192+00
+123,Japan,LOCATED_IN,Pacific Ocean,0.97,"",northeast coast of the Asian mainland,'Located in the Pacific Ocean off the northeast coast of the Asian mainland',,,2026-03-16 19:05:55.083814+00
+130,Japan,ANNEXED,Korea,0.97,1910,"",'The country annexed Korea in 1910',,,2026-03-16 19:05:55.083814+00
+137,Iran,BORDERS,Iraq,0.95,2026-03-16,West,"'It borders Iraq to the west, Turkey, Azerbaijan, and Armenia to the northwest, the Caspian Sea to the north, Turkmenistan to the northeast, Afghanistan to the east, Pakistan to the southeast, and the Gulf of Oman and the Persian Gulf to the south.'",,,2026-03-16 19:06:06.752027+00
+153,Kenya,BORDERED_BY,Ethiopia,0.95,"",north,"Going clockwise, Kenya is bordered by ... Ethiopia to the north",,,2026-03-16 19:06:33.269809+00
+154,Kenya,BORDERED_BY,Somalia,0.95,"",east,"Going clockwise, Kenya is bordered by ... Somalia to the east",,,2026-03-16 19:06:33.269809+00
+156,Kenya,BORDERED_BY,Tanzania,0.95,"",southwest,"Going clockwise, Kenya is bordered by ... Tanzania to the southwest",,,2026-03-16 19:06:33.269809+00
+157,Kenya,BORDERED_BY,Lake Victoria,0.95,"",west,"Going clockwise, Kenya is bordered by ... Lake Victoria and Uganda to the west",,,2026-03-16 19:06:33.269809+00
+158,Kenya,BORDERED_BY,Uganda,0.95,"",west,"Going clockwise, Kenya is bordered by ... Lake Victoria and Uganda to the west",,,2026-03-16 19:06:33.269809+00
+171,Kenya,IS_MEMBER_OF,International Criminal Court,0.95,"","",The country is a member of ... the International Criminal Court,,,2026-03-16 19:06:33.269809+00
+175,Agriculture,IS_LARGEST_ECONOMIC_SECTOR_IN,Kenya,0.95,"","",Agriculture is the country's largest economic sector,,,2026-03-16 19:06:33.269809+00
+185,Ukraine,BORDERS,Belarus,0.97,"",north,Ukraine also borders Belarus to the north;,,,2026-03-16 19:07:05.253404+00
+192,Ukraine,HAS_OFFICIAL_LANGUAGE,Ukrainian,0.97,"","",The official language of Ukraine is Ukrainian.,,,2026-03-16 19:07:05.253404+00
+195,Kievan Rus',BECAME,largest and most powerful realm in Europe,0.97,10th and 11th centuries,Europe,"Kievan Rus' became the largest and most powerful realm in Europe in the 10th and 11th centuries,",,,2026-03-16 19:07:05.253404+00

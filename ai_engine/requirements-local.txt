@@ -1,0 +1,5 @@
+-r requirements.txt
+# torch and sentence-transformers are not required in production (remote inference enabled)
+# transformers and torch-geometric are optional local modeling packages and were removed for production lock-down
+spacy==3.7.2
+gliner-spacy==0.1.5
