@@ -339,6 +339,22 @@ async function runMigrations() {
             await session.run(`CREATE INDEX entity_name_idx IF NOT EXISTS FOR (e:Entity) ON (e.name)`);
             await session.run(`CREATE INDEX claim_epistemic_idx IF NOT EXISTS FOR (c:Claim) ON (c.epistemic_score)`);
             
+            // Neo4j 5.x HNSW vector index for claim embeddings
+            // Enables db.index.vector.queryNodes() in 5_resolution.py (single round-trip vs Python cosine loop)
+            try {
+                await session.run(`
+                    CREATE VECTOR INDEX claim_embedding_idx IF NOT EXISTS
+                    FOR (c:Claim) ON c.embedding
+                    OPTIONS {indexConfig: {
+                        \`vector.dimensions\`: 768,
+                        \`vector.similarity_function\`: 'cosine'
+                    }}
+                `);
+            } catch (e) {
+                // Older Neo4j version or index already exists — non-fatal
+                console.log('[Neo4j] Vector index skipped (may need Neo4j 5.11+):', e.message);
+            }
+            
             console.log('[Neo4j] ✓ Schema ready');
         } finally {
             await session.close();

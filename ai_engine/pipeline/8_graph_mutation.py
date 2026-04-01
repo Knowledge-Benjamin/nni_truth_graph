@@ -305,7 +305,16 @@ def mutation_worker(worker_id: int):
                         JOIN sources s        ON ru.source_id = s.id
                         LEFT JOIN claim_provenance cp ON cp.claim_id = ec.id
                         WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-                          AND ec.status IN ('AUTO_APPROVE', 'PROCESSING')
+                          AND (
+                            ec.status IN ('AUTO_APPROVE', 'PROCESSING')
+                            OR (
+                              ec.status = 'FAILED_MUTATION'
+                              AND COALESCE((ec.ai_metadata->>'mutation_retries')::int, 0) < 3
+                            )
+                          )
+                        ORDER BY
+                          CASE WHEN ec.status = 'FAILED_MUTATION' THEN 1 ELSE 0 END,
+                          ec.id
                         LIMIT 1
                         FOR UPDATE OF ec SKIP LOCKED;
                     """)
@@ -407,14 +416,36 @@ def mutation_worker(worker_id: int):
                               f"Score={score:.3f}")
 
                     except Exception as ne:
-                        cur.execute("""
-                            UPDATE extracted_claims
-                            SET status = 'FAILED_MUTATION',
-                                pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-                            WHERE id = %s
-                        """, (claim_id,))
+                        import json as _json
+                        try:
+                            _ai = _json.loads(ai_metadata) if ai_metadata else {}
+                        except Exception:
+                            _ai = {}
+                        retries = _ai.get('mutation_retries', 0) + 1
+                        _ai['mutation_retries'] = retries
+                        _ai['last_mutation_error'] = str(ne)[:200]
+
+                        if retries >= 3:
+                            # Escalate to dead-letter — permanently visible in dashboard
+                            cur.execute("""
+                                UPDATE extracted_claims
+                                SET status = 'DEAD_LETTER',
+                                    pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
+                                    ai_metadata = ai_metadata || %s::jsonb
+                                WHERE id = %s
+                            """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
+                            print(f"      -> [W-{worker_id}] DEAD_LETTER after {retries} attempts: {ne}")
+                        else:
+                            # Re-queue for retry with incremented counter
+                            cur.execute("""
+                                UPDATE extracted_claims
+                                SET status = 'FAILED_MUTATION',
+                                    pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
+                                    ai_metadata = ai_metadata || %s::jsonb
+                                WHERE id = %s
+                            """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
+                            print(f"      -> [W-{worker_id}] FAILED (attempt {retries}/3): {ne}")
                         pg_conn.commit()
-                        print(f"      -> [W-{worker_id}] FAILED: {ne}")
                     items_processed += 1
                     time.sleep(0.05)
 

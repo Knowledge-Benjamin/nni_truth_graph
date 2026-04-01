@@ -260,38 +260,69 @@ def fire_new_ingestion(pg_conn, url: str, source_name: str):
 def neo4j_cross_reference(subject: str, predicate: str, obj: str, claim_embedding: list[float]) -> dict:
     """
     Query Neo4j for existing claims similar to this one.
+    Primary path: Neo4j 5.x vector index (single round-trip HNSW query).
+    Fallback: Python cosine loop over predicate-filtered scan (used if index not yet built).
     Returns the best matching claim and the classification.
     """
     result: dict = {"stance": "ORIGINAL", "matched_claim_id": None, "similarity": 0.0, "contradiction_weights": []}
 
     try:
         with neo4j_driver.session() as session:
-            # Find all claims with same predicate family (fast pre-filter)
-            # Guard: only query claims that already have the embedding property set
-            records = session.run("""
-                MATCH (c:Claim)
-                WHERE c.predicate = $predicate AND c.embedding IS NOT NULL
-                RETURN c.id AS id, c.subject AS subj, c.object AS obj,
-                       c.embedding AS emb, c.epistemic_score AS es
-                LIMIT 200
-            """, predicate=predicate).data()
+
+            # ── PRIMARY PATH: Neo4j 5.x vector index ──────────────────────────
+            # Requires: CREATE VECTOR INDEX claim_embedding_idx IF NOT EXISTS
+            #   FOR (c:Claim) ON c.embedding
+            #   OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}
+            records = []
+            use_vector_index = False
+            try:
+                vq = session.run("""
+                    CALL db.index.vector.queryNodes('claim_embedding_idx', 5, $embedding)
+                    YIELD node AS c, score
+                    WHERE c.predicate = $predicate
+                    RETURN c.id AS id, c.subject AS subj, c.object AS obj,
+                           c.embedding AS emb, c.epistemic_score AS es,
+                           score AS vector_score
+                """, embedding=claim_embedding, predicate=predicate).data()
+                if vq:
+                    records = vq
+                    use_vector_index = True
+            except Exception:
+                # Index not yet created — fall back to full Python cosine scan
+                pass
+
+            # ── FALLBACK: predicate-filtered Python cosine loop ───────────────
+            if not use_vector_index:
+                records = session.run("""
+                    MATCH (c:Claim)
+                    WHERE c.predicate = $predicate AND c.embedding IS NOT NULL
+                    RETURN c.id AS id, c.subject AS subj, c.object AS obj,
+                           c.embedding AS emb, c.epistemic_score AS es
+                    LIMIT 200
+                """, predicate=predicate).data()
 
             best_sim = 0.0
             best_id  = None
             best_es  = 0.0
+            best_rec = None
 
             for rec in records:
-                if rec.get("emb") is None:
-                    continue
-                neo_emb = rec["emb"]
-                if len(neo_emb) != len(claim_embedding):
-                    continue
-                sim = cosine_similarity(claim_embedding, neo_emb)
+                # Vector index already gives us score; fallback computes cosine manually
+                if use_vector_index:
+                    sim = float(rec.get("vector_score", 0.0))
+                else:
+                    if rec.get("emb") is None:
+                        continue
+                    neo_emb = rec["emb"]
+                    if len(neo_emb) != len(claim_embedding):
+                        continue
+                    sim = cosine_similarity(claim_embedding, neo_emb)
 
                 if sim > best_sim:
                     best_sim = sim
                     best_id  = rec["id"]
                     best_es  = rec.get("es") or 0.4
+                    best_rec = rec
 
             if best_sim >= 0.95:
                 # Very high similarity — same claim, invert predicate meaning to detect contradiction
@@ -299,7 +330,7 @@ def neo4j_cross_reference(subject: str, predicate: str, obj: str, claim_embeddin
                 stance_prompt = f"""
 You are a logical stance detector. Compare these two claim objects:
 Claim A object: "{obj}"
-Claim B object: "{rec['obj'] if records else ''}"
+Claim B object: "{best_rec['obj'] if best_rec else ''}"
 
 Given they share subject "{subject}" and predicate "{predicate}", are they:
 - DUPLICATE (semantically identical)

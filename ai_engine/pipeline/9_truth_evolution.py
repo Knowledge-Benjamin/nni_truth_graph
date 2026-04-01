@@ -329,14 +329,12 @@ def evolution_sweep():
                                        matched_id, matched_score)
 
                 elif stance == "CORROBORATES":
-                    # Boost corroborated claim's trust slightly
-                    session.run("""
-                        MATCH (c:Claim {id: $id})
-                        SET c.epistemic_score = LEAST(1.0,
-                              c.epistemic_score + 0.02)
-                    """, id=str(matched_id))
+                    # Stage 6 (deduplication) already inserted the claim_corroborations
+                    # row and recalculated epistemic_score. Stage 9 only needs to apply
+                    # the minor source trust nudge to reward corroborating sources.
+                    # DO NOT re-boost epistemic_score here — that causes double-counting.
                     adjust_source_trust(pg_cur, source_id, +0.005)
-                    print(f"    [CORROBORATES] Claim {matched_id} trust boosted.")
+                    print(f"    [CORROBORATES] Claim {matched_id} acknowledged. Source trust +0.005.")
 
                 # Mark as evolution-processed to avoid re-processing
                 pg_cur.execute("""
