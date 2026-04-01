@@ -13,12 +13,21 @@ CACHED_COLLINFO = None
 COMMON_CRAWL_BASE = "https://index.commoncrawl.org"
 HEADERS = {"User-Agent": "KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)"}
 
+import asyncio
+
 @app.on_event("startup")
 async def startup_event():
+    """Fire-and-forget: load collinfo in the background so the server is immediately healthy."""
+    asyncio.create_task(_load_collinfo())
+
+async def _load_collinfo():
     global CACHED_COLLINFO
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{COMMON_CRAWL_BASE}/collinfo.json", headers=HEADERS, timeout=30.0)
+            resp = await asyncio.wait_for(
+                client.get(f"{COMMON_CRAWL_BASE}/collinfo.json", headers=HEADERS),
+                timeout=30.0
+            )
             CACHED_COLLINFO = resp.json()
             logger.info(f"Loaded collinfo: {len(CACHED_COLLINFO)} indexes")
     except Exception as e:

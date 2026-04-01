@@ -86,7 +86,7 @@ MAX_WORKERS = 4
 
 WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
 SEARXNG_SEARCH_URL = f"{SEARXNG_URL}/search"
-CC_PROXY_BASE = "https://knowledgebenji-cc-proxy.hf.space"
+CC_PROXY_BASE = "https://cc-proxy-qvem3ril2q-uc.a.run.app"
 
 _cc_index_url_cache: str | None = None
 
