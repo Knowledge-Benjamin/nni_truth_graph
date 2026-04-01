@@ -25,3 +25,7 @@ cdx-toolkit>=0.9.9          # Common Crawl CDX API client with polite paging
 # Task Queue
 celery[sqlalchemy]==5.3.6
 kagglehub
+
+# Multimedia Engine
+yt-dlp>=2024.03.10          # Autonomous video extraction
+opencv-python-headless>=4.9.0  # Keyframe extraction (headless for server env)

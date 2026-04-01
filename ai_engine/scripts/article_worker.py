@@ -120,7 +120,8 @@ def fetch_entity_claims(pg_conn, entity_name: str) -> list[dict]:
                 s.name           AS source_name,
                 cp.internet_original_url   AS original_url,
                 cp.internet_original_source AS original_source,
-                ec.status        AS claim_status
+                ec.status        AS claim_status,
+                ec.ai_metadata
             FROM extracted_claims ec
             JOIN raw_articles ra ON ec.article_id = ra.id
             JOIN raw_urls     ru ON ra.url_id = ru.id
@@ -158,6 +159,12 @@ def fetch_entity_claims(pg_conn, entity_name: str) -> list[dict]:
                 if tl:
                     c["corroboration_timeline"] = tl
                     c["corroboration_count"] = max(c.get("corroboration_count", 1), len(tl))
+                
+                # Parse visual AI metadata
+                try:
+                    c['synthetic_prob'] = json.loads(c.get('ai_metadata') or '{}').get('synthetic_probability')
+                except Exception:
+                    c['synthetic_prob'] = None
                     
         return claims
 
@@ -262,6 +269,11 @@ def generate_section(entity_name: str, section_name: str, claims: list[dict], ex
         if c.get('spatial_anchor'):  stmt += f" (where: {c['spatial_anchor']})"
         
         # --- NEW: EVOLUTION TIMELINE INJECTION (Historiography Engine) ---
+        if c.get('synthetic_prob') is not None and c.get('synthetic_prob') > 0.85:
+            stmt += f"\n   *Visual Evidence Warning:* 🚨 Detected as likely AI-Generated / Deepfake ({round(c['synthetic_prob']*100)}% synthetic certainty)"
+        elif c.get('synthetic_prob') is not None and c.get('synthetic_prob') < 0.15:
+            stmt += f"\n   *Visual Evidence:* ✅ Authentic visual media verified"
+            
         if c.get('corroboration_timeline'):
             stmt += "\n   *Information Evolution Timeline:*"
             for idx, corr in enumerate(c['corroboration_timeline'][:5]): # Cap at 5 to maintain context window length

@@ -371,6 +371,18 @@
             "url": "https://ubc.go.ug/feed",
             "category": "World",
             "trust_score": 7
+        },
+        {
+            "name": "Reuters Video Feed",
+            "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChqUTb7kYRX8-EiaN3XFrSQ",
+            "category": "Video",
+            "trust_score": 9
+        },
+        {
+            "name": "Associated Press Video",
+            "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC52X5wxH_f2Q4s2Mh_3Hq8Q",
+            "category": "Video",
+            "trust_score": 9
         }
     ]
 }

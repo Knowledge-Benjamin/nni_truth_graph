@@ -46,6 +46,9 @@ PRESSURE_QUERIES = {
     "2_scrape.py": """
         SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
     """,
+    "2a_video_scrape.py": """
+        SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND domain IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
+    """,
     "3_classification.py": """
         SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION'
     """,
@@ -75,6 +78,7 @@ PRESSURE_QUERIES = {
 PIPELINE_ORDER = [
     "1_ingest.py",
     "2_scrape.py",
+    "2a_video_scrape.py",
     "3_classification.py",
     "4_extraction.py",
     "5_resolution.py",
@@ -139,6 +143,7 @@ class StageScheduler:
     STAGE_LABELS = {
         "1_ingest.py":         "S1  Ingest        ",
         "2_scrape.py":         "S2  Scrape        ",
+        "2a_video_scrape.py":  "S2A VideoScrape   ",
         "3_classification.py": "S3  Classify      ",
         "4_extraction.py":     "S4  Extract       ",
         "5_resolution.py":     "S5  Resolution    ",
@@ -166,6 +171,7 @@ class StageScheduler:
         self._REFIRE_MIN = {
             "1_ingest.py":         S1_INTERVAL,
             "2_scrape.py":         2,   # Scraping is fast per-item, OK to re-dispatch often
+            "2a_video_scrape.py":  4,   # yt-dlp + whisper transcription takes a bit longer
             "3_classification.py": 2,
             "4_extraction.py":     4,   # LLM — give it time
             "5_resolution.py":     4,   # Serper + HF — slow

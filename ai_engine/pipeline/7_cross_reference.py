@@ -185,7 +185,8 @@ def cross_ref_worker(worker_id: int):
                         support_count=support_count,
                         contradiction_weights=contradiction_weights,
                         days_since_extracted=0,
-                        historical_source_reliability=src_trust or 0.40
+                        historical_source_reliability=src_trust or 0.40,
+                        media_synthetic_prob=ai_data.get("synthetic_probability")
                     )
 
                     routing = _scorer.determine_routing(new_score)

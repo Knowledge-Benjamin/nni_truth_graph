@@ -32,7 +32,8 @@ class EpistemicTrustScorer:
                                   contradiction_weights: list[float] = None, 
                                   days_since_extracted: int = 0,
                                   historical_source_reliability: Optional[float] = None,
-                                  corroboration_records: Optional[list[dict]] = None) -> float:
+                                  corroboration_records: Optional[list[dict]] = None,
+                                  media_synthetic_prob: Optional[float] = None) -> float:
         """
         Calculates the final Epistemic Score [0.0 - 1.0] for a claim.
         
@@ -44,7 +45,22 @@ class EpistemicTrustScorer:
             days_since_extracted: Age of the original claim.
             historical_source_reliability: Dynamically calculated reliability of the source.
             corroboration_records: Fossil Record array containing dicts of {'timestamp': datetime, 'source_tier': int, 'source_trust': float}.
+            media_synthetic_prob: Float [0.0 - 1.0] from the VisionInferenceServer (Deepfake/AI synthesis likelihood).
         """
+        # 0. Epsilon (Visual Evidence) Absolute Overrides
+        epsilon_visual = 0.0
+        if media_synthetic_prob is not None:
+            if media_synthetic_prob > 0.85:
+                return 0.0  # Nuclear Epsilon Strike: Deepfake detected. Epistemic credibility is completely shattered.
+            elif media_synthetic_prob > 0.70:
+                epsilon_visual = -0.40  # Massive penalty: High suspicion of synthesis
+            elif media_synthetic_prob < 0.10:
+                epsilon_visual = 0.25   # The Photographic Proof Bonus: Cryptographically raw real media
+            elif media_synthetic_prob < 0.30:
+                epsilon_visual = 0.15   # Generally untouched visual support
+            else:
+                epsilon_visual = 0.0    # Ambiguous/Low-res media, rely on text algorithms
+                
         if contradiction_weights is None:
             contradiction_weights = []
 
@@ -130,7 +146,7 @@ class EpistemicTrustScorer:
             
         # Compile final score
         base_score = (alpha_ext * self.alpha_weight) + (beta_src * self.beta_weight)
-        final_score = base_score + gamma_net - delta_decay
+        final_score = base_score + gamma_net - delta_decay + epsilon_visual
         
         # Clamp between 0.0 and 1.0
         return max(0.0, min(1.0, final_score))
@@ -154,13 +170,21 @@ if __name__ == "__main__":
     
     # Scenario 1: Perfect Tier 1 Claim, High Confidence, No Contradictions
     score1 = scorer.calculate_epistemic_score(0.95, 1, 5, [], 5)
-    print(f"Scenario 1 (Strong Truth): {score1:.3f} -> {scorer.determine_routing(score1)}")
+    print(f"Scenario 1 (Strong Truth):             {score1:.3f} -> {scorer.determine_routing(score1)}")
     
     # Scenario 2: Social media claim, low extraction confidence, heavily contradicted
     score2 = scorer.calculate_epistemic_score(0.30, 3, 0, [0.85, 0.90], 10)
-    print(f"Scenario 2 (Debunked Rumor): {score2:.3f} -> {scorer.determine_routing(score2)}")
+    print(f"Scenario 2 (Debunked Rumor):           {score2:.3f} -> {scorer.determine_routing(score2)}")
     
     # Scenario 3: Novel scientific claim (Tier 1), moderate extraction confidence, highly controversial
     score3 = scorer.calculate_epistemic_score(0.75, 1, 1, [0.80, 0.82], 2)
-    print(f"Scenario 3 (Controversial Science): {score3:.3f} -> {scorer.determine_routing(score3)}")
+    print(f"Scenario 3 (Controversial Science):    {score3:.3f} -> {scorer.determine_routing(score3)}")
+
+    # Scenario 4: Deepfake Detected (Tier 3), High Corroboration (Bot Swarm)
+    score4 = scorer.calculate_epistemic_score(0.90, 3, 10, [], 1, media_synthetic_prob=0.99)
+    print(f"Scenario 4 (Deepfake Bot Swarm):       {score4:.3f} -> {scorer.determine_routing(score4)}")
+
+    # Scenario 5: Photographic Raw Proof (Tier 3 User filmed an event)
+    score5 = scorer.calculate_epistemic_score(0.85, 3, 0, [], 1, media_synthetic_prob=0.03)
+    print(f"Scenario 5 (Raw Citizen Journalism):   {score5:.3f} -> {scorer.determine_routing(score5)}")
 

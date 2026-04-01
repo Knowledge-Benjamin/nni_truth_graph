@@ -1158,4 +1158,25 @@ input {
   .hamburger-btn {
     display: none !important;
   }
+}
+
+/* ── Media Verification Portal ──────────────────────────────── */
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.upload-zone:hover {
+  border-color: rgba(56, 189, 248, 0.4) !important;
+  background: rgba(15, 23, 42, 0.6) !important;
+}
+
+.trace-card {
+  transition: all 0.2s ease-out;
+}
+.trace-card:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(251, 191, 36, 0.3) !important;
+  box-shadow: 0 4px 16px rgba(251, 191, 36, 0.05);
 }

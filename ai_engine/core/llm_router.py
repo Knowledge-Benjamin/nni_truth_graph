@@ -38,6 +38,12 @@ PROVIDERS = {
         "model_8b": "llama-3.1-8b-instant",
         "model_70b": "llama-3.3-70b-versatile"
     },
+    "GROQ_VISION": {
+        "base_url": None,
+        "weight": 50,
+        "env_vision": "GROQ_API_KEY",
+        "model_vision": "llama-3.2-90b-vision-preview"
+    },
     "OPENROUTER": {
         "base_url": "https://openrouter.ai/api/v1",
         "weight": 25,
@@ -137,9 +143,10 @@ class MultiProviderRouter:
         """Populate the 8B and 70B pools based on available .env keys."""
         for p_name, p_config in PROVIDERS.items():
             # Load 8B Keys
-            keys_8b = _load_keys_for_prefix(p_config["env_8b"])
-            for k in keys_8b:
-                self.clients_8b.append(RoutedClient(p_name, k, "8B", p_config))
+            if "env_8b" in p_config:
+                keys_8b = _load_keys_for_prefix(p_config["env_8b"])
+                for k in keys_8b:
+                    self.clients_8b.append(RoutedClient(p_name, k, "8B", p_config))
                 
             # Load 70B Keys
             if "env_70b" in p_config:

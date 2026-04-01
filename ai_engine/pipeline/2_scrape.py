@@ -65,6 +65,7 @@ def fetch_and_extract(url, page):
 
         html = None
         text = None
+        links = []
         try:
             # Emulate browser behavior but don't wait for total network idle (trackers keep it alive forever)
             # 'domcontentloaded' guarantees the HTML is there. We add a small explicit wait for hydration.
@@ -74,6 +75,13 @@ def fetch_and_extract(url, page):
             if response and response.ok:
                 html = page.content()
                 try:
+                    # Scope hyperlink discovery strictly to article body / main content area
+                    links = page.evaluate('''() => {
+                        const container = document.querySelector('article') || document.querySelector('[role="main"]') || document.body;
+                        return Array.from(container.querySelectorAll('a[href]'))
+                                    .map(a => a.href)
+                                    .filter(href => href.startsWith('http'));
+                    }''')
                     text = page.inner_text("body")
                 except Exception:
                     text = None
@@ -100,7 +108,7 @@ def fetch_and_extract(url, page):
         # If Playwright did not yield meaningful content, abort and let the
         # caller handle retries.
         if not html and not text:
-            return None, None
+            return None, None, []
 
         # Build a minimal "article" body from the page text (fallback to raw
         # HTML if needed). This is less fancy than trafilatura but robust and
@@ -127,11 +135,11 @@ def fetch_and_extract(url, page):
         except Exception:
             pass
 
-        return body, meta
+        return body, meta, links
 
     except Exception as e:
         print(f"      [FETCH ERROR] Failed reading {url}: {e}")
-        return None, None
+        return None, None, []
 
 def scraper_worker(worker_id):
     """
@@ -163,6 +171,15 @@ def scraper_worker(worker_id):
             conn = psycopg2.connect(DATABASE_URL)
             items_processed = 0
             
+            # Fetch the Master Graph trusted domain map for the Authority Filter
+            approved_domains_map = {}
+            with conn.cursor() as c:
+                 c.execute("SELECT id, domain FROM sources;")
+                 for s_id, dom in c.fetchall():
+                     approved_domains_map[dom] = s_id
+                     
+            video_whitelist = ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
+            
             # We need actual transactions for locking
             while items_processed < 50:
                 try:
@@ -172,6 +189,7 @@ def scraper_worker(worker_id):
                             SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
                             FROM raw_urls 
                             WHERE status IN ('PENDING_SCRAPE')
+                              AND domain NOT IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
                             LIMIT 1 
                             FOR UPDATE SKIP LOCKED;
                         """)
@@ -185,7 +203,9 @@ def scraper_worker(worker_id):
                         print(f"  [W-{worker_id}] Processing (attempt {retry_count+1}): {url}")
                         
                         # 2. Scrape it using the Playwright page
-                        raw_text, scraped_meta = fetch_and_extract(url, page)
+                        result = fetch_and_extract(url, page)
+                        raw_text, scraped_meta = result[0], result[1]
+                        discovered_links = result[2] if len(result) > 2 else []
                         
                         if raw_text and len(raw_text.strip()) > 100:
                             # 3. Successful scrape
@@ -208,23 +228,23 @@ def scraper_worker(worker_id):
                             
                             article_id = cursor.fetchone()[0]
                             
-                            # Insert media provenance if a hero image was discovered
                             image_url = s_meta.get('image')
                             if image_url:
                                 try:
                                     import requests
-                                    # Forward to Vision Server for SigLIP embedding and pHash
+                                    # Forward to Vision Server for SigLIP embedding, pHash, and Deepfake score
                                     VISION_URL = os.getenv("VISION_INFERENCE_URL", "http://localhost:7860")
                                     resp = requests.post(f"{VISION_URL}/embed_media", json={"image_urls": [image_url]}, timeout=10)
                                     if resp.status_code == 200:
                                         data = resp.json()
                                         embed = data["embeddings"][0]
-                                        phash = data["phashes"][0]
+                                        phash = data.get("phashes", [None])[0]
+                                        synth_prob = data.get("synthetic_prob", [0.0])[0]
                                         cursor.execute("""
-                                            INSERT INTO media_provenance (raw_article_id, media_url, phash, clip_embedding)
-                                            VALUES (%s, %s, %s, %s::vector)
-                                        """, (article_id, image_url, phash, embed))
-                                        print(f"      -> [VISION W-{worker_id}] Linked Hero Image via SigLIP Vector.")
+                                            INSERT INTO media_provenance (raw_article_id, media_url, phash, clip_embedding, synthetic_probability)
+                                            VALUES (%s, %s, %s, %s::vector, %s)
+                                        """, (article_id, image_url, phash, embed, float(synth_prob)))
+                                        print(f"      -> [VISION W-{worker_id}] Linked Hero Image via SigLIP Vector (Deepfake Prob: {synth_prob:.2f}).")
                                     else:
                                         # Store url silently if server offline
                                         cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
@@ -233,8 +253,36 @@ def scraper_worker(worker_id):
                                     cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
                                     print(f"      -> [VISION WARNING] Saved {image_url} but skipped SigLIP: {e}")
                             
+                            # --- CRAWLER INJECTION (4-Layer Heuristic) ---
+                            current_domain = urlparse(url).netloc.lstrip('www.')
+                            queued_links = 0
+                            for d_url in discovered_links:
+                                d_domain = urlparse(d_url).netloc.lstrip('www.')
+                                if not d_domain or d_domain == current_domain: continue # Self-loops
+                                
+                                # Ad & Spam Drop
+                                if any(x in d_url.lower() for x in ['utm_', 'affiliate', 'login', 'subscribe', 'privacy', 'signup', '/settings', 'cookie']):
+                                    continue
+                                    
+                                target_source_id = None
+                                if d_domain in video_whitelist:
+                                    # Fallback source ID if it's a raw video (it'll be handled natively)
+                                    target_source_id = approved_domains_map.get(d_domain, 1) 
+                                elif d_domain in approved_domains_map:
+                                    target_source_id = approved_domains_map[d_domain]
+                                    
+                                if target_source_id is not None:
+                                    try:
+                                        cursor.execute("""
+                                            INSERT INTO raw_urls (source_id, url, metadata, status)
+                                            VALUES (%s, %s, %s, 'PENDING_SCRAPE')
+                                            ON CONFLICT (url) DO NOTHING
+                                        """, (target_source_id, d_url, Json({"origin": "recursive_crawler", "source_article": url})))
+                                        queued_links += cursor.rowcount
+                                    except Exception: pass
+
                             cursor.execute("UPDATE raw_urls SET status = 'SCRAPED' WHERE id = %s", (url_id,))
-                            print(f"      -> [SUCCESS W-{worker_id}] Extracted {len(raw_text)} chars.")
+                            print(f"      -> [SUCCESS W-{worker_id}] Extracted {len(raw_text)} chars. Crawled {queued_links} authoritative links.")
                         elif scraped_meta == "paywall" or any(
                             urlparse(url).netloc.lstrip('www.') == p or
                             urlparse(url).netloc.lstrip('www.').endswith('.' + p)

@@ -1534,6 +1534,51 @@ export default function ExplorerPane() {
                                     <ScoreBar score={selectedNode.score} />
                                 </div>
 
+                                {selectedNode.media_items && selectedNode.media_items.length > 0 && (
+                                    <div style={{ marginBottom: 24 }}>
+                                        <h3 style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 8 }}>Visual Intelligence</h3>
+                                        {selectedNode.media_items.map((m, i) => (
+                                            <div key={i} style={{ 
+                                                marginBottom: 12, background: 'rgba(0,0,0,0.4)', borderRadius: 12, 
+                                                overflow: 'hidden', border: `1px solid ${m.synthetic_probability > 0.85 ? 'rgba(239, 68, 68, 0.5)' : 'rgba(16, 185, 129, 0.5)'}` 
+                                            }}>
+                                                {m.url && (
+                                                    <div style={{ position: 'relative' }}>
+                                                        <img src={m.url} alt="Evidence" style={{ 
+                                                            width: '100%', maxHeight: 200, objectFit: 'cover', 
+                                                            filter: m.synthetic_probability > 0.85 ? 'grayscale(80%) sepia(20%) hue-rotate(300deg)' : 'none' 
+                                                        }} />
+                                                        {m.synthetic_probability > 0.85 && (
+                                                            <div style={{
+                                                                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                background: 'rgba(239, 68, 68, 0.2)', backdropFilter: 'blur(1px)'
+                                                            }}>
+                                                                <span style={{ background: '#ef4444', color: 'white', padding: '4px 12px', borderRadius: 4, fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: 1 }}>Deepfake Rejected</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                <div style={{ padding: 12 }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <span style={{ fontSize: 12, fontWeight: 600, color: m.synthetic_probability > 0.85 ? '#fca5a5' : '#6ee7b7' }}>
+                                                            {m.synthetic_probability > 0.85 ? 'Detected: AI Synthetic Media' : 'Authentic Media Verified'}
+                                                        </span>
+                                                        <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                                                            {Math.round(m.synthetic_probability * 100)}% Synthetic
+                                                        </span>
+                                                    </div>
+                                                    {m.cross_modal_similarity > 0 && (
+                                                        <div style={{ fontSize: 11, color: '#cbd5e1', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                                                            <span>Text-Image Alignment:</span>
+                                                            <strong style={{ color: '#8b5cf6' }}>{Math.round(m.cross_modal_similarity * 100)}%</strong>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
                                 {selectedNode.quote_context && (
                                     <div style={{ marginBottom: 24 }}>
                                         <h3 style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 8 }}>Source Excerpt</h3>

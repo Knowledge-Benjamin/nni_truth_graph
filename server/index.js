@@ -59,7 +59,7 @@ app.use(cors({
     ],
     credentials: true
 }));
-app.use(express.json({ limit: '10kb' })); // Mitigate DoS via large payloads
+app.use(express.json({ limit: '10mb' })); // Increased for Base64 image uploads
 app.use(cookieParser());
 
 // ─── Database Connections ────────────────────────────────────────────────────
@@ -155,6 +155,23 @@ async function runMigrations() {
             await client.query(`
                 CREATE INDEX IF NOT EXISTS article_categories_embedding_idx 
                 ON article_categories USING hnsw (embedding vector_cosine_ops);
+            `);
+            
+            // 4b. media_provenance
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS media_provenance (
+                    id SERIAL PRIMARY KEY,
+                    raw_article_id INTEGER REFERENCES raw_articles(id) ON DELETE CASCADE,
+                    media_url TEXT NOT NULL,
+                    phash TEXT,
+                    clip_embedding VECTOR(512),
+                    synthetic_probability FLOAT
+                );
+            `);
+            
+            await client.query(`
+                CREATE INDEX IF NOT EXISTS media_provenance_clip_idx 
+                ON media_provenance USING hnsw (clip_embedding vector_cosine_ops);
             `);
             
             // 5. extracted_claims
@@ -341,6 +358,9 @@ app.use('/api/v1/b2b', b2bRoutes);
 
 const developerRoutes = require('./routes/developer');
 app.use('/api/developer', developerRoutes);
+
+const mediaRoutes = require('./routes/media');
+app.use('/api/media', mediaRoutes);
 
 
 

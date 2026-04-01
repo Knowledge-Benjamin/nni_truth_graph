@@ -79,14 +79,23 @@ def _add_corroboration(cur, canonical_id: int, duplicate_id: int):
     cur.execute("SELECT discovered_at, source_tier, source_trust FROM claim_corroborations WHERE claim_id = %s", (canonical_id,))
     records = [{"timestamp": r[0], "source_tier": r[1], "source_trust": r[2]} for r in cur.fetchall()]
     
-    cur.execute("SELECT extraction_confidence FROM extracted_claims WHERE id = %s", (canonical_id,))
+    cur.execute("SELECT extraction_confidence, ai_metadata FROM extracted_claims WHERE id = %s", (canonical_id,))
     c_conf_row = cur.fetchone()
     c_conf = c_conf_row[0] if c_conf_row else 0.5
+    c_ai_metadata = c_conf_row[1] if c_conf_row and len(c_conf_row) > 1 else None
+    
+    import json
+    try:
+        c_ai_data = json.loads(c_ai_metadata) if c_ai_metadata else {}
+    except Exception:
+        c_ai_data = {}
+    synth_prob = c_ai_data.get("synthetic_probability")
     
     new_score = _scorer.calculate_epistemic_score(
         extraction_confidence=c_conf, 
         source_tier=tier,
-        corroboration_records=records
+        corroboration_records=records,
+        media_synthetic_prob=synth_prob
     )
     cur.execute("UPDATE extracted_claims SET epistemic_score = %s WHERE id = %s", (float(new_score), canonical_id))
 

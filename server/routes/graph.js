@@ -1089,6 +1089,9 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
             // Evidence attached to each claim
             OPTIONAL MATCH (c)-[:SUPPORTED_BY]->(ev:Evidence)
 
+            // Visual Media attached to each claim
+            OPTIONAL MATCH (c)-[m_rel:SUPPORTED_BY]->(m:Media)
+
             // Stance edges between claims
             OPTIONAL MATCH (c)-[stance:EVOLVES|CORROBORATED_BY|CONTRADICTS]->(other:Claim)
             WHERE other IS NULL OR $showAll = true OR other.is_current = true
@@ -1101,6 +1104,13 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
                  collect(DISTINCT properties(subj)) AS subjects,
                  collect(DISTINCT properties(obj))  AS objects,
                  collect(DISTINCT properties(ev))   AS evidences,
+                 collect(DISTINCT {
+                     claim_id:               c.id,
+                     url:                    m.url,
+                     phash:                  m.phash,
+                     synthetic_probability:  m_rel.synthetic_probability,
+                     cross_modal_similarity: m_rel.cross_modal_similarity
+                 }) AS media_items,
                  collect(DISTINCT {
                      fromId:      c.id,
                      toId:        other.id,
@@ -1119,6 +1129,7 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
                    subjects,
                    objects,
                    evidences,
+                   media_items,
                    stanceEdges,
                    entityEdges,
                    structured_entities
@@ -1134,6 +1145,7 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
         const subjectsRaw = toPlain(rec.get('subjects') || []);
         const objectsRaw = toPlain(rec.get('objects') || []);
         const evidRaw = toPlain(rec.get('evidences') || []);
+        const mediaRaw = toPlain(rec.get('media_items') || []).filter(m => m.url);
         const stanceRaw = toPlain(rec.get('stanceEdges') || []);
         const entityEdgesRaw = toPlain(rec.get('entityEdges') || []);
         const strEntitiesRaw = toPlain(rec.get('structured_entities') || []);
@@ -1247,6 +1259,37 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
                     type: 'SUPPORTED_BY',
                     label: '',
                 });
+            }
+        }
+
+        // Media nodes
+        for (const m of mediaRaw) {
+            if (!m || !m.claim_id || !m.url) continue;
+            const mediaId = `m:${m.claim_id}:${m.url}`;
+            if (!nodesMap.has(mediaId)) {
+                nodesMap.set(mediaId, {
+                    id: mediaId,
+                    type: 'Media',
+                    label: 'Media',
+                    url: m.url,
+                    phash: m.phash,
+                    synthetic_probability: m.synthetic_probability || 0,
+                    cross_modal_similarity: m.cross_modal_similarity || 0,
+                });
+                edgesList.push({
+                    id: `msb-${m.claim_id}-${m.url}`,
+                    source: `c:${m.claim_id}`,
+                    target: mediaId,
+                    type: 'SUPPORTED_BY',
+                    label: '',
+                });
+                
+                // also stick the media objects on the claim node for easy inspector access
+                const cNode = nodesMap.get(`c:${m.claim_id}`);
+                if (cNode) {
+                    if (!cNode.media_items) cNode.media_items = [];
+                    cNode.media_items.push(m);
+                }
             }
         }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { Network, ShieldAlert, GitMerge, Search, Settings, LogIn, User, BookOpen, Terminal, Menu, X } from 'lucide-react';
+import { Network, ShieldAlert, GitMerge, Search, Settings, LogIn, User, BookOpen, Terminal, Menu, X, Camera } from 'lucide-react';
 import { api } from './api';
 import { authApi } from './api/auth';
 
@@ -15,6 +15,7 @@ import ArticleDashboard from './pages/ArticleDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import DeveloperDashboard from './pages/DeveloperDashboard';
 import ApiDocs from './pages/ApiDocs';
+import MediaPortal from './pages/MediaPortal';
 
 function App() {
     const formatSocialCount = (count) => {
@@ -36,6 +37,7 @@ function App() {
     else if (location.pathname.startsWith('/account')) activeTab = 'account';
     else if (location.pathname.startsWith('/developer')) activeTab = 'developer';
     else if (location.pathname.startsWith('/docs')) activeTab = 'docs';
+    else if (location.pathname.startsWith('/verify')) activeTab = 'verify';
 
     const [stats, setStats] = useState(null);
     const [user, setUser] = useState(null);
@@ -65,6 +67,7 @@ function App() {
     // All nav items compiled into one list for reuse in both desktop + mobile drawer
     const navItems = [
         { id: 'explore',       icon: <Search size={16} />,     label: 'Graph Explorer',   path: '/',               show: true },
+        { id: 'verify',        icon: <Camera size={16} />,     label: 'Media Portal',     path: '/verify',         show: true },
         { id: 'docs',          icon: <BookOpen size={16} />,   label: 'API Docs',         path: '/docs',           show: true },
         { id: 'contradictions',icon: <GitMerge size={16} />,   label: 'Controversies',    path: '/contradictions', show: user?.role === 'admin', badge: stats?.graph?.open_controversies },
         { id: 'review',        icon: <ShieldAlert size={16} />,label: 'Human Review',     path: '/review',         show: user?.role === 'admin', badge: stats?.pipeline?.human_review_pending, danger: stats?.pipeline?.human_review_pending > 0 },
@@ -271,6 +274,7 @@ function App() {
                     <Route path="/articles" element={<ProtectedRoute><ArticleDashboard /></ProtectedRoute>} />
                     <Route path="/developer" element={<ProtectedRoute><DeveloperDashboard /></ProtectedRoute>} />
                     <Route path="/docs" element={<ApiDocs />} />
+                    <Route path="/verify" element={<MediaPortal />} />
                 </Routes>
             </main>
         </div>

@@ -354,7 +354,7 @@ def resolution_worker(worker_id: int):
                     cur.execute("""
                         SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
                                ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
-                               ra.publish_date, ra.title, ru.url, s.epistemic_trust_score
+                               ra.publish_date, ra.title, ru.url, s.epistemic_trust_score, ec.ai_metadata
                         FROM extracted_claims ec
                         JOIN raw_articles ra ON ec.article_id = ra.id
                         JOIN raw_urls ru     ON ra.url_id = ru.id
@@ -370,7 +370,7 @@ def resolution_worker(worker_id: int):
                         break
 
                     (claim_id, subject, predicate, obj, temporal, spatial,
-                     extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust) = row
+                     extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust, ai_metadata) = row
 
                     print(f"  [W-{worker_id}] Resolving: [{predicate}] {subject[:30]} → {obj[:30]}")
 
@@ -473,13 +473,20 @@ def resolution_worker(worker_id: int):
                     days_old = (datetime.now(timezone.utc) - original_date).days if original_date else 0
                     support_count = 1 if final_stance == "CORROBORATES" else 0
 
+                    try:
+                        ai_data = json.loads(ai_metadata) if ai_metadata else {}
+                    except Exception:
+                        ai_data = {}
+                    media_synth_prob = ai_data.get("synthetic_probability")
+
                     new_score = _scorer.calculate_epistemic_score(
                         extraction_confidence=extr_conf,
                         source_tier=1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3),
                         support_count=support_count,
                         contradiction_weights=neo4j_result["contradiction_weights"],
                         days_since_extracted=days_old,
-                        historical_source_reliability=src_trust
+                        historical_source_reliability=src_trust,
+                        media_synthetic_prob=media_synth_prob
                     )
 
                     routing = _scorer.determine_routing(new_score)

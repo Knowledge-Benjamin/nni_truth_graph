@@ -7,6 +7,9 @@ ENV PYTHONUNBUFFERED=1
 # Set the working directory to the parent root
 WORKDIR /app
 
+# Install OS dependencies for Video Scraping (yt-dlp audio extraction requires ffmpeg)
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies (copy ONLY requirements first for layer caching)
 COPY ai_engine/requirements.txt /app/ai_engine/
 RUN pip install --no-cache-dir -r ai_engine/requirements.txt

@@ -70,13 +70,15 @@ Content:
 {text}
 """
 
-def verify_cross_modal(claim_text: str, article_id: int, cursor) -> float | None:
-    """Calculates Cosine Similarity between the Claim Text and the Article's Hero Image."""
+def verify_cross_modal(claim_text: str, article_id: int, cursor) -> tuple[float | None, float | None]:
+    """Calculates Cosine Similarity + Returns Model Synthetic Probability if Hero Image exists."""
     try:
-        cursor.execute("SELECT clip_embedding FROM media_provenance WHERE raw_article_id = %s", (article_id,))
+        cursor.execute("SELECT clip_embedding, synthetic_probability FROM media_provenance WHERE raw_article_id = %s", (article_id,))
         row = cursor.fetchone()
         if not row or not row[0]: # Try to fetch pgvector object
-            return None
+            return None, None
+            
+        synth_prob = float(row[1]) if row[1] is not None else None
             
         import requests
         VISION_URL = os.getenv("VISION_INFERENCE_URL", "http://localhost:7860")
@@ -92,10 +94,12 @@ def verify_cross_modal(claim_text: str, article_id: int, cursor) -> float | None
             """, (text_embed, article_id))
             sim_row = cursor.fetchone()
             if sim_row and sim_row[0] is not None:
-                return float(sim_row[0])
+                return float(sim_row[0]), synth_prob
+                
+        return None, synth_prob
     except Exception as e:
         print(f"      [VISION ERROR] Cross-modal math failed: {e}")
-    return None
+    return None, None
 
 def extraction_worker(worker_id):
     try:
@@ -107,7 +111,7 @@ def extraction_worker(worker_id):
                 with conn.cursor() as cursor:
                     # FOR UPDATE SKIP LOCKED ensures concurrency
                     cursor.execute("""
-                        SELECT a.id, a.title, a.author, a.publish_date, a.raw_text, s.epistemic_trust_score
+                        SELECT a.id, a.title, a.author, a.publish_date, a.raw_text, s.epistemic_trust_score, a.metadata
                         FROM raw_articles a
                         JOIN raw_urls u ON a.url_id = u.id
                         JOIN sources s ON u.source_id = s.id
@@ -121,7 +125,7 @@ def extraction_worker(worker_id):
                         conn.rollback()
                         break 
                         
-                    article_id, title, author, pub_date, raw_text, trust_score = row
+                    article_id, title, author, pub_date, raw_text, trust_score, raw_metadata = row
                     print(f"  [W-{worker_id}] Extracting Claims from: {title[:50]}...")
 
                     # Pass pub_date as the context
@@ -140,6 +144,30 @@ def extraction_worker(worker_id):
                     OVERLAP = 1000
                     
                     text_to_process = raw_text or ""
+                    
+                    # --- NEW: VLM SCENE EXTRACTION ---
+                    visual_scene_desc = ""
+                    meta_dict = raw_metadata if isinstance(raw_metadata, dict) else (json.loads(raw_metadata) if hasattr(raw_metadata, 'strip') else {})
+                    keyframes = meta_dict.get('video_keyframes', [])
+                    if keyframes:
+                        print(f"      -> [VISION CORE] Video keyframes detected! Asking VLM to narrate the visual scene...")
+                        try:
+                            vlm_content = [{"type": "text", "text": "You are a forensic analyst. Describe exactly what is happening in this sequence of video frames chronologically. Mention identities, events, and any text visible on screen. Keep it highly descriptive but concise."}]
+                            for kf in keyframes[:4]: # Max 4 to prevent payload bloat
+                                vlm_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kf}"}})
+                                
+                            vlm_resp = groq_pool.chat_completions_create(
+                                model='llama-3.2-90b-vision-preview', # The router automatically maps this to OPENROUTER_VISION if Groq isn't config-ready
+                                messages=[{"role": "user", "content": vlm_content}],
+                                max_retries=2,
+                                temperature=0.1
+                            )
+                            # Raw text responses don't use Pydantic models so we pluck the text directly
+                            visual_scene_desc = vlm_resp.choices[0].message.content
+                            print(f"      -> [VLM SUCCESS] Scene Narration: {visual_scene_desc[:60]}...")
+                            text_to_process += f"\n\n[VISUAL FORENSIC NARRATIVE]\n{visual_scene_desc}"
+                        except Exception as vlm_e:
+                            print(f"      -> [VLM FAILED] Could not extract visual narrative: {vlm_e}")
                     chunks = []
                     
                     if len(text_to_process) <= CHUNK_SIZE:
@@ -213,7 +241,7 @@ def extraction_worker(worker_id):
 
                         # Execute Zero-Shot Visual Holographic Math
                         claim_str = f"{clean_subj} {clean_pred} {clean_obj}"
-                        cross_modal_sim = verify_cross_modal(claim_str, article_id, cursor)
+                        cross_modal_sim, synth_prob = verify_cross_modal(claim_str, article_id, cursor)
                         
                         adjusted_conf = float(claim.extraction_confidence or 0.5)
                         if cross_modal_sim is not None:
@@ -230,13 +258,15 @@ def extraction_worker(worker_id):
                             support_count=0,
                             contradiction_weights=[],
                             days_since_extracted=0,
-                            historical_source_reliability=trust_val
+                            historical_source_reliability=trust_val,
+                            media_synthetic_prob=synth_prob
                         )
                         
                         ai_metadata = json.dumps({
                             "extraction_confidence": claim.extraction_confidence,
                             "adjusted_visual_confidence": adjusted_conf,
                             "cross_modal_similarity": cross_modal_sim,
+                            "synthetic_probability": synth_prob,
                             "is_verifiable": claim.is_verifiable,
                             "epistemic_domain": getattr(claim, "epistemic_domain", "EMPIRICAL")
                         })
