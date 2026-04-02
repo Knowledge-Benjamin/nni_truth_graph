@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Search, RefreshCw, AlertTriangle, ShieldCheck, Activity, Image as ImageIcon } from 'lucide-react';
+import { Camera, Search, RefreshCw, AlertTriangle, ShieldCheck, Activity, Image as ImageIcon, Network, User, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function MediaPortal() {
