@@ -61,7 +61,7 @@ router.post('/verify', async (req, res) => {
         try {
             data = await postJSON(
                 `${visionUrl}/embed_media`,
-                { image_urls: [`data:image/jpeg;base64,${image}`] },
+                { image_base64: [image] },
                 process.env.VISION_API_KEY
             );
         } catch (visionErr) {
