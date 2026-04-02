@@ -4,7 +4,7 @@ const http = require('http');
 const https = require('https');
 
 // Minimal POST helper — replaces axios with zero extra deps
-function postJSON(url, body, apiKey = null, timeoutMs = 45000) {   // 45s: covers Cloud Run cold start
+function postJSON(url, body, apiKey = null, timeoutMs = 130000) {   // 130s: covers protracted Cloud Run deepfake Tensor background boot loop
     return new Promise((resolve, reject) => {
         const parsed = new URL(url);
         const payload = JSON.stringify(body);
