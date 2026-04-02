@@ -4,7 +4,7 @@ const http = require('http');
 const https = require('https');
 
 // Minimal POST helper — replaces axios with zero extra deps
-function postJSON(url, body, timeoutMs = 15000) {
+function postJSON(url, body, timeoutMs = 45000) {   // 45s: covers Cloud Run cold start
     return new Promise((resolve, reject) => {
         const parsed = new URL(url);
         const payload = JSON.stringify(body);
@@ -20,36 +20,57 @@ function postJSON(url, body, timeoutMs = 15000) {
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 if (res.statusCode >= 200 && res.statusCode < 300) {
-                    try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('Invalid JSON response')); }
+                    try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('Invalid JSON from Vision server')); }
                 } else {
-                    reject(new Error(`Vision server responded ${res.statusCode}`));
+                    reject(new Error(`Vision server responded HTTP ${res.statusCode}`));
                 }
             });
         });
-        req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Vision server timeout')); });
-        req.on('error', reject);
+        req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('VISION_TIMEOUT')); });
+        req.on('error', (e) => {
+            if (e.code === 'ECONNREFUSED') reject(new Error('VISION_UNREACHABLE'));
+            else reject(e);
+        });
         req.write(payload);
         req.end();
     });
 }
 
 router.post('/verify', async (req, res) => {
-    const { image, intent } // image is a base64 string
-        = req.body;
+    const { image, intent } = req.body;
 
     if (!image || !intent) {
         return res.status(400).json({ error: 'Missing image or intent' });
     }
 
-    try {
-        const visionUrl = process.env.VISION_INFERENCE_URL || 'http://localhost:7860';
-        
-        // Send Base64 directly to VisionInferenceServer Embed_Media endpoint
-        const data = await postJSON(`${visionUrl}/embed_media`, {
-            image_urls: [`data:image/jpeg;base64,${image}`]
+    const visionUrl = process.env.VISION_INFERENCE_URL;
+    if (!visionUrl) {
+        console.error('[Media API] VISION_INFERENCE_URL env var is not set on this deployment.');
+        return res.status(503).json({
+            error: 'Vision service not configured',
+            detail: 'VISION_INFERENCE_URL is not set in this deployment\'s environment variables. Add it in the Render dashboard under Environment.'
         });
-        const synthProb = data.synthetic_prob[0] || 0.0;
-        const embedding = data.embeddings[0]; // [512] vector
+    }
+
+    try {
+        // Send Base64 to VisionInferenceServer — 45s timeout covers Cloud Run cold start
+        let data;
+        try {
+            data = await postJSON(`${visionUrl}/embed_media`, {
+                image_urls: [`data:image/jpeg;base64,${image}`]
+            });
+        } catch (visionErr) {
+            if (visionErr.message === 'VISION_UNREACHABLE') {
+                return res.status(503).json({ error: 'Vision server is offline or unreachable', visionUrl });
+            }
+            if (visionErr.message === 'VISION_TIMEOUT') {
+                return res.status(503).json({ error: 'Vision server is cold-starting — retry in 30s', visionUrl });
+            }
+            throw visionErr;
+        }
+
+        const synthProb = data.synthetic_prob?.[0] ?? 0.0;
+        const embedding = data.embeddings?.[0] ?? null;
 
         const pgPool = req.app.locals.pgPool;
 
