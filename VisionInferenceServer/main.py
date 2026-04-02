@@ -225,24 +225,32 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
         synth_outputs = []
         df_outputs = []
 
+        # Safe index caching (only compute once)
+        artificial_idx = 0
+        for k, v in models['synth'].config.id2label.items():
+            if 'artificial' in str(v).lower() or 'fake' in str(v).lower() or 'ai' in str(v).lower():
+                artificial_idx = int(k)
+                break
+                
+        fake_idx = 0
+        for k, v in models['df'].config.id2label.items():
+            if 'fake' in str(v).lower() or 'forgery' in str(v).lower():
+                fake_idx = int(k)
+                break
+
         with torch.no_grad():
             for img in images:
                 # 1. Evaluate Synthetic Origins
-                synth_inputs = models['synth_proc'](images=img, return_tensors="pt").to(DEVICE)
+                raw_synth_inputs = models['synth_proc'](images=img, return_tensors="pt")
+                synth_inputs = {k: v.to(DEVICE) for k, v in raw_synth_inputs.items()}
                 s_logits = models['synth'](**synth_inputs).logits
-                # Artificial is typically class index 'artificial' (check config for true map. Softmax maps to prob)
                 s_probs = torch.nn.functional.softmax(s_logits, dim=-1)
-                
-                # Check mapping. umm-maybe uses 1 = artificial, 0 = human.
-                artificial_idx = 1 if models['synth'].config.id2label[1].lower() == 'artificial' else 0
-                human_idx = 0 if artificial_idx == 1 else 1
 
                 # 2. Evaluate Face Forgeries
-                df_inputs = models['df_proc'](images=img, return_tensors="pt").to(DEVICE)
+                raw_df_inputs = models['df_proc'](images=img, return_tensors="pt")
+                df_inputs = {k: v.to(DEVICE) for k, v in raw_df_inputs.items()}
                 d_logits = models['df'](**df_inputs).logits
                 d_probs = torch.nn.functional.softmax(d_logits, dim=-1)
-                # dima806 uses 0 = Fake, 1 = Real
-                fake_idx = 0 if 'fake' in models['df'].config.id2label[0].lower() else 1
                 
                 synth_outputs.append(s_probs[0][artificial_idx].item())
                 df_outputs.append(d_probs[0][fake_idx].item())
@@ -254,7 +262,8 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
         # Output the Maximum trigger. If the face is fake OR the background is midjourney-> 1.0
         return max(avg_synth, avg_df)
     except Exception as e:
-        logger.error(f"Classifier Array Panicked: {e}")
+        import traceback
+        logger.error(f"Classifier Array Panicked: {e}\n{traceback.format_exc()}")
         return 0.0
 
 
