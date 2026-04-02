@@ -4,17 +4,20 @@ const http = require('http');
 const https = require('https');
 
 // Minimal POST helper — replaces axios with zero extra deps
-function postJSON(url, body, timeoutMs = 45000) {   // 45s: covers Cloud Run cold start
+function postJSON(url, body, apiKey = null, timeoutMs = 45000) {   // 45s: covers Cloud Run cold start
     return new Promise((resolve, reject) => {
         const parsed = new URL(url);
         const payload = JSON.stringify(body);
         const lib = parsed.protocol === 'https:' ? https : http;
+        const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
         const req = lib.request({
             hostname: parsed.hostname,
             port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
             path: parsed.pathname + parsed.search,
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+            headers,
         }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -56,9 +59,11 @@ router.post('/verify', async (req, res) => {
         // Send Base64 to VisionInferenceServer — 45s timeout covers Cloud Run cold start
         let data;
         try {
-            data = await postJSON(`${visionUrl}/embed_media`, {
-                image_urls: [`data:image/jpeg;base64,${image}`]
-            });
+            data = await postJSON(
+                `${visionUrl}/embed_media`,
+                { image_urls: [`data:image/jpeg;base64,${image}`] },
+                process.env.VISION_API_KEY
+            );
         } catch (visionErr) {
             if (visionErr.message === 'VISION_UNREACHABLE') {
                 return res.status(503).json({ error: 'Vision server is offline or unreachable', visionUrl });
