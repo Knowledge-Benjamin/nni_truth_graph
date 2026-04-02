@@ -1,6 +1,37 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
+const http = require('http');
+const https = require('https');
+
+// Minimal POST helper — replaces axios with zero extra deps
+function postJSON(url, body, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const payload = JSON.stringify(body);
+        const lib = parsed.protocol === 'https:' ? https : http;
+        const req = lib.request({
+            hostname: parsed.hostname,
+            port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+            path: parsed.pathname + parsed.search,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('Invalid JSON response')); }
+                } else {
+                    reject(new Error(`Vision server responded ${res.statusCode}`));
+                }
+            });
+        });
+        req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Vision server timeout')); });
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+    });
+}
 
 router.post('/verify', async (req, res) => {
     const { image, intent } // image is a base64 string
@@ -13,16 +44,10 @@ router.post('/verify', async (req, res) => {
     try {
         const visionUrl = process.env.VISION_INFERENCE_URL || 'http://localhost:7860';
         
-        // 1. Send Base64 directly to VisionInferenceServer Embed_Media endpoint
-        const visionResponse = await axios.post(`${visionUrl}/embed_media`, {
+        // Send Base64 directly to VisionInferenceServer Embed_Media endpoint
+        const data = await postJSON(`${visionUrl}/embed_media`, {
             image_urls: [`data:image/jpeg;base64,${image}`]
-        }, { timeout: 15000 });
-
-        if (visionResponse.status !== 200) {
-            throw new Error('Vision Server failed to process media');
-        }
-
-        const data = visionResponse.data;
+        });
         const synthProb = data.synthetic_prob[0] || 0.0;
         const embedding = data.embeddings[0]; // [512] vector
 
