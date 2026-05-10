@@ -59,6 +59,7 @@ class VisionEmbedResponse(BaseModel):
     embeddings: List[List[float]] = Field(..., description="768-dimensional sequence mapped vectors.")
     phashes: Optional[List[str]] = Field(default=None, description="Perceptual hashes corresponding to the target media.")
     synthetic_prob: Optional[List[float]] = Field(default=None, description="The unified Deepfake/AI-generator confidence float [0.0 - 1.0].")
+    debug: Optional[str] = Field(default=None, description="Exception bridge.")
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -66,8 +67,10 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+startup_error = None
+
+def _load_models_sync():
+    global startup_error
     logger.info(f"Booting Neural Array on {DEVICE} memory banks...")
     try:
         # Load the Mathematical Semantic Tensor
@@ -87,8 +90,15 @@ async def lifespan(app: FastAPI):
 
         logger.success("Triple-Transformer Array safely active.")
     except Exception as e:
-        logger.error(f"Failed to populate active weights: {e}")
-        raise
+        import traceback
+        startup_error = traceback.format_exc()
+        logger.error(f"Failed to populate active weights: {e}\n{startup_error}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Offload the 60-second PyTorch I/O boot sequence to a background thread 
+    # so Uvicorn can open port 7860 immediately for the Cloud Run readiness probe!
+    asyncio.create_task(asyncio.to_thread(_load_models_sync))
     yield
     logger.info("Evacuating models via shutdown signal.")
 
@@ -98,6 +108,10 @@ app = FastAPI(
     version=VERSION,
     lifespan=lifespan
 )
+
+@app.get("/health")
+def read_health():
+    return {"status": "ok", "startup_error": startup_error, "models_loaded": list(models.keys())}
 
 def _download_video_stream(url: str) -> str:
     """Securely buffer arbitrary video URLs to ephemeral storage. Halts at 50MB."""
@@ -212,31 +226,56 @@ def _process_media_payloads(urls: List[str], b64s: List[str]) -> List[List[Image
 
     return media_arrays
 
-def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
+def _calculate_synthetic_probability(images: List[Image.Image]) -> tuple[float, Optional[str]]:
     """
-    Executes the Dual-ViT model array across a temporal sequence of frames. 
-    Averages probabilities per-frame to normalize motion blur noise, then aggregates the 
+    Executes the Dual-ViT model array across a temporal sequence of frames.
+    Averages probabilities per-frame to normalize motion blur noise, then aggregates the
     maximum synthetic hit.
     """
     if not images:
-        return 0.0
+        logger.warning("_calculate_synthetic_probability called with empty images list.")
+        return 0.0, "Empty images array"
 
     try:
         synth_outputs = []
         df_outputs = []
 
-        # Safe index caching (only compute once)
-        artificial_idx = 0
-        for k, v in models['synth'].config.id2label.items():
+        # Log the actual label maps so Cloud Run logs expose any label-key mismatches
+        synth_id2label = models['synth'].config.id2label
+        df_id2label = models['df'].config.id2label
+        logger.info(f"[DIAG] synth id2label: {synth_id2label}")
+        logger.info(f"[DIAG] df   id2label: {df_id2label}")
+
+        # Find the index corresponding to the AI/synthetic class
+        artificial_idx = None
+        for k, v in synth_id2label.items():
             if 'artificial' in str(v).lower() or 'fake' in str(v).lower() or 'ai' in str(v).lower():
                 artificial_idx = int(k)
                 break
-                
-        fake_idx = 0
-        for k, v in models['df'].config.id2label.items():
-            if 'fake' in str(v).lower() or 'forgery' in str(v).lower():
+        if artificial_idx is None:
+            # Fallback: pick whichever single label is NOT 'real' or 'human'
+            for k, v in synth_id2label.items():
+                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
+                    artificial_idx = int(k)
+                    break
+        if artificial_idx is None:
+            artificial_idx = 1  # last-resort index
+        logger.info(f"[DIAG] artificial_idx resolved to {artificial_idx} = {synth_id2label.get(artificial_idx)}")
+
+        # Find the index corresponding to the Fake class
+        fake_idx = None
+        for k, v in df_id2label.items():
+            if 'fake' in str(v).lower() or 'forgery' in str(v).lower() or 'artificial' in str(v).lower():
                 fake_idx = int(k)
                 break
+        if fake_idx is None:
+            for k, v in df_id2label.items():
+                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
+                    fake_idx = int(k)
+                    break
+        if fake_idx is None:
+            fake_idx = 1
+        logger.info(f"[DIAG] fake_idx resolved to {fake_idx} = {df_id2label.get(fake_idx)}")
 
         with torch.no_grad():
             for img in images:
@@ -245,43 +284,54 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
                 synth_inputs = {k: v.to(DEVICE) for k, v in raw_synth_inputs.items()}
                 s_logits = models['synth'](**synth_inputs).logits
                 s_probs = torch.nn.functional.softmax(s_logits, dim=-1)
+                logger.info(f"[DIAG] synth full probs: {s_probs[0].tolist()}")
 
                 # 2. Evaluate Face Forgeries
                 raw_df_inputs = models['df_proc'](images=img, return_tensors="pt")
                 df_inputs = {k: v.to(DEVICE) for k, v in raw_df_inputs.items()}
                 d_logits = models['df'](**df_inputs).logits
                 d_probs = torch.nn.functional.softmax(d_logits, dim=-1)
-                
+                logger.info(f"[DIAG] df   full probs: {d_probs[0].tolist()}")
+
                 synth_outputs.append(s_probs[0][artificial_idx].item())
                 df_outputs.append(d_probs[0][fake_idx].item())
 
-        # Average across frames independently
         avg_synth = sum(synth_outputs) / len(synth_outputs)
         avg_df = sum(df_outputs) / len(df_outputs)
+        final = max(avg_synth, avg_df)
+        
+        diag_logs = f"synth_id2label: {synth_id2label} | df_id2label: {df_id2label} | artificial_idx: {artificial_idx} | fake_idx: {fake_idx} | avg_synth: {avg_synth:.4f} | avg_df: {avg_df:.4f}"
+        logger.info(f"[DIAG] {diag_logs}")
+        
+        return final, diag_logs
 
-        # Output the Maximum trigger. If the face is fake OR the background is midjourney-> 1.0
-        return max(avg_synth, avg_df)
     except Exception as e:
         import traceback
-        logger.error(f"Classifier Array Panicked: {e}\n{traceback.format_exc()}")
-        return 0.0
+        err_msg = traceback.format_exc()
+        logger.error(f"Classifier Array Panicked: {e}\n{err_msg}")
+        return 0.0, err_msg
 
 
-def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[float]], List[str], List[float]]:
+def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[float]], List[str], List[float], Optional[str]]:
     master_vectors = []
     master_phashes = []
     master_synth_probs = []
+    master_debug = None
+
+    if startup_error:
+        master_debug = f"STARTUP PANIC TRACE:\n{startup_error}"
 
     try:
-        # Evaluate Media Blocks in chronological sequence
         for frame_group in media_arrays:
-            # 1. Perceptual Hash (take the middle frame to represent the video hash)
+            # 1. Perceptual Hash (middle frame)
             center_frame = frame_group[len(frame_group) // 2]
             master_phashes.append(str(imagehash.phash(center_frame)))
 
-            # 2. Synthetic Probability Convolution
-            synth_score = _calculate_synthetic_probability(frame_group)
-            master_synth_probs.append(round(synth_score, 4))
+            # 2. Synthetic Probability — trace exceptions dynamically
+            synth_score, dbg = _calculate_synthetic_probability(frame_group)
+            master_synth_probs.append(round(float(synth_score), 4))
+            if dbg:
+                master_debug = f"{master_debug}\n---\n{dbg}" if master_debug else dbg
 
             # 3. SigLIP Mathematical Embedding Matrix
             inputs = models['siglip_proc'](images=frame_group, return_tensors="pt").to(DEVICE)
@@ -289,22 +339,34 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
                 vision_outputs = models['siglip'].vision_model(**inputs)
                 image_embeds = vision_outputs.pooler_output
                 image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
-            
-            # Collapse vectors to a single absolute semantic trajectory via Mean Pooling
+
             avg_vector = torch.mean(image_embeds, dim=0, keepdim=True)
             avg_vector = avg_vector / avg_vector.norm(dim=-1, keepdim=True)
-            
             master_vectors.append(avg_vector[0].cpu().tolist())
-            
-        return master_vectors, master_phashes, master_synth_probs
+
+        return master_vectors, master_phashes, master_synth_probs, master_debug
 
     except Exception as e:
-        logger.error(f"Matrix Algebra Panlocked: {e}")
+        import traceback
+        logger.error(f"Matrix Algebra Panicked: {e}\n{traceback.format_exc()}")
         raise ValueError("Core Tensor Computation Failed")
 
 
+async def wait_for_models():
+    """Asynchronously hold the HTTP connection open while the background thread completes."""
+    for _ in range(120): # Extend wait up to 120s for slow CPU bounds
+        if 'siglip' in models and 'synth' in models:
+            return True
+        await asyncio.sleep(1.0)
+    return False
+
 @app.post("/embed_media", response_model=VisionEmbedResponse)
 async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_key)):
+    if 'siglip' not in models:
+        logger.info("Suspending request to wait for PyTorch array memory completion...")
+        ready = await wait_for_models()
+        if not ready:
+            raise HTTPException(status_code=503, detail="Cold-start timeout. Neural array failed to bind to RAM in 120 seconds.")
     try:
         total = len(request.image_urls) + len(request.image_base64)
         if total == 0 or total > 16:
@@ -316,9 +378,9 @@ async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_k
         media_arrays = await asyncio.to_thread(_process_media_payloads, request.image_urls, request.image_base64)
         
         # Complex Matrix GPU/CPU Algebra execution
-        vectors, phashes, synthetics = await asyncio.to_thread(_embed_matrix, media_arrays)
+        vectors, phashes, synthetics, dbg_msg = await asyncio.to_thread(_embed_matrix, media_arrays)
         
-        return VisionEmbedResponse(embeddings=vectors, phashes=phashes, synthetic_prob=synthetics)
+        return VisionEmbedResponse(embeddings=vectors, phashes=phashes, synthetic_prob=synthetics, debug=dbg_msg)
         
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -343,6 +405,10 @@ def _embed_text_sync(texts: List[str]) -> List[List[float]]:
 
 @app.post("/embed_text", response_model=VisionEmbedResponse)
 async def embed_text(request: VisionTextEmbedRequest, _: str = Depends(verify_api_key)):
+    if 'siglip' not in models:
+        ready = await wait_for_models()
+        if not ready:
+            raise HTTPException(status_code=503, detail="Cold-start timeout. Neural array failed to bind to RAM in 120 seconds.")
     try:
         if not request.texts:
             raise HTTPException(status_code=400, detail="Must provide texts")

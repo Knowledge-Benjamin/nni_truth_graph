@@ -170,10 +170,9 @@ def run_evaluation_cycle():
 
                 # Log the live router metrics for a debug snapshot
                 try:
-                    print(f"    [Debug] LLM router pools: 8B={len(groq_pool.clients_8b)}, 70B={len(groq_pool.clients_70b)}")
-                    cooled_8b = sum(1 for c in groq_pool.clients_8b if c.is_cooling_down())
-                    cooled_70b = sum(1 for c in groq_pool.clients_70b if c.is_cooling_down())
-                    print(f"    [Debug] Cooling keys: 8B={cooled_8b}, 70B={cooled_70b}")
+                    print(f"    [Debug] LLM router universal pool size: {len(groq_pool.clients_universal)}")
+                    cooled = sum(1 for c in groq_pool.clients_universal if c.is_cooling_down())
+                    print(f"    [Debug] Cooling keys: {cooled} / {len(groq_pool.clients_universal)}")
                 except Exception as debug_e:
                     print(f"    [Debug] Could not collect groq_pool internal debug info: {debug_e}")
             else:

@@ -22,16 +22,15 @@ ENV HOME=/home/user \
     TRANSFORMERS_CACHE=/home/user/.cache/huggingface/hub \
     HF_HOME=/home/user/.cache/huggingface
 
-# Pre-download all Triple-Transformer arrays at build time strictly AS the non-root user.
-# This obliterates the 2.5GB model network delay when Cloud Run instances cold start!
-RUN python -c "from transformers import AutoProcessor, AutoModel, AutoImageProcessor, AutoModelForImageClassification; \
-AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224'); \
-AutoImageProcessor.from_pretrained('umm-maybe/AI-image-detector'); AutoModelForImageClassification.from_pretrained('umm-maybe/AI-image-detector'); \
-AutoImageProcessor.from_pretrained('dima806/deepfake_vs_real_image_detection'); AutoModelForImageClassification.from_pretrained('dima806/deepfake_vs_real_image_detection')"
+# Instead of loading into RAM (which risks OOM on GitHub Actions), we securely download directly to disk cache.
+RUN python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('google/siglip-base-patch16-224'); \
+    snapshot_download('umm-maybe/AI-image-detector'); \
+    snapshot_download('dima806/deepfake_vs_real_image_detection')"
 
 WORKDIR $HOME/app
 COPY --chown=user . $HOME/app
 
 EXPOSE 7860
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--log-level", "info"]
+CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860} --log-level info"

@@ -12,3 +12,4 @@ protobuf
 curl_cffi
 opencv-python-headless
 filetype
+torchvision
