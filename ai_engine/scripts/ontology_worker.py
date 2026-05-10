@@ -47,6 +47,9 @@ Rules:
    - 'THEOLOGICAL': Religious texts, divinities, spiritual concepts (e.g. God, Bible, Quran, Angels).
    - 'PHILOSOPHICAL': Normative claims, ethics, subjective reasoning, abstract theories.
    - 'LEXICAL': Language tools, dictionaries (e.g. Adjective).
+
+FORMATTING INSTRUCTION:
+You are a JSON-only API. Output ONLY valid JSON matching the exact schema requested. No conversational text, no markdown code blocks (do not wrap in ```json), no preambles, and no trailing comments.
 """
 
 def fetch_orphaned_entities(limit=50):
@@ -146,7 +149,7 @@ def run_evaluation_cycle():
             # Temperature 0.0 for strict deterministic categorization using Pydantic validation via instructor
             ontology_data: OntologyResponse = groq_pool.chat_completions_create(
                 messages=messages,
-                model="llama-3.3-70b-versatile",
+                model="TIER_HEAVY",
                 temperature=0.0,
                 response_model=OntologyResponse
             )

@@ -86,6 +86,8 @@ def ingest_urls():
     """
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting Stage 1: URL Ingestion")
     
+    conn = None
+    cursor = None
     try:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
@@ -146,31 +148,35 @@ def ingest_urls():
                         dynamic_source_id = row[0]
                     else:
                         cursor.execute("SELECT id FROM sources WHERE url = %s", (searxng_url,))
-                        dynamic_source_id = cursor.fetchone()[0]
+                        sel_row = cursor.fetchone()
+                        dynamic_source_id = sel_row[0] if sel_row else None
 
-                    for r in results[:10]: # Take top 10 to avoid flooding
-                        link = r.get("url")
-                        if not link: continue
-                        
-                        metadata = {
-                            "title": r.get('title', ''),
-                            "author": r.get('engine', 'searxng'),
-                            "published": r.get('publishedDate', ''),
-                            "summary": r.get('content', '')[:500],
-                            "origin": "dynamic_searxng_hunt"
-                        }
-                        try:
-                            cursor.execute("""
-                                INSERT INTO raw_urls (source_id, url, metadata, status)
-                                VALUES (%s, %s, %s, 'PENDING_SCRAPE')
-                                ON CONFLICT (url) DO NOTHING
-                                RETURNING id;
-                            """, (dynamic_source_id, link, Json(metadata)))
-                            if cursor.fetchone():
-                                new_urls_count += 1
-                                print(f"    -> [DYNAMIC QUEUED]: {link}")
-                        except Exception as e:
-                            pass
+                    if not dynamic_source_id:
+                        print("  -> Failed to resolve dynamic source ID. Skipping SearXNG insert.")
+                    else:
+                        for r in results[:10]: # Take top 10 to avoid flooding
+                            link = r.get("url")
+                            if not link: continue
+                            
+                            metadata = {
+                                "title": r.get('title', ''),
+                                "author": r.get('engine', 'searxng'),
+                                "published": r.get('publishedDate', ''),
+                                "summary": r.get('content', '')[:500],
+                                "origin": "dynamic_searxng_hunt"
+                            }
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO raw_urls (source_id, url, metadata, status)
+                                    VALUES (%s, %s, %s, 'PENDING_SCRAPE')
+                                    ON CONFLICT (url) DO NOTHING
+                                    RETURNING id;
+                                """, (dynamic_source_id, link, Json(metadata)))
+                                if cursor.fetchone():
+                                    new_urls_count += 1
+                                    print(f"    -> [DYNAMIC QUEUED]: {link}")
+                            except Exception as e:
+                                pass
                 else:
                      print(f"  -> SearXNG request failed: HTTP {resp.status_code}")
             except Exception as e:
@@ -180,7 +186,7 @@ def ingest_urls():
 
         # === 2. Static RSS Ingestion ===
         # Load evolving sources directly from the database, including fetch state
-        cursor.execute("SELECT id, name, url, domain, epistemic_trust_score, feed_etag, feed_modified FROM sources WHERE category != 'Dynamic' ORDER BY epistemic_trust_score DESC;")
+        cursor.execute("SELECT id, name, url, domain, epistemic_trust_score, feed_etag, feed_modified FROM sources WHERE category NOT IN ('Dynamic', 'Discovered', 'Revalidation') ORDER BY epistemic_trust_score DESC;")
         active_sources = cursor.fetchall()
         
         print(f"Loaded {len(active_sources)} evolving sources for RSS ingestion.")
@@ -188,6 +194,7 @@ def ingest_urls():
         for source_id, name, url, domain, trust_score, etag, modified in active_sources:
             print(f"Fetching from {name} (Trust: {trust_score})...")
             
+            feed = None
             try:
                 feed = feedparser.parse(url, etag=etag, modified=modified)
                 
@@ -246,8 +253,9 @@ def ingest_urls():
     except psycopg2.Error as e:
         print(f"Database error during Ingestion: {e}")
     finally:
-        if 'conn' in locals() and conn:
+        if 'cursor' in locals() and cursor:
             cursor.close()
+        if 'conn' in locals() and conn:
             conn.close()
 if __name__ == "__main__":
     LOOP_INTERVAL_SECONDS = 300  # Re-run RSS ingest every 5 minutes

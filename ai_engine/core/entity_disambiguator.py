@@ -61,7 +61,7 @@ except ImportError:
 WIKIDATA_API         = "https://www.wikidata.org/w/api.php"
 WIKIDATA_MIN_SCORE   = 0.70       # Minimum Wikidata match score to trust
 NEO4J_SIM_THRESHOLD  = 0.92       # Cosine similarity threshold for Neo4j match
-LLM_MODEL            = "llama-3.3-70b-versatile"
+LLM_MODEL            = "TIER_HEAVY"
 CACHE_MAX_SIZE       = 10_000
 WIKIDATA_TIMEOUT     = 4          # seconds
 

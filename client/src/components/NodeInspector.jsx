@@ -99,6 +99,48 @@ export default function NodeInspector({
                             }}>
                                 <LinkIcon size={14} /> Copy Link
                             </button>
+                            <button onClick={() => {
+                                let md = `# Research Report: ${selectedNode.label}\n\n`;
+                                md += `## Overview\n`;
+                                if (entityArticle?.article) {
+                                    if (typeof entityArticle.article === 'string') {
+                                        md += `${entityArticle.article}\n\n`;
+                                    } else {
+                                        Object.entries(entityArticle.article).forEach(([k,v]) => {
+                                            if (k !== '_references') md += `### ${k}\n${v.content}\n\n`;
+                                        });
+                                    }
+                                } else {
+                                    md += `No synthesized article available.\n\n`;
+                                }
+                                md += `## Verified Facts & Citations\n`;
+                                if (entityFacts?.claims) {
+                                    entityFacts.claims.filter(c => c.is_current).forEach(c => {
+                                        const pred = (c.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                        md += `- **${c.subject}** ${pred} **${c.object}**. `;
+                                        md += `(Source: *${c.source_name || 'Unknown'}*${c.publish_date ? `, ${new Date(c.publish_date).toLocaleDateString()}` : ''})\n`;
+                                    });
+                                }
+                                md += `\n## Fact Evolution Timeline\n`;
+                                if (entityFacts?.claims) {
+                                    const superseded = entityFacts.claims.filter(c => !c.is_current);
+                                    if (superseded.length > 0) {
+                                        superseded.forEach(c => {
+                                            const pred = (c.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                            md += `- [SUPERSEDED] **${c.subject}** ${pred} **${c.object}**. (Valid: ${c.valid_from ? new Date(c.valid_from).toLocaleDateString() : 'Unknown'} - ${c.valid_until ? new Date(c.valid_until).toLocaleDateString() : 'Unknown'})\n`;
+                                        });
+                                    } else {
+                                        md += `No historical fact evolution found.\n`;
+                                    }
+                                }
+                                navigator.clipboard.writeText(md);
+                                alert('Research Report copied to clipboard as Markdown!');
+                            }} style={{
+                                background: 'rgba(16, 185, 129, 0.2)', border: '1px solid #10b981', color: '#34d399',
+                                borderRadius: 6, padding: '4px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500
+                            }}>
+                                <FileText size={14} /> Export Research
+                            </button>
                         </div>
 
                         {/* Tab Nav */}
@@ -154,8 +196,11 @@ export default function NodeInspector({
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                                 <h3 style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', margin: 0 }}>Full Statement</h3>
                                 <button onClick={() => {
-                                    navigator.clipboard.writeText(`${window.location.origin}/claim/${selectedNode.id}`);
-                                    alert('Fact Citation link copied to clipboard!');
+                                    const rawId = (selectedNode.id || '').replace(/^c:/, '');
+                                    const pred = (selectedNode.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                    const citation = `${selectedNode.subject} ${pred} ${selectedNode.object}.${selectedNode.source_name ? ` ${selectedNode.source_name}` : ''}${selectedNode.publish_date ? `, ${new Date(selectedNode.publish_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}` : ''}. ${window.location.origin}/claim/${rawId}`;
+                                    navigator.clipboard.writeText(citation);
+                                    alert('Fact Citation copied to clipboard!');
                                 }} style={{
                                     background: 'rgba(124, 58, 237, 0.15)', border: '1px solid #7c3aed', color: '#c4b5fd',
                                     borderRadius: 4, padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600

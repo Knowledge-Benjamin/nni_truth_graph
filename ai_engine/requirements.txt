@@ -1,13 +1,16 @@
 # Core
 python-dotenv==1.0.0
-requests==2.31.0
+requests>=2.31.0
 pydantic>=2.7.0
 bcrypt>=4.0.0
 
 # Groq LLM API
 groq==1.0.0
-instructor>=1.3.3           # Structured LLM outputs via Pydantic (>=1.3.3 required for from_groq)
-tenacity==8.2.3             # Retry logic for Groq API calls
+# Google AI Studio (Gemma 4 — primary HEAVY tier)
+# NOTE: google-generativeai is deprecated. Use google-genai instead.
+google-genai>=0.8.0
+instructor>=1.7.0           # Structured LLM outputs via Pydantic (>=1.7.0 uses google.genai, not deprecated google.generativeai)
+tenacity==8.2.3             # Retry logic for API calls
 
 # Local embeddings — disabled; all embeddings route through ai_engine.core.inference_pool
 # sentence-transformers and torch are removed in production to avoid local model downloads.

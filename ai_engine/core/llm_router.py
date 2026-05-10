@@ -30,119 +30,125 @@ JITTER_MAX          = 0.5  # max seconds to sleep before request
 MAX_FALLBACK_LOOPS  = 10   # maximum attempts across all keys before giving up
 
 PROVIDERS = {
+    "GOOGLE_AI_STUDIO": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "weight": 100,
+        # All env vars whose values should be treated as Google AI Studio keys.
+        # Any of these keys can serve LIGHT, HEAVY, or VISION requests.
+        "env_keys": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+        "model_light":  "gemma-4-4b-it",
+        "model_heavy":  "gemma-4-26b-moe-it",
+        "model_vision": "gemma-4-multimodal-it"
+    },
     "GROQ": {
-        "base_url": None, # Uses native Groq client
+        "base_url": None,  # Uses native Groq client
         "weight": 50,
-        "env_8b": "GROQ_API_KEY",
-        "env_70b": "GROQ_API_KEY_70B",
-        "model_8b": "llama-3.1-8b-instant",
-        "model_70b": "llama-3.3-70b-versatile",
-        "model_vision": "llama-3.2-90b-vision-preview"
+        "env_keys": ["GROQ_API_KEY"],
+        "model_light":  "gemma-4-4b-it",
+        "model_heavy":  "gemma-4-31b-it",
+        "model_vision": "gemma-4-multimodal-it"
     },
     "OPENROUTER": {
         "base_url": "https://openrouter.ai/api/v1",
         "weight": 25,
-        "env_8b": "OPENROUTER_API_KEY",
-        "env_70b": "OPENROUTER_API_KEY_70B",
-        "model_8b": "meta-llama/llama-3.1-8b-instruct:free",
-        "model_70b": "meta-llama/llama-3.3-70b-instruct:free",
-        "model_vision": "qwen/qwen2.5-vl-32b-instruct:free"
+        "env_keys": ["OPENROUTER_API_KEY"],
+        "model_light":  "google/gemma-4-4b-it:free",
+        "model_heavy":  "google/gemma-4-31b-it:free",
+        "model_vision": "google/gemma-4-multimodal-it:free"
     },
     "GITHUB": {
         "base_url": "https://models.inference.ai.azure.com",
         "weight": 25,
-        "env_8b": "GITHUB_API_KEY",
-        "env_70b": "GITHUB_API_KEY_70B",
-        "model_8b": "meta-llama-3.1-8b-instruct",
-        "model_70b": "Llama-3.3-70B-Instruct"
+        "env_keys": ["GITHUB_API_KEY"],
+        "model_light":  "google-gemma-4-4b-it",
+        "model_heavy":  "google-gemma-4-31b-it"
     },
     "HUGGINGFACE": {
         "base_url": "https://router.huggingface.co/hf-inference/v1",
         "weight": 25,
-        "env_8b": "HF_TOKEN",
-        "env_70b": "HF_TOKEN_70B",
-        "model_8b": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-        "model_70b": "meta-llama/Meta-Llama-3.1-70B-Instruct"
+        "env_keys": ["HF_TOKEN"],
+        "model_light":  "google/gemma-4-4b-it",
+        "model_heavy":  "google/gemma-4-31b-it"
     }
 }
 
-def _load_keys_for_prefix(prefix: str) -> list[str]:
-    """Finds all keys starting with prefix (e.g., TOGETHER_API_KEY, TOGETHER_API_KEY_2)."""
-    keys = []
-    base_val = os.getenv(prefix, "").strip()
-    if base_val:
-        keys.append(base_val)
+def _load_all_keys_for_provider(env_key_list: list[str]) -> list[str]:
+    """
+    Scans all env vars that start with any prefix in env_key_list, including
+    numbered suffixes (_2, _3, ...) and any suffix variant (_HEAVY, _VISION, etc.).
+    Returns a deduplicated list of non-empty key strings.
+    All keys land in the same flat pool — there is zero tier segmentation at the key level.
+    """
+    seen: set[str] = set()
+    results: list[str] = []
 
-    for env_key, val in sorted(os.environ.items()):
-        if env_key.startswith(f"{prefix}_") and val.strip():
-            # Exclude the 70B variant when we are scanning the 8B prefix
-            if prefix.endswith("_70B"):
-                keys.append(val.strip())
-            else:
-                if not env_key.startswith(f"{prefix}_70B"):
-                    keys.append(val.strip())
+    for prefix in env_key_list:
+        # Collect exact match and any env var that starts with `prefix`
+        for env_var, val in os.environ.items():
+            if env_var == prefix or env_var.startswith(f"{prefix}_"):
+                v = val.strip()
+                if v and v not in seen:
+                    seen.add(v)
+                    results.append(v)
 
-    seen = set()
-    return [x for x in keys if not (x in seen or seen.add(x))]
+    return results
+
 
 class RoutedClient:
     """Wrapper holding an instructor client and its routing metadata."""
     def __init__(self, provider_name: str, api_key: str, p_config: dict):
         self.provider = provider_name
         self.weight = p_config["weight"]
-        self.p_config = p_config # Stores model_8b, model_70b, model_vision dynamically
-        
+        self.p_config = p_config  # Stores model_light, model_heavy, model_vision
+
         self.key_preview = f"…{api_key[-6:]}"
         self.api_key_exact = api_key
         self.cooldown_until = 0.0
 
-        if provider_name == "GROQ" or provider_name == "GROQ_VISION":
-            self.raw_client = Groq(api_key=api_key)
-            self.client = instructor.from_groq(self.raw_client, mode=instructor.Mode.JSON)
+        if provider_name == "GROQ":
+            groq_client = Groq(api_key=api_key)
+            self.raw_client = groq_client  # type: ignore
+            self.client = instructor.from_groq(groq_client, mode=instructor.Mode.JSON)
         else:
-            self.raw_client = OpenAI(base_url=p_config["base_url"], api_key=api_key)
-            self.client = instructor.from_openai(self.raw_client, mode=instructor.Mode.JSON)
-            
+            openai_client = OpenAI(base_url=p_config["base_url"], api_key=api_key)
+            self.raw_client = openai_client  # type: ignore
+            self.client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
+
     def is_cooling_down(self) -> bool:
         return time.time() < self.cooldown_until
-        
+
     def mark_rate_limited(self):
         penalty = random.uniform(COOLDOWN_MIN, COOLDOWN_MAX)
         self.cooldown_until = time.time() + penalty
         print(f"[Router · {self.provider}] {self.key_preview} hit 429. Cooling for {penalty:.0f}s.")
 
+
 class MultiProviderRouter:
     def __init__(self):
         self.clients_universal: list[RoutedClient] = []
         self._lock = threading.Lock()
-        
         self._bootstrap()
 
     def _bootstrap(self):
-        """Populate the universal pool based on ALL available .env keys."""
-        seen_keys = set()
-        
+        """
+        Populate the flat universal pool from all env keys for all providers.
+        Every unique key string gets exactly one RoutedClient entry — no
+        segmentation by tier. Any key can serve any tier request.
+        """
+        seen_keys: set[str] = set()
+
         for p_name, p_config in PROVIDERS.items():
-            keys_to_load = []
-            if "env_8b" in p_config:
-                keys_to_load.extend(_load_keys_for_prefix(p_config["env_8b"]))
-            if "env_70b" in p_config:
-                keys_to_load.extend(_load_keys_for_prefix(p_config["env_70b"]))
-            if "env_vision" in p_config:
-                keys_to_load.extend(_load_keys_for_prefix(p_config["env_vision"]))
-                
-            for k in list(set(keys_to_load)): # unique per-provider prefix sweeps
-                # Ensure we only load one RoutedClient per unique string globally
-                if k not in seen_keys:
-                    seen_keys.add(k)
-                    self.clients_universal.append(RoutedClient(p_name, k, p_config))
-                
+            for key in _load_all_keys_for_provider(p_config["env_keys"]):
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    self.clients_universal.append(RoutedClient(p_name, key, p_config))
+
         print(f"[LLM Router] Initialized Universal Pool with {len(self.clients_universal)} keys globally.")
         if not self.clients_universal:
             message = (
                 "[LLM Router] ERROR: No LLM API keys found in environment. "
-                "Check .env for GROQ_API_KEY | OPENROUTER_API_KEY | GITHUB_API_KEY | HF_TOKEN, "
-                "or export variables before running the worker."
+                "Check .env for GROQ_API_KEY | GOOGLE_API_KEY | OPENROUTER_API_KEY | "
+                "GITHUB_API_KEY | HF_TOKEN."
             )
             print(message)
             raise RuntimeError(message)
@@ -157,10 +163,10 @@ class MultiProviderRouter:
                     mapped_string = None
                     if tier == "VISION" and "model_vision" in c.p_config:
                         mapped_string = c.p_config["model_vision"]
-                    elif tier == "70B" and "model_70b" in c.p_config:
-                        mapped_string = c.p_config["model_70b"]
-                    elif tier == "8B" and "model_8b" in c.p_config:
-                        mapped_string = c.p_config["model_8b"]
+                    elif tier == "HEAVY" and "model_heavy" in c.p_config:
+                        mapped_string = c.p_config["model_heavy"]
+                    elif tier == "LIGHT" and "model_light" in c.p_config:
+                        mapped_string = c.p_config["model_light"]
                     
                     if mapped_string:
                         valid_pool.append((c, mapped_string))
@@ -180,11 +186,13 @@ class MultiProviderRouter:
         If a 429 is hit, it falls back seamlessly until MAX_FALLBACK_LOOPS is reached.
         """
         req_model = kwargs.get("model", "")
-        # Determine tier from the legacy model names used broadly across the codebase
-        if "vision" in req_model.lower() or "llava" in req_model.lower() or "vl" in req_model.lower():
+        # Determine tier from the requested model string
+        if req_model == "TIER_VISION" or "vision" in req_model.lower() or "llava" in req_model.lower() or "vl" in req_model.lower():
             tier = "VISION"
+        elif req_model == "TIER_HEAVY" or "70b" in req_model.lower() or "heavy" in req_model.lower():
+            tier = "HEAVY"
         else:
-            tier = "70B" if "70b" in req_model.lower() else "8B"
+            tier = "LIGHT"
         
         exceptions = []
         
@@ -236,7 +244,7 @@ class MultiProviderRouter:
                 exceptions.append(e)
             except Exception as e:
                 # Catch other API connection errors that act like rate limits / timeouts
-                if "429" in str(e) or "Too Many Requests" in str(e) or "timeout" in str(e).lower() or "500" in str(e) or "404" in str(e):
+                if any(err_str in str(e).lower() for err_str in ["429", "too many requests", "timeout", "500", "404", "401", "400", "unauthorized", "bad request"]):
                     client_wrapper.mark_rate_limited()
                 else:
                     # If it's a validation error or something structural, raise it immediately

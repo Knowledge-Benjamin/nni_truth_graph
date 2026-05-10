@@ -2,6 +2,7 @@ import os
 import time
 import random
 import psycopg2
+from psycopg2.extras import Json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -187,10 +188,9 @@ def scraper_worker(worker_id):
                         # Fetch exactly 1 URL, locking it — includes retryable FAILEDs
                         cursor.execute("""
                             SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
-                            FROM raw_urls 
+                            FROM raw_urls
                             WHERE status IN ('PENDING_SCRAPE')
-                              AND domain NOT IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
-                            LIMIT 1 
+                            LIMIT 1
                             FOR UPDATE SKIP LOCKED;
                         """)
                         
@@ -200,6 +200,15 @@ def scraper_worker(worker_id):
                             break # Queue is empty, exit thread naturally
                             
                         url_id, url, initial_metadata, retry_count = row
+
+                        # Skip video-platform URLs — Stage 2A handles these via yt-dlp
+                        url_domain = urlparse(url).netloc.lstrip("www.")
+                        if any(url_domain == v or url_domain.endswith("." + v) for v in video_whitelist):
+                            cursor.execute("UPDATE raw_urls SET status = 'PENDING_VIDEO' WHERE id = %s", (url_id,))
+                            conn.commit()
+                            print(f"  [W-{worker_id}] Video URL routed to Stage 2A: {url}")
+                            continue
+
                         print(f"  [W-{worker_id}] Processing (attempt {retry_count+1}): {url}")
                         
                         # 2. Scrape it using the Playwright page
@@ -226,7 +235,11 @@ def scraper_worker(worker_id):
                                 RETURNING id;
                             """, (url_id, title, author, pub_date, raw_text))
                             
-                            article_id = cursor.fetchone()[0]
+                            row_art = cursor.fetchone()
+                            article_id = row_art[0] if row_art else None
+                            if article_id is None:
+                                conn.rollback()
+                                continue
                             
                             image_url = s_meta.get('image')
                             if image_url:
@@ -337,7 +350,8 @@ def process_scraping_queue():
         cursor = conn.cursor()
         
         cursor.execute("SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE';")
-        pending_count = cursor.fetchone()[0]
+        count_row = cursor.fetchone()
+        pending_count = count_row[0] if count_row else 0
         
         cursor.close()
         conn.close()

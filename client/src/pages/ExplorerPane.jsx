@@ -390,6 +390,10 @@ export default function ExplorerPane() {
     const [entityArticle, setEntityArticle] = useState(null);
     const [inspectorTab, setInspectorTab] = useState('article'); // 'article', 'facts', 'timeline'
 
+    // Raw Facts & Timeline data
+    const [entityFacts, setEntityFacts] = useState(null);
+    const [factsLoading, setFactsLoading] = useState(false);
+
     const cyRef = useRef(null);
     const chatEndRef = useRef(null);
     const searchInputRef = useRef(null);
@@ -473,8 +477,21 @@ export default function ExplorerPane() {
             fetchEntityArticle(selectedNode.label);
         } else {
             setEntityArticle(null);
+            setEntityFacts(null);
         }
     }, [selectedNode?.label, selectedNode?.type]);
+
+    // Fetch raw facts when user switches to facts or timeline tab
+    React.useEffect(() => {
+        if (!selectedNode || selectedNode.type !== 'Entity' || !selectedNode.label) return;
+        if (inspectorTab !== 'facts' && inspectorTab !== 'timeline') return;
+        if (entityFacts?.entity === selectedNode.label) return; // already loaded
+        setFactsLoading(true);
+        api.getEntity(selectedNode.label)
+            .then(data => setEntityFacts(data))
+            .catch(console.error)
+            .finally(() => setFactsLoading(false));
+    }, [inspectorTab, selectedNode?.label]);
 
     const fetchEntityArticle = async (entityName) => {
         try {
@@ -1421,6 +1438,74 @@ export default function ExplorerPane() {
                                     }}>
                                         <LinkIcon size={14} /> Copy Link
                                     </button>
+                                    <button onClick={() => {
+                                        let mdHtml = `<div style="font-family: system-ui, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; color: #1e293b;">`;
+                                        mdHtml += `<h1 style="border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; color: #0f172a;">Research Report: ${selectedNode.label}</h1>`;
+                                        mdHtml += `<h2 style="color: #334155; margin-top: 30px;">Overview</h2>`;
+                                        
+                                        if (entityArticle?.article) {
+                                            if (typeof entityArticle.article === 'string') {
+                                                mdHtml += `<p style="line-height: 1.6;">${entityArticle.article}</p>`;
+                                            } else {
+                                                Object.entries(entityArticle.article).forEach(([k,v]) => {
+                                                    if (k !== '_references') mdHtml += `<h3 style="color: #475569;">${k}</h3><p style="line-height: 1.6;">${v.content}</p>`;
+                                                });
+                                            }
+                                        } else {
+                                            mdHtml += `<p style="line-height: 1.6; font-style: italic;">No synthesized article available.</p>`;
+                                        }
+                                        
+                                        mdHtml += `<h2 style="color: #334155; margin-top: 30px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px;">Verified Facts & Citations</h2><ul style="line-height: 1.6;">`;
+                                        if (entityFacts?.claims) {
+                                            const active = entityFacts.claims.filter(c => c.is_current);
+                                            if (active.length > 0) {
+                                                active.forEach(c => {
+                                                    const pred = (c.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                                    mdHtml += `<li style="margin-bottom: 8px;"><strong>${c.subject}</strong> ${pred} <strong>${c.object}</strong>. `;
+                                                    mdHtml += `<span style="color: #64748b; font-size: 0.9em;">(Source: <em>${c.source_name || 'Unknown'}</em>${c.publish_date ? `, ${new Date(c.publish_date).toLocaleDateString()}` : ''})</span></li>`;
+                                                });
+                                            } else {
+                                                mdHtml += `<li>No active facts found.</li>`;
+                                            }
+                                        }
+                                        mdHtml += `</ul>`;
+                                        
+                                        mdHtml += `<h2 style="color: #334155; margin-top: 30px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px;">Fact Evolution Timeline</h2><ul style="line-height: 1.6;">`;
+                                        if (entityFacts?.claims) {
+                                            const superseded = entityFacts.claims.filter(c => !c.is_current);
+                                            if (superseded.length > 0) {
+                                                superseded.forEach(c => {
+                                                    const pred = (c.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                                    mdHtml += `<li style="margin-bottom: 8px;"><span style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; font-weight: bold; color: #64748b; margin-right: 8px;">SUPERSEDED</span>`;
+                                                    mdHtml += `<strong>${c.subject}</strong> ${pred} <strong>${c.object}</strong>. <span style="color: #64748b; font-size: 0.9em;">(Valid: ${c.valid_from ? new Date(c.valid_from).toLocaleDateString() : 'Unknown'} &mdash; ${c.valid_until ? new Date(c.valid_until).toLocaleDateString() : 'Unknown'})</span></li>`;
+                                                });
+                                            } else {
+                                                mdHtml += `<li style="color: #64748b; font-style: italic;">No historical fact evolution found.</li>`;
+                                            }
+                                        }
+                                        mdHtml += `</ul></div>`;
+
+                                        const printWindow = window.open('', '_blank');
+                                        printWindow.document.write(`
+                                            <!DOCTYPE html>
+                                            <html>
+                                                <head>
+                                                    <title>Research Report - ${selectedNode.label}</title>
+                                                </head>
+                                                <body>${mdHtml}</body>
+                                            </html>
+                                        `);
+                                        printWindow.document.close();
+                                        // Wait for resources to load before triggering print
+                                        setTimeout(() => {
+                                            printWindow.print();
+                                        }, 250);
+                                    }} style={{
+                                        background: 'rgba(16, 185, 129, 0.2)', border: '1px solid #10b981', color: '#34d399',
+                                        borderRadius: 6, padding: '4px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500
+                                    }}>
+                                        <FileText size={14} /> Export Research
+                                    </button>
                                 </div>
 
                                 {/* Tab Navigation */}
@@ -1473,18 +1558,121 @@ export default function ExplorerPane() {
                                 )}
 
                                 {inspectorTab === 'facts' && (
-                                    <div style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6 }}>
-                                        <p>This tab displays the raw, atomic claims extracted by the pipeline before they are synthesized into narrative text.</p>
-                                        <div style={{ marginTop: 16, padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <em>Explore the graph canvas to the left to see these relationships visually.</em>
-                                        </div>
+                                    <div>
+                                        {factsLoading && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b', fontSize: 13, padding: '20px 0' }}>
+                                                <Loader2 size={14} className="spin" /> Loading facts…
+                                            </div>
+                                        )}
+                                        {!factsLoading && entityFacts && (() => {
+                                            const active = (entityFacts.claims || []).filter(c => c && c.id);
+                                            if (active.length === 0) return (
+                                                <div style={{ color: '#64748b', fontSize: 13, padding: '20px 0' }}>No claims found for this entity yet.</div>
+                                            );
+                                            return (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                                    {active.map((claim, i) => {
+                                                        const rawId = claim.id || '';
+                                                        const predicateWords = (claim.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                                        const citation = `${claim.subject} ${predicateWords} ${claim.object}.${claim.source_name ? ` ${claim.source_name}` : ''}${claim.publish_date ? `, ${new Date(claim.publish_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}` : ''}. ${window.location.origin}/claim/${rawId}`;
+                                                        const lc = claim.lifecycle || 'ACTIVE';
+                                                        const lcColor = lc === 'ACTIVE' ? '#10b981' : lc === 'DISPUTED' ? '#f59e0b' : '#64748b';
+                                                        const lcBg = lc === 'ACTIVE' ? 'rgba(16,185,129,0.12)' : lc === 'DISPUTED' ? 'rgba(245,158,11,0.12)' : 'rgba(100,116,139,0.12)';
+                                                        return (
+                                                            <div key={rawId || i} style={{ padding: '12px 14px', background: 'rgba(0,0,0,0.25)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)' }}>
+                                                                <div style={{ fontSize: 13, color: '#f1f5f9', lineHeight: 1.5, marginBottom: 8 }}>
+                                                                    <strong>{claim.subject}</strong>{' '}
+                                                                    <span style={{ color: '#8b5cf6' }}>{predicateWords}</span>{' '}
+                                                                    <strong>{claim.object}</strong>
+                                                                </div>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                                                    <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, fontWeight: 600, background: lcBg, color: lcColor }}>{lc}</span>
+                                                                    {claim.source_name && <span style={{ fontSize: 11, color: '#64748b' }}>{claim.source_name}</span>}
+                                                                    {claim.publish_date && <span style={{ fontSize: 11, color: '#475569' }}>{new Date(claim.publish_date).toLocaleDateString()}</span>}
+                                                                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                                                                        <button
+                                                                            onClick={() => navigator.clipboard.writeText(citation)}
+                                                                            title="Copy APA-style citation"
+                                                                            style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#a78bfa', borderRadius: 6, padding: '3px 9px', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                                                        >
+                                                                            <LinkIcon size={10} /> Cite
+                                                                        </button>
+                                                                        {claim.source_url && (
+                                                                            <a href={claim.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#60a5fa', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 3, padding: '3px 9px', background: 'rgba(59,130,246,0.08)', borderRadius: 6, border: '1px solid rgba(59,130,246,0.2)' }}>
+                                                                                <ExternalLink size={10} /> Source
+                                                                            </a>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })()}
+                                        {!factsLoading && !entityFacts && (
+                                            <div style={{ color: '#64748b', fontSize: 13, padding: '20px 0' }}>Switch to this tab after selecting an entity.</div>
+                                        )}
                                     </div>
                                 )}
                                 
                                 {inspectorTab === 'timeline' && (
-                                    <div style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6 }}>
-                                        <p>Chronological breakdown of how facts about this entity have evolved over time.</p>
-                                        {/* Future integration: render the claim versions here */}
+                                    <div>
+                                        {factsLoading && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b', fontSize: 13, padding: '20px 0' }}>
+                                                <Loader2 size={14} className="spin" /> Loading timeline…
+                                            </div>
+                                        )}
+                                        {!factsLoading && entityFacts && (() => {
+                                            const all = (entityFacts.claims || []).filter(c => c && c.id);
+                                            if (all.length === 0) return (
+                                                <div style={{ color: '#64748b', fontSize: 13, padding: '20px 0' }}>No fact history found for this entity.</div>
+                                            );
+                                            // Group by predicate, sort each group oldest→newest
+                                            const byPred = {};
+                                            for (const c of all) {
+                                                const k = c.predicate || 'unknown';
+                                                if (!byPred[k]) byPred[k] = [];
+                                                byPred[k].push(c);
+                                            }
+                                            for (const k of Object.keys(byPred)) {
+                                                byPred[k].sort((a, b) => new Date(a.valid_from || 0) - new Date(b.valid_from || 0));
+                                            }
+                                            const groups = Object.entries(byPred);
+                                            return (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                                    {groups.map(([pred, versions]) => (
+                                                        <div key={pred}>
+                                                            <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                                {pred.replace(/_/g, ' ')}
+                                                                <span style={{ fontWeight: 400, color: '#334155' }}>· {versions.length} version{versions.length > 1 ? 's' : ''}</span>
+                                                            </div>
+                                                            <div style={{ paddingLeft: 16, borderLeft: '2px solid rgba(124,58,237,0.25)' }}>
+                                                                {versions.map((v, vi) => (
+                                                                    <div key={v.id || vi} style={{ marginBottom: vi < versions.length - 1 ? 14 : 0, position: 'relative' }}>
+                                                                        <div style={{ position: 'absolute', left: -21, top: 5, width: 8, height: 8, borderRadius: '50%', background: v.is_current ? '#8b5cf6' : '#1e293b', border: `2px solid ${v.is_current ? '#8b5cf6' : '#334155'}` }} />
+                                                                        <div style={{ fontSize: 13, color: v.is_current ? '#f1f5f9' : '#64748b', lineHeight: 1.5 }}>
+                                                                            <strong style={{ color: v.is_current ? '#f1f5f9' : '#475569' }}>{v.object}</strong>
+                                                                        </div>
+                                                                        <div style={{ display: 'flex', gap: 8, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+                                                                            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, fontWeight: 600, background: v.is_current ? 'rgba(139,92,246,0.15)' : 'rgba(30,41,59,0.8)', color: v.is_current ? '#a78bfa' : '#475569' }}>
+                                                                                {v.is_current ? '● CURRENT' : v.lifecycle || 'SUPERSEDED'}
+                                                                            </span>
+                                                                            {v.valid_from && <span style={{ fontSize: 10, color: '#475569' }}>{new Date(v.valid_from).toLocaleDateString()}</span>}
+                                                                            {v.source_name && <span style={{ fontSize: 10, color: '#334155' }}>{v.source_name}</span>}
+                                                                            {v.source_url && <a href={v.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#3b82f6', textDecoration: 'none' }}>↗</a>}
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            );
+                                        })()}
+                                        {!factsLoading && !entityFacts && (
+                                            <div style={{ color: '#64748b', fontSize: 13, padding: '20px 0' }}>Select an entity to view its fact evolution.</div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -1496,8 +1684,11 @@ export default function ExplorerPane() {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                                         <h3 style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', margin: 0 }}>Full Statement</h3>
                                         <button onClick={() => {
-                                            navigator.clipboard.writeText(`${window.location.origin}/claim/${selectedNode.id}`);
-                                            alert('Fact Citation link copied to clipboard!');
+                                            const rawId = (selectedNode.id || '').replace(/^c:/, '');
+                                            const pred = (selectedNode.predicate || '').replace(/_/g, ' ').toLowerCase();
+                                            const citation = `${selectedNode.subject} ${pred} ${selectedNode.object}.${selectedNode.source_name ? ` ${selectedNode.source_name}` : ''}${selectedNode.publish_date ? `, ${new Date(selectedNode.publish_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}` : ''}. ${window.location.origin}/claim/${rawId}`;
+                                            navigator.clipboard.writeText(citation);
+                                            alert('Fact Citation copied to clipboard!');
                                         }} style={{
                                             background: 'rgba(124, 58, 237, 0.15)', border: '1px solid #7c3aed', color: '#c4b5fd',
                                             borderRadius: 4, padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600

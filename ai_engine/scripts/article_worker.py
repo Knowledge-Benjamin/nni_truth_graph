@@ -42,9 +42,9 @@ logging.basicConfig(level=logging.INFO, format='[ArticleWorker] %(message)s')
 log = logging.getLogger(__name__)
 
 DATABASE_URL   = os.getenv("DATABASE_URL")
-NEO4J_URI      = os.getenv("NEO4J_URI")
-NEO4J_USER     = os.getenv("NEO4J_USER")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_URI      = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER     = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 BATCH_SIZE  = 20
 MIN_CLAIMS  = 3
@@ -250,7 +250,8 @@ def generate_section(entity_name: str, section_name: str, claims: list[dict], ex
         "1. ALWAYS wrap entity names or important nouns in [[Entity Name]] brackets for hyperlinks.",
         "2. EVERY SINGLE FACT must be cited with its `[REF:<uuid>]` immediately following the claim in the sentence.",
         "3. Incorporate the provided corroboration badges (e.g. 🥇) exactly as shown before the fact, naturally integrated within the prose.",
-        "4. DO NOT hallucinate. Only use the facts provided. Your primary job is to articulate these facts beautifully."
+        "4. DO NOT hallucinate. Only use the facts provided. Your primary job is to articulate these facts beautifully.",
+        "5. OUTPUT FORMAT: You are a JSON-only API. Return only the raw JSON object matching the schema exactly. Do NOT wrap output in ```json code blocks, do NOT include preambles, and do NOT add trailing comments."
     ]
     
     if existing_content:
@@ -288,7 +289,7 @@ def generate_section(entity_name: str, section_name: str, claims: list[dict], ex
     
     try:
         resp = groq_pool.chat_completions_create(
-            model='llama-3.3-70b-versatile',
+            model='TIER_HEAVY',
             messages=[{"role": "user", "content": prompt}],
             response_model=SectionGeneration,
             temperature=0.4

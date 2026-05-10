@@ -112,7 +112,8 @@ def process_classification_queue():
         """)
         
         cursor.execute("SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION';")
-        pending_count = cursor.fetchone()[0]
+        count_row = cursor.fetchone()
+        pending_count = count_row[0] if count_row else 0
         
         cursor.close()
         conn.close()

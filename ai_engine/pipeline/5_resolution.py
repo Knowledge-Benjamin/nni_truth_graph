@@ -57,11 +57,11 @@ SEARXNG_URL    = os.getenv("SEARXNG_URL", "https://knowledgebenji-searchserver.h
 print("[INIT] Loading GROQ_API_KEY...")
 GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
 print("[INIT] Loading NEO4J_URI...")
-NEO4J_URI      = os.getenv("NEO4J_URI")
+NEO4J_URI      = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 print("[INIT] Loading NEO4J_USER...")
-NEO4J_USER     = os.getenv("NEO4J_USER")
+NEO4J_USER     = os.getenv("NEO4J_USER", "neo4j")
 print("[INIT] Loading NEO4J_PASSWORD...")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type  # type: ignore[import]
 
@@ -342,7 +342,7 @@ Reply with exactly one word: DUPLICATE, CONTRADICTS, CORROBORATES, or EVOLVES.
 """
                 try:
                     stance_resp = llm_client.chat_completions_create(
-                        model='llama-3.3-70b-versatile',
+                        model='TIER_HEAVY',
                         messages=[
                             {"role": "system", "content": "You are a logical stance detector. Reply with exactly one word: DUPLICATE, CONTRADICTS, CORROBORATES, or EVOLVES."},
                             {"role": "user", "content": stance_prompt}
@@ -514,7 +514,7 @@ def resolution_worker(worker_id: int):
                         extraction_confidence=extr_conf,
                         source_tier=1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3),
                         support_count=support_count,
-                        contradiction_weights=neo4j_result["contradiction_weights"],
+                        contradiction_weights=neo4j_result.get("contradiction_weights", []), # type: ignore
                         days_since_extracted=days_old,
                         historical_source_reliability=src_trust,
                         media_synthetic_prob=media_synth_prob
@@ -584,7 +584,8 @@ def process_resolution_queue():
             SELECT COUNT(*) FROM extracted_claims
             WHERE status = 'PROCESSING' AND pipeline_stage = 'STAGE_4_RESOLUTION';
         """)
-        pending = cur.fetchone()[0]
+        row = cur.fetchone()
+        pending = row[0] if row else 0
         cur.close()
         conn.close()
 

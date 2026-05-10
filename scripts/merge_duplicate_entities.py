@@ -39,9 +39,9 @@ load_dotenv(os.path.join(ROOT, 'ai_engine', '.env'))
 from neo4j import GraphDatabase
 from ai_engine.core.groq_pool import groq_pool
 
-NEO4J_URI      = os.getenv("NEO4J_URI")
-NEO4J_USER     = os.getenv("NEO4J_USER")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_URI      = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER     = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 HF_TOKEN       = os.getenv("HF_TOKEN")
 API_BASE       = f"http://localhost:{os.getenv('PORT', '8001')}/api"
 
@@ -125,7 +125,7 @@ def pick_canonical(names: list[str]) -> str:
             "Candidates:\n" + "\n".join(f" - {n}" for n in names)
         )
         resp = groq_pool.chat_completions_create(
-            model="llama-3.3-70b-versatile",
+            model="TIER_HEAVY",
             messages=[
                 {"role": "system",  "content": "You are a canonical entity name selector. Output ONLY the canonical name."},
                 {"role": "user",    "content": prompt},
@@ -215,7 +215,10 @@ def main():
     print(f"  Clustering {n} entities (O(n²) = {n*n:,} pairs)…")
     for i in range(n):
         for j in range(i + 1, n):
-            sim = cosine(valid[i][1], valid[j][1])
+            ea, eb = valid[i][1], valid[j][1]
+            if ea is None or eb is None:
+                continue
+            sim = cosine(ea, eb)
             if sim >= threshold:
                 uf.union(i, j)
                 pairs += 1

@@ -62,7 +62,7 @@ Classification rules:
 Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."""
     try:
         resp = groq_pool.chat_completions_create(
-            model='llama-3.1-8b-instant',
+            model='TIER_LIGHT',
             messages=[
                 {"role": "system", "content": "You are an epistemic stance detection engine. Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."},
                 {"role": "user", "content": prompt}

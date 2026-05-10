@@ -39,9 +39,9 @@ from ai_engine.core.logger import get_printer
 print = get_printer(10)  # Green
 
 DATABASE_URL   = os.getenv("DATABASE_URL")
-NEO4J_URI      = os.getenv("NEO4J_URI")
-NEO4J_USER     = os.getenv("NEO4J_USER")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_URI      = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER     = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 from ai_engine.core.groq_pool import groq_pool
@@ -84,7 +84,7 @@ Does the snippet:
 Reply with exactly one word."""
     try:
         resp = groq_pool.chat_completions_create(
-            model='llama-3.1-8b-instant',
+            model='TIER_LIGHT',
             messages=[
                 {"role": "system", "content": "You are a fact-checking engine. Reply with exactly one word: CORROBORATES, SUPERSEDES, CONTRADICTS, or UNRELATED."},
                 {"role": "user", "content": prompt}

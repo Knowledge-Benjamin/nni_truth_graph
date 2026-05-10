@@ -45,7 +45,7 @@ class ClaimExtractionList(BaseModel):
     """Root wrapper object containing all extracted atomic claims."""
     claims: list[AtomicClaim]
 
-PROMPT_VERSION = "v2.0-instructor-pydantic-strict"
+PROMPT_VERSION = "v2.1-gemma-strict"
 
 def generate_extraction_prompt(title, author, date, text):
     return f"""
@@ -61,6 +61,9 @@ STRICT CONSTRAINTS (CRITICAL):
 6. Verifiability constraint: Only extract claims that can be objectively proven true or false.
 7. Contradiction Pre-computation: Capture nuance that might contradict other facts.
 8. Epistemic Domain: Categorize the claim into its NOMA magisterium ('EMPIRICAL', 'THEOLOGICAL', 'PHILOSOPHICAL', 'LEXICAL'). Most news is 'EMPIRICAL'.
+
+FORMATTING INSTRUCTION:
+You are a JSON-only API. Output ONLY valid JSON matching the exact schema requested. No conversational text, no markdown code blocks (do not wrap in ```json), no preambles, and no trailing comments.
 
 Article Title: {title}
 Author: {author}
@@ -111,7 +114,7 @@ def extraction_worker(worker_id):
                 with conn.cursor() as cursor:
                     # FOR UPDATE SKIP LOCKED ensures concurrency
                     cursor.execute("""
-                        SELECT a.id, a.title, a.author, a.publish_date, a.raw_text, s.epistemic_trust_score, a.metadata
+                        SELECT a.id, a.title, a.author, a.publish_date, a.raw_text, s.epistemic_trust_score, u.metadata
                         FROM raw_articles a
                         JOIN raw_urls u ON a.url_id = u.id
                         JOIN sources s ON u.source_id = s.id
@@ -154,10 +157,10 @@ def extraction_worker(worker_id):
                         try:
                             vlm_content = [{"type": "text", "text": "You are a forensic analyst. Describe exactly what is happening in this sequence of video frames chronologically. Mention identities, events, and any text visible on screen. Keep it highly descriptive but concise."}]
                             for kf in keyframes[:4]: # Max 4 to prevent payload bloat
-                                vlm_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kf}"}})
+                                vlm_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kf}"}})  # type: ignore[arg-type]
                                 
                             vlm_resp = groq_pool.chat_completions_create(
-                                model='llama-3.2-90b-vision-preview', # The router automatically maps this to OPENROUTER_VISION if Groq isn't config-ready
+                                model='TIER_VISION', # Abstract tier routing
                                 messages=[{"role": "user", "content": vlm_content}],
                                 max_retries=2,
                                 temperature=0.1
@@ -192,7 +195,7 @@ def extraction_worker(worker_id):
                         
                         try:
                             response_obj = groq_pool.chat_completions_create(
-                                model='llama-3.3-70b-versatile',
+                                model='TIER_HEAVY',
                                 messages=[
                                     {"role": "system", "content": "You are a specialized Knowledge Graph extraction engine."},
                                     {"role": "user", "content": prompt}
@@ -284,7 +287,7 @@ def extraction_worker(worker_id):
                             str(claim.temporal_anchor or "")[:255],
                             str(claim.spatial_anchor or "")[:255], bool(claim.is_verifiable), str(claim.quote_context or ""),
                             float(claim.extraction_confidence or 0.5), preliminary_score,
-                            'llama-3.3-70b-versatile', PROMPT_VERSION, ai_metadata
+                            'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata
                         ))
 
                     cursor.execute("UPDATE raw_articles SET status = 'EXTRACTED' WHERE id = %s", (article_id,))
@@ -321,7 +324,8 @@ def process_extraction_queue():
         cursor = conn.cursor()
         
         cursor.execute("SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_EXTRACTION';")
-        pending_count = cursor.fetchone()[0]
+        count_row = cursor.fetchone()
+        pending_count = count_row[0] if count_row else 0
         
         cursor.close()
         conn.close()

@@ -97,7 +97,7 @@ def _add_corroboration(cur, canonical_id: int, duplicate_id: int):
         corroboration_records=records,
         media_synthetic_prob=synth_prob
     )
-    cur.execute("UPDATE extracted_claims SET epistemic_score = %s WHERE id = %s", (float(new_score), canonical_id))
+    cur.execute("UPDATE extracted_claims SET epistemic_score = %s WHERE id = %s", (new_score, canonical_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ Reply with exactly one word: DUPLICATE or DISTINCT."""
 
     try:
         resp = groq_pool.chat_completions_create(
-            model='llama-3.1-8b-instant',
+            model='TIER_LIGHT',
             messages=[
                 {"role": "system", "content": "You are a precise fact deduplication engine. Reply with exactly one word: DUPLICATE or DISTINCT."},
                 {"role": "user", "content": prompt}
@@ -190,7 +190,7 @@ Reply with exactly one word: RICHER or SAME_DETAIL."""
 
     try:
         resp = groq_pool.chat_completions_create(
-            model='llama-3.1-8b-instant',
+            model='TIER_LIGHT',
             messages=[
                 {"role": "system", "content": "You are a precise fact analysis engine. Reply with exactly one word: RICHER or SAME_DETAIL."},
                 {"role": "user", "content": prompt}
@@ -396,7 +396,8 @@ def process_dedup_queue():
             SELECT COUNT(*) FROM extracted_claims
             WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING';
         """)
-        pending = cur.fetchone()[0]
+        row = cur.fetchone()
+        pending = row[0] if row else 0
         cur.close()
         conn.close()
 
