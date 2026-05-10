@@ -42,7 +42,7 @@ PROVIDERS = {
     },
     "GROQ": {
         "base_url": None,  # Uses native Groq client
-        "weight": 50,
+        "weight": 0,       # Disabled: Groq does not host Gemma 4
         "env_keys": ["GROQ_API_KEY"],
         "model_light":  "gemma-4-4b-it",
         "model_heavy":  "gemma-4-31b-it",
@@ -50,7 +50,7 @@ PROVIDERS = {
     },
     "OPENROUTER": {
         "base_url": "https://openrouter.ai/api/v1",
-        "weight": 25,
+        "weight": 50,
         "env_keys": ["OPENROUTER_API_KEY"],
         "model_light":  "google/gemma-4-4b-it:free",
         "model_heavy":  "google/gemma-4-31b-it:free",
@@ -58,7 +58,7 @@ PROVIDERS = {
     },
     "GITHUB": {
         "base_url": "https://models.inference.ai.azure.com",
-        "weight": 25,
+        "weight": 50,
         "env_keys": ["GITHUB_API_KEY"],
         "model_light":  "google-gemma-4-4b-it",
         "model_heavy":  "google-gemma-4-31b-it"
