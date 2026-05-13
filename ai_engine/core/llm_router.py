@@ -31,20 +31,20 @@ MAX_FALLBACK_LOOPS  = 10   # maximum attempts across all keys before giving up
 
 PROVIDERS = {
     "GOOGLE_AI_STUDIO": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "base_url": None,  # Uses native google-genai SDK — NOT the OpenAI compat wrapper
         "weight": 100,
         # All env vars whose values should be treated as Google AI Studio keys.
         # Any of these keys can serve LIGHT, HEAVY, or VISION requests.
         "env_keys": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-        "model_light":  "gemma-4-4b-it",
-        "model_heavy":  "gemma-4-26b-moe-it",
-        "model_vision": "gemma-4-multimodal-it"
+        "model_light":  "gemma-4-26b-a4b-it",
+        "model_heavy":  "gemma-4-26b-a4b-it",  # gemma-4-31b-it returns 500 on Google backend; use 26b for both
+        "model_vision": "gemma-4-26b-a4b-it"   # multimodal variant not yet available via API
     },
     "GROQ": {
         "base_url": None,  # Uses native Groq client
         "weight": 0,       # Disabled: Groq does not host Gemma 4
         "env_keys": ["GROQ_API_KEY"],
-        "model_light":  "gemma-4-4b-it",
+        "model_light":  "gemma-4-26b-a4b-it",
         "model_heavy":  "gemma-4-31b-it",
         "model_vision": "gemma-4-multimodal-it"
     },
@@ -52,7 +52,7 @@ PROVIDERS = {
         "base_url": "https://openrouter.ai/api/v1",
         "weight": 50,
         "env_keys": ["OPENROUTER_API_KEY"],
-        "model_light":  "google/gemma-4-4b-it:free",
+        "model_light":  "google/gemma-4-26b-a4b-it:free",
         "model_heavy":  "google/gemma-4-31b-it:free",
         "model_vision": "google/gemma-4-multimodal-it:free"
     },
@@ -60,14 +60,14 @@ PROVIDERS = {
         "base_url": "https://models.inference.ai.azure.com",
         "weight": 50,
         "env_keys": ["GITHUB_API_KEY"],
-        "model_light":  "google-gemma-4-4b-it",
+        "model_light":  "google-gemma-4-26b-a4b-it",
         "model_heavy":  "google-gemma-4-31b-it"
     },
     "HUGGINGFACE": {
         "base_url": "https://router.huggingface.co/hf-inference/v1",
         "weight": 25,
         "env_keys": ["HF_TOKEN"],
-        "model_light":  "google/gemma-4-4b-it",
+        "model_light":  "google/gemma-4-26b-a4b-it",
         "model_heavy":  "google/gemma-4-31b-it"
     }
 }
@@ -94,6 +94,69 @@ def _load_all_keys_for_provider(env_key_list: list[str]) -> list[str]:
     return results
 
 
+# ── Google GenAI Native Shim ─────────────────────────────────────────────────
+# The OpenAI-compat wrapper (/v1beta/openai/) returns 500 for Gemma models.
+# These lightweight shims wrap genai.Client to expose the same interface that
+# the rest of the pipeline expects (.chat.completions.create -> .choices[0].message.content),
+# so zero changes are needed anywhere else in the codebase.
+
+class _GenAIMessageShim:
+    """Mimics openai ChatCompletionMessage."""
+    def __init__(self, content: str):
+        self.content = content
+        self.role = "assistant"
+
+class _GenAIChoiceShim:
+    """Mimics openai Choice."""
+    def __init__(self, content: str):
+        self.message = _GenAIMessageShim(content)
+        self.finish_reason = "stop"
+        self.index = 0
+
+class _GenAIResponseShim:
+    """Mimics openai ChatCompletion so downstream code works unchanged."""
+    def __init__(self, text: str):
+        self.choices = [_GenAIChoiceShim(text)]
+
+class _GenAICompletionsShim:
+    """Translates OpenAI-style .create() kwargs into google-genai SDK calls."""
+    def __init__(self, genai_client: Any):
+        self._client = genai_client
+
+    def create(self, *, model: str, messages: list, **kwargs) -> _GenAIResponseShim:
+        from google.genai import types as _gt  # lazy import
+        # Separate system prompt from conversation turns
+        system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+        conversation = [m for m in messages if m.get("role") != "system"]
+        # Build contents list (multi-turn aware)
+        contents = []
+        for m in conversation:
+            role = "model" if m.get("role") == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": m.get("content", "")}]})
+        # Build generation config — only pass params genai understands
+        cfg: dict = {}
+        if system_parts:
+            cfg["system_instruction"] = " ".join(system_parts)
+        if "temperature" in kwargs:
+            cfg["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            cfg["max_output_tokens"] = kwargs["max_tokens"]
+        config = _gt.GenerateContentConfig(**cfg) if cfg else None
+        resp = self._client.models.generate_content(
+            model=model, contents=contents, config=config
+        )
+        return _GenAIResponseShim(resp.text)
+
+class _GenAIRawShim:
+    """Top-level shim: exposes .chat.completions backed by google-genai."""
+    class _Chat:
+        def __init__(self, genai_client: Any):
+            self.completions = _GenAICompletionsShim(genai_client)
+    def __init__(self, genai_client: Any):
+        self.chat = _GenAIRawShim._Chat(genai_client)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class RoutedClient:
     """Wrapper holding an instructor client and its routing metadata."""
     def __init__(self, provider_name: str, api_key: str, p_config: dict):
@@ -105,14 +168,19 @@ class RoutedClient:
         self.api_key_exact = api_key
         self.cooldown_until = 0.0
 
-        if provider_name == "GROQ":
+        if provider_name == "GOOGLE_AI_STUDIO":
+            from google import genai as _genai  # lazy import
+            genai_client = _genai.Client(api_key=api_key)
+            self.raw_client = _GenAIRawShim(genai_client)  # type: ignore
+            self.client = instructor.from_genai(genai_client, mode=instructor.Mode.GENAI_STRUCTURED_OUTPUTS)  # type: ignore[assignment]
+        elif provider_name == "GROQ":
             groq_client = Groq(api_key=api_key)
             self.raw_client = groq_client  # type: ignore
-            self.client = instructor.from_groq(groq_client, mode=instructor.Mode.JSON)
+            self.client = instructor.from_groq(groq_client, mode=instructor.Mode.JSON)  # type: ignore[assignment]
         else:
             openai_client = OpenAI(base_url=p_config["base_url"], api_key=api_key)
             self.raw_client = openai_client  # type: ignore
-            self.client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
+            self.client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)  # type: ignore[assignment]
 
     def is_cooling_down(self) -> bool:
         return time.time() < self.cooldown_until
@@ -168,7 +236,7 @@ class MultiProviderRouter:
                     elif tier == "LIGHT" and "model_light" in c.p_config:
                         mapped_string = c.p_config["model_light"]
                     
-                    if mapped_string:
+                    if mapped_string and c.weight > 0:
                         valid_pool.append((c, mapped_string))
             
             if not valid_pool:
