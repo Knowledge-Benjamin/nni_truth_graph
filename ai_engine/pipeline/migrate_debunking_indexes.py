@@ -15,6 +15,9 @@ import sys
 from dotenv import load_dotenv
 from neo4j import GraphDatabase  # type: ignore
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
+
 load_dotenv(os.path.join(os.path.dirname(__file__), '../../ai_engine/.env'))
 
 NEO4J_URI      = os.getenv("NEO4J_URI")
@@ -57,16 +60,16 @@ try:
         for name, cypher in INDEXES:
             try:
                 session.run(cypher)  # type: ignore[arg-type]
-                print(f"  ✓ {name}")
+                print(f"  [OK] {name}")
             except Exception as e:
                 if "already exists" in str(e).lower():
-                    print(f"  ~ {name} already exists, skipping.")
+                    print(f"  [SKIP] {name} already exists.")
                 else:
-                    print(f"  ✗ {name}: {e}")
+                    print(f"  [FAIL] {name}: {e}")
 
-    print("\n✅ Debunking index migration complete.")
+    print("\n[DONE] Debunking index migration complete.")
 except Exception as e:
-    print(f"❌ Migration failed: {e}")
+    print(f"[FAIL] Migration failed: {e}")
     sys.exit(1)
 finally:
     driver.close()
