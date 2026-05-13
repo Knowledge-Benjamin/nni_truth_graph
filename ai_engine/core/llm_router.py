@@ -58,14 +58,14 @@ PROVIDERS = {
     },
     "GITHUB": {
         "base_url": "https://models.inference.ai.azure.com",
-        "weight": 50,
+        "weight": 0,  # Disabled: GITHUB_API_KEY returns 401 Unauthorized
         "env_keys": ["GITHUB_API_KEY"],
         "model_light":  "google-gemma-4-26b-a4b-it",
         "model_heavy":  "google-gemma-4-31b-it"
     },
     "HUGGINGFACE": {
         "base_url": "https://router.huggingface.co/hf-inference/v1",
-        "weight": 25,
+        "weight": 0,  # Disabled: returns 400 Bad Request for models >10B parameters
         "env_keys": ["HF_TOKEN"],
         "model_light":  "google/gemma-4-26b-a4b-it",
         "model_heavy":  "google/gemma-4-31b-it"
