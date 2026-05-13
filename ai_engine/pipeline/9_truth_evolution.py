@@ -49,7 +49,10 @@ NEO4J_URI      = os.getenv("NEO4J_URI")
 NEO4J_USER     = os.getenv("NEO4J_USER")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
-neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+neo4j_driver = GraphDatabase.driver(
+    NEO4J_URI or "",
+    auth=(NEO4J_USER or "", NEO4J_PASSWORD or "")
+)
 _scorer      = EpistemicTrustScorer()
 
 SLEEP_INTERVAL = 20  # seconds between sweeps
@@ -143,51 +146,150 @@ def handle_enriches(session, pg_cur, new_claim: dict, matched_id: str, similarit
 def handle_contradicts(session, pg_cur, new_claim: dict,
                        matched_id: str, matched_score: float):
     """
-    Elevate both claims to DISPUTED. Create :Controversy node grouping them.
-    Reduce epistemic scores. Route both to HUMAN_REVIEW.
+    Asymmetric debunking model.
+
+    AUTO-RESOLVE (score_diff >= 0.15):
+      - Higher-scored claim = FACT_CHECK (the debunker)
+      - Lower-scored claim  = DEBUNKED   (the false claim)
+      - Creates [:DEBUNKS] edge debunker → false_claim
+      - Sets verdict on both Claim nodes
+      - Closes the :Controversy node with resolution metadata
+      - Asymmetric trust: false-claim source −0.10, debunker source +0.02
+
+    AMBIGUOUS (score_diff < 0.15):
+      - Both claims remain DISPUTED
+      - Creates [:CONTRADICTS] edge
+      - :Controversy node stays open (HUMAN_REVIEW_PENDING)
+      - Both sources penalised −0.05, both routed to HUMAN_REVIEW
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso   = datetime.now(timezone.utc).isoformat()
+    new_score = float(new_claim["epistemic_score"] or 0.4)
+    score_diff = abs(new_score - matched_score)
 
-    # 1. Mark both DISPUTED + create CONTRADICTS edge
-    session.run("""
-        MATCH (new:Claim {id: $new_id})
-        MATCH (old:Claim {id: $old_id})
-        SET new.lifecycle = 'DISPUTED',
-            old.lifecycle = 'DISPUTED',
-            new.epistemic_score = GREATEST(0.0, new.epistemic_score - 0.10),
-            old.epistemic_score = GREATEST(0.0, old.epistemic_score - 0.10)
-        MERGE (new)-[:CONTRADICTS {detected_at: datetime($now)}]->(old)
-    """, new_id=str(new_claim["id"]), old_id=str(matched_id), now=now_iso)
+    # Look up the matched claim's PostgreSQL source_id so we can adjust its trust
+    matched_source_id = None
+    try:
+        pg_cur.execute("""
+            SELECT ru.source_id FROM extracted_claims ec
+            JOIN raw_articles ra ON ec.article_id = ra.id
+            JOIN raw_urls ru     ON ra.url_id = ru.id
+            WHERE ec.id::text = %s
+        """, (str(matched_id),))
+        m_src_row = pg_cur.fetchone()
+        matched_source_id = m_src_row[0] if m_src_row else None
+    except Exception:
+        pass
 
-    # 2. Create :Controversy node — groups all claims in this epistemic dispute
-    session.run("""
-        MERGE (cv:Controversy {subject: $subject, predicate: $predicate})
-          ON CREATE SET cv.created_at  = datetime($now),
-                        cv.open        = true,
-                        cv.claim_count = 2
-          ON MATCH  SET cv.claim_count = cv.claim_count + 1,
-                        cv.updated_at  = datetime($now)
-        WITH cv
-        MATCH (new:Claim {id: $new_id})
-        MATCH (old:Claim {id: $old_id})
-        MERGE (cv)-[:INCLUDES]->(new)
-        MERGE (cv)-[:INCLUDES]->(old)
-    """, subject=new_claim["subject"], predicate=new_claim["predicate"],
-         now=now_iso, new_id=str(new_claim["id"]), old_id=str(matched_id))
+    if score_diff >= 0.15:
+        # ── AUTO-RESOLVE: determine which side is the debunker ────────────────
+        if new_score > matched_score:
+            debunker_id  = str(new_claim["id"])
+            false_id     = str(matched_id)
+            debunker_src = new_claim.get("source_id")
+            false_src    = matched_source_id
+        else:
+            debunker_id  = str(matched_id)
+            false_id     = str(new_claim["id"])
+            debunker_src = matched_source_id
+            false_src    = new_claim.get("source_id")
 
-    # 3. Route both to HUMAN_REVIEW in PostgreSQL
-    pg_cur.execute("""
-        UPDATE extracted_claims
-        SET status    = 'HUMAN_REVIEW',
-            lifecycle = 'DISPUTED'
-        WHERE id = %s OR id::text = %s
-    """, (new_claim["id"], str(matched_id)))
+        # 1. Tag both Claim nodes + create directed DEBUNKS edge
+        session.run("""
+            MATCH (debunker:Claim {id: $debunker_id})
+            MATCH (false_claim:Claim {id: $false_id})
+            SET false_claim.verdict    = 'DEBUNKED',
+                false_claim.lifecycle  = 'DEBUNKED',
+                false_claim.is_current = false,
+                false_claim.valid_until = datetime($now),
+                debunker.verdict       = 'FACT_CHECK'
+            MERGE (debunker)-[:DEBUNKS {
+                debunked_at:   datetime($now),
+                auto_resolved: true,
+                confidence:    $confidence
+            }]->(false_claim)
+        """, debunker_id=debunker_id, false_id=false_id,
+             now=now_iso, confidence=round(score_diff, 3))
 
-    print(f"    [CONTRADICTS] Claims {new_claim['id']} & {matched_id} "
-          f"grouped in :Controversy -> HUMAN_REVIEW.")
+        # 2. Controversy node — resolved
+        session.run("""
+            MERGE (cv:Controversy {subject: $subject, predicate: $predicate})
+              ON CREATE SET cv.created_at   = datetime($now),
+                            cv.claim_count  = 2,
+                            cv.open         = false
+              ON MATCH  SET cv.claim_count  = cv.claim_count + 1
+            SET cv.resolved          = true,
+                cv.verdict           = 'AUTO_RESOLVED',
+                cv.resolved_by       = 'auto_score',
+                cv.resolution_date   = datetime($now)
+            WITH cv
+            MATCH (debunker:Claim  {id: $debunker_id})
+            MATCH (false_claim:Claim {id: $false_id})
+            MERGE (cv)-[:INCLUDES {role: 'FACT_CHECK'}]->(debunker)
+            MERGE (cv)-[:INCLUDES {role: 'DEBUNKED'}]->(false_claim)
+        """, subject=new_claim["subject"], predicate=new_claim["predicate"],
+             now=now_iso, debunker_id=debunker_id, false_id=false_id)
 
-    # 4. Penalise source trust -0.05 per spec (contradicting claim published)
-    adjust_source_trust(pg_cur, new_claim.get("source_id"), -0.05)
+        # 3. Mark debunked claim in PostgreSQL
+        pg_cur.execute("""
+            UPDATE extracted_claims
+            SET status    = 'DEBUNKED',
+                lifecycle = 'DEBUNKED',
+                valid_until = %s
+            WHERE id::text = %s
+        """, (datetime.now(timezone.utc), false_id))
+
+        # 4. Asymmetric trust: penalise false reporter, reward debunker
+        adjust_source_trust(pg_cur, false_src,    -0.10)
+        adjust_source_trust(pg_cur, debunker_src, +0.02)
+
+        print(f"    [DEBUNKS] {debunker_id} debunks {false_id} "
+              f"(score_diff={score_diff:.3f}, auto-resolved).")
+
+    else:
+        # ── AMBIGUOUS: route both to human review ─────────────────────────────
+        # 1. Mark both DISPUTED + create symmetric CONTRADICTS edge
+        session.run("""
+            MATCH (new:Claim {id: $new_id})
+            MATCH (old:Claim {id: $old_id})
+            SET new.lifecycle = 'DISPUTED',
+                old.lifecycle = 'DISPUTED',
+                new.epistemic_score = GREATEST(0.0, new.epistemic_score - 0.10),
+                old.epistemic_score = GREATEST(0.0, old.epistemic_score - 0.10)
+            MERGE (new)-[:CONTRADICTS {detected_at: datetime($now)}]->(old)
+        """, new_id=str(new_claim["id"]), old_id=str(matched_id), now=now_iso)
+
+        # 2. Controversy node — open, awaiting human verdict
+        session.run("""
+            MERGE (cv:Controversy {subject: $subject, predicate: $predicate})
+              ON CREATE SET cv.created_at  = datetime($now),
+                            cv.claim_count = 2,
+                            cv.open        = true,
+                            cv.resolved    = false,
+                            cv.verdict     = 'HUMAN_REVIEW_PENDING'
+              ON MATCH  SET cv.claim_count = cv.claim_count + 1,
+                            cv.updated_at  = datetime($now)
+            WITH cv
+            MATCH (new:Claim {id: $new_id})
+            MATCH (old:Claim {id: $old_id})
+            MERGE (cv)-[:INCLUDES {role: 'DISPUTED'}]->(new)
+            MERGE (cv)-[:INCLUDES {role: 'DISPUTED'}]->(old)
+        """, subject=new_claim["subject"], predicate=new_claim["predicate"],
+             now=now_iso, new_id=str(new_claim["id"]), old_id=str(matched_id))
+
+        # 3. Route both to HUMAN_REVIEW in PostgreSQL
+        pg_cur.execute("""
+            UPDATE extracted_claims
+            SET status    = 'HUMAN_REVIEW',
+                lifecycle = 'DISPUTED'
+            WHERE id = %s OR id::text = %s
+        """, (new_claim["id"], str(matched_id)))
+
+        # 4. Symmetric trust penalty for publishing conflicting information
+        adjust_source_trust(pg_cur, new_claim.get("source_id"), -0.05)
+        adjust_source_trust(pg_cur, matched_source_id,          -0.05)
+
+        print(f"    [CONTRADICTS] Claims {new_claim['id']} & {matched_id} "
+              f"ambiguous (score_diff={score_diff:.3f}) → HUMAN_REVIEW.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +376,7 @@ def handle_confirmed(session, pg_cur, claim_id: int, confirming_source_url: str,
 
 def evolution_sweep():
     """Single sweep over all GRAPH_COMMITTED claims with stance != NOVEL/ORIGINAL."""
+    pg_conn = None  # guard: ensure rollback in except is always safe
     try:
         pg_conn = psycopg2.connect(DATABASE_URL)
         pg_conn.autocommit = False
@@ -350,7 +453,8 @@ def evolution_sweep():
     except Exception as e:
         print(f"  [Stage 9 ERROR] {e}")
         try:
-            pg_conn.rollback()
+            if pg_conn:
+                pg_conn.rollback()
         except Exception:
             pass
         return 0

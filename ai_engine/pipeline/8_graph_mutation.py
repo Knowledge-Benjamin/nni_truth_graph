@@ -44,7 +44,10 @@ def _embed_text(text: str) -> list | None:
     except Exception:
         return None
 
-neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+neo4j_driver = GraphDatabase.driver(
+    NEO4J_URI or "",
+    auth=(NEO4J_USER or "", NEO4J_PASSWORD or "")
+)
 MAX_WORKERS  = 5
 
 # ── Entity Disambiguator — shared across all worker threads ──────────────────
@@ -121,6 +124,7 @@ def write_claim_to_graph(session, claim: dict):
             c.valid_until           = null,
             c.is_current            = true,
             c.lifecycle             = 'ACTIVE',
+            c.verdict               = 'UNVERIFIED',
             c.quote_context         = $quote,
             c.article_title         = $article_title,
             c.source_url            = $article_url,
@@ -221,6 +225,7 @@ def write_claim_to_graph(session, claim: dict):
         "DUPLICATE":    "DUPLICATE_OF",
         "SUPPORTS":     "SUPPORTS",
         "ENRICHES":     "ENRICHES",
+        "DEBUNKS":      "DEBUNKS",
     }
     rel_type = rel_map.get(stance)
     if rel_type and claim.get("neo4j_matched_claim_id"):
@@ -472,7 +477,8 @@ def process_mutation_queue():
             WHERE pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
               AND status IN ('AUTO_APPROVE', 'PROCESSING');
         """)
-        pending = cur.fetchone()[0]
+        row = cur.fetchone()
+        pending = row[0] if row else 0
         cur.close()
         conn.close()
 
