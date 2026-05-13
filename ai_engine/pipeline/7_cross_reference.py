@@ -36,9 +36,12 @@ DATABASE_URL   = os.getenv("DATABASE_URL")
 NEO4J_URI      = os.getenv("NEO4J_URI")
 NEO4J_USER     = os.getenv("NEO4J_USER")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
-from ai_engine.core.groq_pool import groq_pool  # type: ignore
+from ai_engine.core.llm_router import llm_pool  # type: ignore
 
-neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+neo4j_driver = GraphDatabase.driver(
+    NEO4J_URI or "",
+    auth=(NEO4J_USER or "", NEO4J_PASSWORD or "")
+)
 _scorer      = EpistemicTrustScorer()
 # Cross-ref is LLM + Neo4j heavy; keep concurrency low on HF Spaces.
 MAX_WORKERS = 2
@@ -61,7 +64,7 @@ Classification rules:
 
 Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."""
     try:
-        resp = groq_pool.chat_completions_create(
+        resp = llm_pool.chat_completions_create(
             model='TIER_LIGHT',
             messages=[
                 {"role": "system", "content": "You are an epistemic stance detection engine. Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."},
@@ -239,7 +242,8 @@ def process_cross_ref_queue():
             SELECT COUNT(*) FROM extracted_claims
             WHERE pipeline_stage = 'STAGE_7_CROSS_REF' AND status = 'PROCESSING';
         """)
-        pending = cur.fetchone()[0]
+        row = cur.fetchone()
+        pending = row[0] if row else 0
         cur.close()
         conn.close()
 
