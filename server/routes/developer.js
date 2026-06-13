@@ -87,4 +87,52 @@ router.post('/keys/:id/revoke', async (req, res) => {
     }
 });
 
+// Get system settings
+router.get('/settings', async (req, res) => {
+    try {
+        const client = await req.app.locals.pgPool.connect();
+        try {
+            const { rows } = await client.query('SELECT key, value FROM system_settings');
+            const settings = rows.reduce((acc, row) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+            res.json(settings);
+        } finally {
+            client.release();
+        }
+    } catch (e) {
+        console.error('[Developer API]', e);
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+// Update system settings
+router.post('/settings', async (req, res) => {
+    try {
+        const settings = req.body;
+        const client = await req.app.locals.pgPool.connect();
+        try {
+            await client.query('BEGIN');
+            for (const [key, value] of Object.entries(settings)) {
+                await client.query(`
+                    INSERT INTO system_settings (key, value) 
+                    VALUES ($1, $2)
+                    ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP
+                `, [key, value]);
+            }
+            await client.query('COMMIT');
+            res.json({ success: true });
+        } catch(err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
+    } catch (e) {
+        console.error('[Developer API Update Settings Error]', e);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
 module.exports = router;

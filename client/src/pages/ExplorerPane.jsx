@@ -242,6 +242,48 @@ const CY_STYLE = [
             'border-color': '#ffffff',
         },
     },
+    // ── External Entity: focal ────────────────────────────────────────────
+    {
+        selector: 'node[type="Entity"][role="focal"][origin="external"]',
+        style: {
+            'background-color': '#0f766e',
+            'border-color': '#ccfbf1',
+        },
+    },
+    // ── External Entity: linked ───────────────────────────────────────────
+    {
+        selector: 'node[type="Entity"][role="linked"][origin="external"]',
+        style: {
+            'background-color': '#115e59',
+            'border-color': '#99f6e4',
+        },
+    },
+    // ── External Claim nodes ──────────────────────────────────────────────
+    {
+        selector: 'node[type="Claim"][origin="external"]',
+        style: {
+            'border-color': '#2dd4bf',
+            'border-width': 2,
+            'border-style': 'dashed',
+            'background-color': 'rgba(15, 118, 110, 0.85)',
+        },
+    },
+    // ── SAME_AS Edges ─────────────────────────────────────────────────────
+    {
+        selector: 'edge[type="SAME_AS"]',
+        style: {
+            'width': 3,
+            'line-color': '#f59e0b',
+            'target-arrow-shape': 'none',
+            'curve-style': 'bezier',
+            'line-style': 'dashed',
+            'label': 'data(label)',
+            'font-size': 10,
+            'color': '#f59e0b',
+            'text-background-opacity': 1,
+            'text-background-color': COLORS.bg,
+        },
+    },
 ];
 
 // ── Cytoscape layout options ──────────────────────────────────────────────────
@@ -364,6 +406,7 @@ export default function ExplorerPane() {
     const [selectedNode, setSelectedNode] = useState(null);
     const [hoveredNode, setHoveredNode] = useState(null);
     const [showAll, setShowAll] = useState(false);
+    const [scope, setScope] = useState('internal'); // 'internal', 'external', 'both'
 
     // Agentic Chat State
     const [hasStarted, setHasStarted] = useState(false);
@@ -446,7 +489,7 @@ export default function ExplorerPane() {
     }, [slug, id /* loadNeighborhood omitted safely */]);
 
     // ── Load a neighborhood ───────────────────────────────────────────────────
-    const loadNeighborhood = useCallback(async (entityName, forceShowAll = showAll) => {
+    const loadNeighborhood = useCallback(async (entityName, forceShowAll = showAll, currentScope = scope) => {
         if (!entityName || !entityName.trim()) return;
         setLoading(true);
         setSelectedNode(null);
@@ -455,11 +498,11 @@ export default function ExplorerPane() {
         try {
             let data;
             try {
-                data = await api.getNeighborhood(entityName, forceShowAll);
+                data = await api.getNeighborhood(entityName, forceShowAll, 60, currentScope);
             } catch {
                 const searchRes = await api.search(entityName, 'entity');
                 if (!searchRes.entities?.length) throw new Error(`No entity matching "${entityName}"`);
-                data = await api.getNeighborhood(searchRes.entities[0].name, forceShowAll);
+                data = await api.getNeighborhood(searchRes.entities[0].name, forceShowAll, 60, currentScope);
             }
             setElements(buildElements(data));
         } catch (err) {
@@ -467,7 +510,7 @@ export default function ExplorerPane() {
         } finally {
             setLoading(false);
         }
-    }, [showAll]);
+    }, [showAll, scope]);
 
     // ── Handle Article Fetching ───────────────────────────────────────────────
     
@@ -733,7 +776,21 @@ export default function ExplorerPane() {
         setShowAll(next);
 
         if (focalName) {
-            await loadNeighborhood(focalName, next);
+            const actualName = focalName.startsWith('e:') ? focalName.substring(2) : focalName;
+            await loadNeighborhood(actualName, next, scope);
+        }
+    };
+
+    const handleCycleScope = async () => {
+        const focalNodes = elements.filter(el => el.data.role === 'focal');
+        const focalName = focalNodes.length > 0 ? focalNodes[0].data.id : null;
+
+        const nextScope = scope === 'internal' ? 'external' : scope === 'external' ? 'both' : 'internal';
+        setScope(nextScope);
+
+        if (focalName) {
+            const actualName = focalName.startsWith('e:') ? focalName.substring(2) : focalName;
+            await loadNeighborhood(actualName, showAll, nextScope);
         }
     };
 
@@ -1302,18 +1359,30 @@ export default function ExplorerPane() {
                     </button>
                 )}
 
-                {/* Show All Toggle (Top Right of graph) */}
-                <button onClick={handleToggleShowAll} className="glass-panel" style={{
-                    position: 'absolute', top: 20, right: 20, zIndex: 10,
-                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px',
-                    borderRadius: 20, border: 'none', cursor: 'pointer', color: '#fff',
-                    background: showAll ? '#7c3aed' : 'rgba(255,255,255,0.1)'
-                }}>
-                    {showAll ? <Eye size={16} /> : <EyeOff size={16} />}
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>
-                        {showAll ? 'Hide History' : 'Show History'}
-                    </span>
-                </button>
+                {/* Controls (Top Right of graph) */}
+                <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 10, display: 'flex', gap: 10 }}>
+                    <button onClick={handleCycleScope} className="glass-panel" style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px',
+                        borderRadius: 20, border: 'none', cursor: 'pointer', color: '#fff',
+                        background: scope === 'both' ? '#0f766e' : scope === 'external' ? '#0369a1' : 'rgba(255,255,255,0.1)'
+                    }}>
+                        <Globe size={16} />
+                        <span style={{ fontSize: 13, fontWeight: 500 }}>
+                            Scope: {scope === 'internal' ? 'Internal VPC' : scope === 'external' ? 'External Master' : 'Hybrid (Both)'}
+                        </span>
+                    </button>
+
+                    <button onClick={handleToggleShowAll} className="glass-panel" style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px',
+                        borderRadius: 20, border: 'none', cursor: 'pointer', color: '#fff',
+                        background: showAll ? '#7c3aed' : 'rgba(255,255,255,0.1)'
+                    }}>
+                        {showAll ? <Eye size={16} /> : <EyeOff size={16} />}
+                        <span style={{ fontSize: 13, fontWeight: 500 }}>
+                            {showAll ? 'Hide History' : 'Show History'}
+                        </span>
+                    </button>
+                </div>
 
                 {elements.length === 0 && !loading && !isAsking && (
                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>

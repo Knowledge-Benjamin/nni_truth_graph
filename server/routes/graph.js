@@ -38,6 +38,21 @@ function toPlain(obj) {
     return obj;
 }
 
+async function getSystemSettings(pool) {
+    const client = await pool.connect();
+    try {
+        const { rows } = await client.query('SELECT key, value FROM system_settings');
+        return rows.reduce((acc, row) => {
+            acc[row.key] = row.value;
+            return acc;
+        }, {});
+    } catch(e) {
+        return {};
+    } finally {
+        client.release();
+    }
+}
+
 // ─── GET /api/search?q=...&type=claim|entity ─────────────────────────────────
 router.get('/search', searchLimiter, async (req, res) => {
     const { q, type = 'all' } = req.query;
@@ -1306,10 +1321,74 @@ router.get('/graph/neighborhood/:name', async (req, res) => {
             });
         }
 
+        const localNodes = Array.from(nodesMap.values());
+        const localEdges = edgesList.filter(e => nodesMap.has(e.source) && nodesMap.has(e.target));
+        
+        localNodes.forEach(n => n.origin = 'internal');
+        localEdges.forEach(e => e.origin = 'internal');
+
+        let mergedNodes = [...localNodes];
+        let mergedEdges = [...localEdges];
+
+        const scope = req.query.scope || 'internal';
+        if (scope === 'external' || scope === 'both') {
+            try {
+                const settings = await getSystemSettings(req.app.locals.pgPool);
+                if (settings.EXTERNAL_B2B_API_URL && settings.EXTERNAL_B2B_API_KEY) {
+                    const baseUrl = settings.EXTERNAL_B2B_API_URL.replace(/\/$/, '');
+                    const fetchRes = await fetch(`${baseUrl}/graph/neighborhood/${encodeURIComponent(name)}?show_all=${showAll}&limit=${limit}&scope=internal`, {
+                        headers: { 'Authorization': `Bearer ${settings.EXTERNAL_B2B_API_KEY}` }
+                    });
+                    if (fetchRes.ok) {
+                        const extData = await fetchRes.json();
+                        if (extData && extData.nodes && extData.edges) {
+                            if (scope === 'external') {
+                                mergedNodes = [];
+                                mergedEdges = [];
+                            }
+                            extData.nodes.forEach(n => {
+                                n.id = `${n.id}_ext`;
+                                n.origin = 'external';
+                                mergedNodes.push(n);
+                            });
+                            extData.edges.forEach(e => {
+                                e.id = `${e.id}_ext`;
+                                e.source = `${e.source}_ext`;
+                                e.target = `${e.target}_ext`;
+                                e.origin = 'external';
+                                mergedEdges.push(e);
+                            });
+                            
+                            if (scope === 'both') {
+                                const intEntities = localNodes.filter(n => n.type === 'Entity');
+                                intEntities.forEach(intE => {
+                                    const extE = extData.nodes.find(e => e.id === `${intE.id}_ext`);
+                                    if (extE) {
+                                        mergedEdges.push({
+                                            id: `same_as_${intE.id}`,
+                                            source: intE.id,
+                                            target: extE.id,
+                                            type: 'SAME_AS',
+                                            label: 'SAME AS',
+                                            origin: 'system'
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    } else {
+                        console.error('[External Graph API] Error:', fetchRes.statusText);
+                    }
+                }
+            } catch (err) {
+                console.error('[External Graph API] Fetch failed:', err.message);
+            }
+        }
+
         res.json({
             focal: focalRaw.name,
-            nodes: Array.from(nodesMap.values()),
-            edges: edgesList.filter(e => nodesMap.has(e.source) && nodesMap.has(e.target)),
+            nodes: mergedNodes,
+            edges: mergedEdges,
         });
     } catch (e) {
         console.error('[neighborhood]', e);

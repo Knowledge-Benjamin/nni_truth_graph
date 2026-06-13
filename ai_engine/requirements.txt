@@ -32,3 +32,5 @@ kagglehub
 # Multimedia Engine
 yt-dlp>=2024.03.10          # Autonomous video extraction
 opencv-python-headless>=4.9.0  # Keyframe extraction (headless for server env)
+
+langdetect==1.0.9

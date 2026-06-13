@@ -112,19 +112,40 @@ def process_video():
                         
                     print(f"      -> [SUCCESS] Downloaded to {actual_filename}")
                     
-                    # 3. Audio Transcription (Groq Whisper)
-                    print(f"      -> Transcribing with whisper-large-v3-turbo...")
+                    # 3. Audio Transcription (Sunbird STT -> Translation -> Whisper Fallback)
+                    print(f"      -> Transcribing audio with Sunbird AI STT...")
+                    from ai_engine.core.sunbird_api import SunbirdClient
                     try:
-                        with open(actual_filename, "rb") as file:
-                            transcription = client.audio.transcriptions.create(
-                              file=(os.path.basename(actual_filename), file.read()),
-                              model="whisper-large-v3-turbo"
-                            )
-                        raw_text = transcription.text
-                    except Exception as e:
-                         # fallback if audio has an issue (e.g., zero audio stream)
-                         print(f"      -> [Audio Warning] {e}")
-                         raw_text = "[No audio or transcription failed]"
+                        # Try Sunbird API first for African language context
+                        raw_text = SunbirdClient.transcribe_audio(actual_filename)
+                        
+                        if raw_text:
+                            # Sunbird transcribes, now we check if we need to translate the transcription
+                            from langdetect import detect
+                            try:
+                                detected_lang = detect(raw_text)
+                                if detected_lang != 'en':
+                                    print(f"      -> [TRANSLATION] Detected non-English audio ({detected_lang}). Translating...")
+                                    translated = SunbirdClient.translate_to_english(raw_text)
+                                    if translated and translated != raw_text:
+                                        raw_text = translated
+                            except Exception as lang_e:
+                                print(f"      -> [LANGDETECT ERROR] {lang_e}")
+                        else:
+                            raise Exception("Sunbird STT returned empty text.")
+                            
+                    except Exception as stt_e:
+                        print(f"      -> [Sunbird STT Failed or Skipped] {stt_e}. Falling back to Whisper...")
+                        try:
+                            with open(actual_filename, "rb") as file:
+                                transcription = client.audio.transcriptions.create(
+                                  file=(os.path.basename(actual_filename), file.read()),
+                                  model="whisper-large-v3-turbo"
+                                )
+                            raw_text = transcription.text
+                        except Exception as e:
+                             print(f"      -> [Audio Warning] {e}")
+                             raw_text = "[No audio or transcription failed]"
                     
                     # 4. Keyframe Extraction
                     frames_b64 = extract_keyframes(actual_filename, max_frames=5)

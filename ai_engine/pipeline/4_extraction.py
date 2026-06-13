@@ -274,6 +274,27 @@ def extraction_worker(worker_id):
                             "epistemic_domain": getattr(claim, "epistemic_domain", "EMPIRICAL")
                         })
                         
+                        # --- Zero-Day Threat Priority Alert ---
+                        THREAT_KEYWORDS = ["explosion", "strike", "kidnapping", "breach", "fire", "attack", "casualty", "riot", "terror", "lockdown"]
+                        
+                        is_threat = False
+                        if any(kw in clean_pred.lower() for kw in THREAT_KEYWORDS) or any(kw in clean_obj.lower() for kw in THREAT_KEYWORDS):
+                            is_threat = True
+                            
+                        if is_threat:
+                            cursor.execute("SELECT 1 FROM extracted_claims WHERE subject = %s AND predicate = %s AND object_entity = %s LIMIT 1", (clean_subj, clean_pred, clean_obj))
+                            if not cursor.fetchone():
+                                print(f"      [🚨 THREAT PRIORITY ALERT] Zero-Day Threat Detected: {clean_subj} {clean_pred} {clean_obj}")
+                                webhook_url = os.getenv("THREAT_ALERT_WEBHOOK")
+                                if webhook_url:
+                                    try:
+                                        import requests
+                                        requests.post(webhook_url, json={
+                                            "text": f"🚨 UNVERIFIED THREAT DETECTED: {clean_subj} {clean_pred} {clean_obj}\nSource trust: {trust_val}\nRequires immediate human review."
+                                        }, timeout=3)
+                                    except Exception as alert_e:
+                                        print(f"      [Alert Error] {alert_e}")
+                        
                         cursor.execute("""
                             INSERT INTO extracted_claims (
                                 article_id, subject, predicate, object_entity,

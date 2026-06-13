@@ -83,9 +83,9 @@ export const api = {
     },
 
     // Get typed graph neighborhood (Entity+Claim+Evidence nodes + all edges)
-    getNeighborhood: async (name, showAll = false, limit = 60) => {
+    getNeighborhood: async (name, showAll = false, limit = 60, scope = 'internal') => {
         const r = await fetch(
-            `${apiBase}/graph/neighborhood/${encodeURIComponent(name)}?show_all=${showAll}&limit=${limit}`, getFetchOptions()
+            `${apiBase}/graph/neighborhood/${encodeURIComponent(name)}?show_all=${showAll}&limit=${limit}&scope=${scope}`, getFetchOptions()
         );
         if (!r.ok) throw new Error(`Neighborhood fetch failed: ${r.status}`);
         return r.json();
@@ -121,6 +121,87 @@ export const api = {
         });
         if (!r.ok) throw new Error('Failed to revoke API key');
         return r.json();
-    }
+    },
+
+    // ── System Settings Management ──
+    getSettings: async () => {
+        const r = await fetch(`${apiBase}/developer/settings`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch settings');
+        return r.json();
+    },
+
+    updateSettings: async (settings) => {
+        const r = await fetch(`${apiBase}/developer/settings`, {
+            ...getFetchOptions(),
+            method: 'POST',
+            body: JSON.stringify(settings)
+        });
+        if (!r.ok) throw new Error('Failed to update settings');
+        return r.json();
+    },
+
+    // ── Internal Data Ingestion ──
+    ingestUrl: async (url, label = '', priority = 'normal') => {
+        const r = await fetch(`${apiBase}/ingest/url`, {
+            ...getFetchOptions(),
+            method: 'POST',
+            body: JSON.stringify({ url, label, priority }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to queue URL');
+        }
+        return r.json();
+    },
+
+    ingestText: async (title, text, source_label = '', classification = 'INTERNAL') => {
+        const r = await fetch(`${apiBase}/ingest/text`, {
+            ...getFetchOptions(),
+            method: 'POST',
+            body: JSON.stringify({ title, text, source_label, classification }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to inject memo');
+        }
+        return r.json();
+    },
+
+    ingestDocuments: async (files) => {
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('files', file);
+        }
+        const r = await fetch(`${apiBase}/ingest/document`, {
+            credentials: 'include', // No Content-Type header — let browser set multipart boundary
+            method: 'POST',
+            body: formData,
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to upload documents');
+        }
+        return r.json();
+    },
+
+    getIngestQueue: async (status = '', page = 1, limit = 20) => {
+        const params = new URLSearchParams({ page, limit });
+        if (status) params.set('status', status);
+        const r = await fetch(`${apiBase}/ingest/queue?${params}`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch ingestion queue');
+        return r.json();
+    },
+
+    deleteIngestItem: async (type, id) => {
+        const r = await fetch(`${apiBase}/ingest/${type}/${id}`, {
+            ...getFetchOptions(),
+            method: 'DELETE',
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to delete item');
+        }
+        return r.json();
+    },
 
 };

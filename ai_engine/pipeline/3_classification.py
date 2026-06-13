@@ -59,6 +59,24 @@ def classification_worker(worker_id):
                     article_id, title, raw_text = row
                     print(f"  [W-{worker_id}] Classifying: {title[:50]}...")
                     
+                    # --- LOCAL LANGUAGE DETECTION & TRANSLATION ---
+                    try:
+                        from langdetect import detect
+                        from ai_engine.core.sunbird_api import SunbirdClient
+                        
+                        detected_lang = detect(raw_text)
+                        if detected_lang != 'en':
+                            print(f"      -> [TRANSLATION] Detected non-English language ({detected_lang}). Routing to Sunbird AI...")
+                            translated_text = SunbirdClient.translate_to_english(raw_text)
+                            
+                            # If translation was successful and different, update the DB so Extraction gets English
+                            if translated_text and translated_text != raw_text:
+                                cursor.execute("UPDATE raw_articles SET raw_text = %s WHERE id = %s", (translated_text, article_id))
+                                raw_text = translated_text
+                                print(f"      -> [SUNBIRD SUCCESS] Translated to English.")
+                    except Exception as lang_e:
+                        print(f"      -> [LANGDETECT ERROR] Could not detect language: {lang_e}")
+
                     # Truncate text for embedding model (to fit within token limits, usually ~2000-8000 depending on model)
                     # For broad classification of an article, the first 4000 chars are densely informative
                     chunk_to_embed = raw_text[:4000] 

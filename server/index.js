@@ -246,7 +246,6 @@ async function runMigrations() {
             console.log('[Migrations] ✓ Schema exists, skipping full setup');
         }
 
-        console.log('[Migrations] Ensuring B2B api_keys table & triggers exist...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
@@ -256,6 +255,16 @@ async function runMigrations() {
                 tier VARCHAR(50) DEFAULT 'basic',
                 active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // system_settings for storing dynamic UI configurations (like external API URLs)
+        console.log('[Migrations] Ensuring system_settings table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key VARCHAR(255) PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
@@ -339,6 +348,12 @@ async function runMigrations() {
             await session.run(`CREATE INDEX entity_name_idx IF NOT EXISTS FOR (e:Entity) ON (e.name)`);
             await session.run(`CREATE INDEX claim_epistemic_idx IF NOT EXISTS FOR (c:Claim) ON (c.epistemic_score)`);
             
+            // Debunking Indexes
+            await session.run(`CREATE INDEX claim_verdict_idx IF NOT EXISTS FOR (c:Claim) ON (c.verdict)`);
+            await session.run(`CREATE INDEX controversy_subject_predicate_idx IF NOT EXISTS FOR (cv:Controversy) ON (cv.subject, cv.predicate)`);
+            await session.run(`CREATE INDEX controversy_open_idx IF NOT EXISTS FOR (cv:Controversy) ON (cv.open)`);
+            await session.run(`CREATE INDEX controversy_resolved_idx IF NOT EXISTS FOR (cv:Controversy) ON (cv.resolved)`);
+            
             // Neo4j 5.x HNSW vector index for claim embeddings
             // Enables db.index.vector.queryNodes() in 5_resolution.py (single round-trip vs Python cosine loop)
             try {
@@ -377,6 +392,9 @@ app.use('/api/developer', developerRoutes);
 
 const mediaRoutes = require('./routes/media');
 app.use('/api/media', mediaRoutes);
+
+const ingestRoutes = require('./routes/ingest');
+app.use('/api/ingest', ingestRoutes);
 
 
 

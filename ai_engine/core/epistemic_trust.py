@@ -97,8 +97,12 @@ class EpistemicTrustScorer:
             # --- Gamma Variance & Breaking News Detection ---
             from collections import defaultdict
             windows = defaultdict(list)
+            has_tier_1 = False
             for rec in corroboration_records:
                 ts = rec.get("timestamp") or now
+                # Check for Tier 1 confirmation
+                if rec.get("source_tier", 3) == 1:
+                    has_tier_1 = True
                 # Group by 4-hour windows for burst detection
                 try:
                     window_key = ts.strftime('%Y-%m-%d-%H')[:-1] 
@@ -109,7 +113,10 @@ class EpistemicTrustScorer:
             max_window = max(windows.values(), key=len) if windows else []
             burst_ratio = len(max_window) / effective_support_count if effective_support_count else 0
 
-            if effective_support_count >= 5 and burst_ratio >= 0.8:
+            if has_tier_1:
+                # Premium Corroboration: A Tier 1 source instantly validates the claim
+                corroboration_bonus = self.max_corrob_bonus
+            elif effective_support_count >= 5 and burst_ratio >= 0.8:
                 # Sudden Burst detected. Check source tiers.
                 tiers = [r.get("source_tier", 3) for r in max_window]
                 if all(t == 3 for t in tiers):
