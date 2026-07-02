@@ -33,7 +33,7 @@
     "dom-helpers": "^5.2.1",
     "dompurify": "^3.3.2",
     "electron-to-chromium": "^1.5.302",
-    "esbuild": "^0.21.5",
+    "esbuild": "^0.28.1",
     "escalade": "^3.2.0",
     "eventemitter3": "^4.0.7",
     "fast-equals": "^5.4.0",

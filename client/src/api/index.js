@@ -123,6 +123,25 @@ export const api = {
         return r.json();
     },
 
+    applyLicense: async (token) => {
+        const r = await fetch(`${apiBase}/developer/license/apply`, {
+            ...getFetchOptions(),
+            method: 'POST',
+            body: JSON.stringify({ token })
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to apply license');
+        }
+        return r.json();
+    },
+
+    getLicenseStatus: async () => {
+        const r = await fetch(`${apiBase}/developer/license/status`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch license status');
+        return r.json();
+    },
+
     // ── System Settings Management ──
     getSettings: async () => {
         const r = await fetch(`${apiBase}/developer/settings`, getFetchOptions());
@@ -201,6 +220,67 @@ export const api = {
             const err = await r.json().catch(() => ({}));
             throw new Error(err.error || 'Failed to delete item');
         }
+        return r.json();
+    },
+
+    // ── OSINT Investigations ──
+    startInvestigation: async (target, options = {}) => {
+        const r = await fetch(`${apiBase}/investigations`, {
+            ...getFetchOptions(),
+            method: 'POST',
+            body: JSON.stringify({ target, ...options }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to start investigation');
+        }
+        return r.json();
+    },
+
+    listInvestigations: async () => {
+        const r = await fetch(`${apiBase}/investigations`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to list investigations');
+        return r.json();
+    },
+
+    getInvestigation: async (id) => {
+        const r = await fetch(`${apiBase}/investigations/${id}`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch investigation');
+        return r.json();
+    },
+
+    getInvestigationLeads: async (id, page = 1, limit = 50, status = '') => {
+        const params = new URLSearchParams({ page, limit });
+        if (status) params.set('status', status);
+        const r = await fetch(`${apiBase}/investigations/${id}/leads?${params}`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch leads');
+        return r.json();
+    },
+
+    pauseInvestigation: async (id) => {
+        const r = await fetch(`${apiBase}/investigations/${id}/pause`, {
+            ...getFetchOptions(),
+            method: 'POST',
+        });
+        if (!r.ok) throw new Error('Failed to pause investigation');
+        return r.json();
+    },
+
+    resumeInvestigation: async (id) => {
+        const r = await fetch(`${apiBase}/investigations/${id}/resume`, {
+            ...getFetchOptions(),
+            method: 'POST',
+        });
+        if (!r.ok) throw new Error('Failed to resume investigation');
+        return r.json();
+    },
+
+    deleteInvestigation: async (id) => {
+        const r = await fetch(`${apiBase}/investigations/${id}`, {
+            ...getFetchOptions(),
+            method: 'DELETE',
+        });
+        if (!r.ok) throw new Error('Failed to delete investigation');
         return r.json();
     },
 

@@ -38,6 +38,7 @@ BURST_EXTRA        = 2     # extra Celery tasks dispatched per tick when BURSTin
 S1_INTERVAL  = 20   # Ingest        — every 5 min  (20 × 15s)
 S9_INTERVAL  = 20   # Evolution     — every 5 min
 S10_INTERVAL = 1440 # Revalidation  — every 6 hours
+S11_INTERVAL = 8    # OSINT Orchestrator — every 2 min  (8 × 15s)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QUEUE-DEPTH QUERIES — one per stage
@@ -152,6 +153,7 @@ class StageScheduler:
         "8_graph_mutation.py": "S8  Mutation      ",
         "9_truth_evolution.py":"S9  Evolution     ",
         "10_revalidation.py":  "S10 Revalidation  ",
+        "orchestrator":        "S11 Investigator  ",
     }
 
     def __init__(self):
@@ -161,6 +163,7 @@ class StageScheduler:
         self._s1_timer: int  = 0
         self._s9_timer: int  = 0
         self._s10_timer: int = 0
+        self._s11_timer: int = 0  # OSINT Orchestrator
         self._tick: int      = 0
         # Stuck-stage detection: track last seen depth and dispatch count per stage
         self._last_depth: dict[str, int] = {s: -1 for s in PIPELINE_ORDER}  # depth at last dispatch (-1 as None)
@@ -334,6 +337,17 @@ class StageScheduler:
                 f"  --  {'':16s}  [IN {fmt_timer(self._s10_timer):>8s}]"
             )
 
+        # ── Stage 11 — OSINT Orchestrator (every S11_INTERVAL ticks) ─────────
+        self._s11_timer -= 1
+        if self._s11_timer <= 0:
+            self._s11_timer = S11_INTERVAL
+            to_dispatch.append("orchestrator")
+            self._actions["orchestrator"] = f"  --  {'':16s}  [DISPATCH] "
+        else:
+            self._actions["orchestrator"] = (
+                f"  --  {'':16s}  [IN {fmt_timer(self._s11_timer):<7s}]"
+            )
+
         return to_dispatch
 
     def dashboard(self, pressures: dict) -> str:
@@ -388,6 +402,15 @@ class StageScheduler:
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Lazy-import OSINT orchestrator (avoids import overhead when not needed) ──
+def _run_osint_orchestrator(neo4j_driver=None):
+    try:
+        from orchestrator import run_orchestrator_tick  # type: ignore
+        run_orchestrator_tick(neo4j_driver=neo4j_driver)
+    except Exception as e:
+        print(f"[Orchestrator] Error during tick: {e}")
+
+
 def main():
     print("=== AI Engine Pipeline Orchestrator (Smart Adaptive Dispatcher) ===")
 
@@ -417,9 +440,14 @@ def main():
             # 2. Decide what to dispatch
             to_dispatch = scheduler.tick(pressures)
 
-            # 3. Dispatch to Celery
+            # 3. Dispatch to Celery (skip orchestrator — runs in-process)
             dispatched = []
             for script in to_dispatch:
+                if script == "orchestrator":
+                    # Run the OSINT orchestrator synchronously in this process
+                    _run_osint_orchestrator()
+                    dispatched.append(script)
+                    continue
                 try:
                     launch_pipeline_stage.delay(script)
                     dispatched.append(script)

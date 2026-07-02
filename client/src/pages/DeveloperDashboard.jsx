@@ -134,6 +134,11 @@ export default function DeveloperDashboard() {
     const [settings, setSettings] = useState({ EXTERNAL_B2B_API_URL: '', EXTERNAL_B2B_API_KEY: '' });
     const [savingSettings, setSavingSettings] = useState(false);
 
+    // ── License State ─────────────────────────────────────────────────────────
+    const [licenseCredits, setLicenseCredits] = useState(null);
+    const [licenseToken, setLicenseToken] = useState('');
+    const [applyingLicense, setApplyingLicense] = useState(false);
+
     // ── Ingest Tab State ──────────────────────────────────────────────────────
     const [ingestMode, setIngestMode] = useState('url'); // 'url' | 'text' | 'document'
     const [ingestStatus, setIngestStatus] = useState(null); // { type: 'success'|'error', message }
@@ -165,7 +170,32 @@ export default function DeveloperDashboard() {
     useEffect(() => { 
         fetchKeys(); 
         fetchSettings();
+        fetchLicense();
     }, []);
+
+    const fetchLicense = async () => {
+        try {
+            const data = await api.getLicenseStatus();
+            setLicenseCredits(data.total_credits);
+        } catch (e) {
+            console.error('Failed to fetch license', e);
+        }
+    };
+
+    const handleApplyLicense = async () => {
+        if (!licenseToken.trim()) return alert('Please enter a license JWT');
+        setApplyingLicense(true);
+        try {
+            const result = await api.applyLicense(licenseToken.trim());
+            alert(`License applied! Added ${result.added} credits.`);
+            setLicenseToken('');
+            fetchLicense();
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setApplyingLicense(false);
+        }
+    };
 
     const fetchSettings = async () => {
         try {
@@ -318,6 +348,7 @@ export default function DeveloperDashboard() {
     const tabs = [
         { id: 'overview',   icon: <BarChart3 size={15} />,  label: 'Overview' },
         { id: 'keys',       icon: <Key size={15} />,         label: 'API Keys' },
+        { id: 'license',    icon: <ShieldCheck size={15} />, label: 'License & Credits' },
         { id: 'endpoints',  icon: <Layers size={15} />,      label: 'Endpoints' },
         { id: 'quickstart', icon: <Zap size={15} />,         label: 'Quick Start' },
         { id: 'federation', icon: <Settings size={15} />,    label: 'Federation' },
@@ -502,6 +533,52 @@ export default function DeveloperDashboard() {
                                     </tbody>
                                 </table>
                             )}
+                        </div>
+                    </div>
+                )}
+
+                {/* ══════════ LICENSE TAB ══════════ */}
+                {tab === 'license' && (
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+                            <div>
+                                <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Commercial License & Credits</h2>
+                                <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: 14 }}>Apply signed JWT keys for offline Air-Gapped credit top-ups.</p>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 24 }}>
+                            {/* Credits Display */}
+                            <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: '32px 24px', textAlign: 'center' }}>
+                                <ShieldCheck size={48} color="#38bdf8" style={{ margin: '0 auto 16px auto' }} />
+                                <h3 style={{ fontSize: 14, color: '#94a3b8', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: 1 }}>Remaining Compute Credits</h3>
+                                <div style={{ fontSize: 48, fontWeight: 800, color: '#f8fafc', marginBottom: 8 }}>
+                                    {licenseCredits !== null ? licenseCredits.toLocaleString() : '...'}
+                                </div>
+                                <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>Credits are consumed by the OSINT orchestrator during investigations.</p>
+                            </div>
+
+                            {/* Apply License Form */}
+                            <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 24 }}>
+                                <h3 style={{ fontSize: 16, fontWeight: 600, color: '#f8fafc', margin: '0 0 16px 0' }}>Apply Offline License Token</h3>
+                                <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20 }}>
+                                    Paste your securely signed JWT below. The token will be cryptographically verified using the appliance's public key before credits are added.
+                                </p>
+                                <textarea
+                                    value={licenseToken}
+                                    onChange={e => setLicenseToken(e.target.value)}
+                                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                                    style={{ width: '100%', height: 120, padding: 12, backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#cbd5e1', fontFamily: 'monospace', fontSize: 13, resize: 'vertical', marginBottom: 16 }}
+                                />
+                                <button
+                                    onClick={handleApplyLicense}
+                                    disabled={applyingLicense || !licenseToken.trim()}
+                                    style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '12px', background: applyingLicense ? '#334155' : 'linear-gradient(90deg,#10b981,#059669)', color: 'white', border: 'none', borderRadius: 8, cursor: applyingLicense ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: 14 }}
+                                >
+                                    {applyingLicense ? <Loader2 size={16} className="spin" /> : <Plus size={16} />}
+                                    {applyingLicense ? 'Verifying Cryptography...' : 'Apply License'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}

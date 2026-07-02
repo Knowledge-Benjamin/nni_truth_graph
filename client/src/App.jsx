@@ -16,6 +16,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import DeveloperDashboard from './pages/DeveloperDashboard';
 import ApiDocs from './pages/ApiDocs';
 import MediaPortal from './pages/MediaPortal';
+import Investigations from './pages/Investigations';
 
 function App() {
     const formatSocialCount = (count) => {
@@ -35,6 +36,7 @@ function App() {
     else if (location.pathname.startsWith('/login')) activeTab = 'login';
     else if (location.pathname.startsWith('/signup')) activeTab = 'signup';
     else if (location.pathname.startsWith('/account')) activeTab = 'account';
+    else if (location.pathname.startsWith('/investigations')) activeTab = 'investigations';
     else if (location.pathname.startsWith('/developer')) activeTab = 'developer';
     else if (location.pathname.startsWith('/docs')) activeTab = 'docs';
     else if (location.pathname.startsWith('/verify')) activeTab = 'verify';
@@ -71,6 +73,7 @@ function App() {
         { id: 'docs',          icon: <BookOpen size={16} />,   label: 'API Docs',         path: '/docs',           show: true },
         { id: 'contradictions',icon: <GitMerge size={16} />,   label: 'Controversies',    path: '/contradictions', show: user?.role === 'admin', badge: stats?.graph?.open_controversies },
         { id: 'review',        icon: <ShieldAlert size={16} />,label: 'Human Review',     path: '/review',         show: user?.role === 'admin', badge: stats?.pipeline?.human_review_pending, danger: stats?.pipeline?.human_review_pending > 0 },
+        { id: 'investigations',icon: <Search size={16} />,     label: 'Investigations',   path: '/investigations', show: user?.role === 'admin' },
         { id: 'articles',      icon: <BookOpen size={16} />,   label: 'Article Engine',   path: '/articles',       show: user?.role === 'admin' },
         { id: 'developer',     icon: <Terminal size={16} />,   label: 'Developer Portal', path: '/developer',      show: !!user },
     ].filter(i => i.show);
@@ -270,6 +273,7 @@ function App() {
                     <Route path="/signup" element={<Signup />} />
                     <Route path="/contradictions" element={<ProtectedRoute><ContradictionsPanel /></ProtectedRoute>} />
                     <Route path="/review" element={<ProtectedRoute><HumanReviewQueue /></ProtectedRoute>} />
+                    <Route path="/investigations" element={<ProtectedRoute><Investigations /></ProtectedRoute>} />
                     <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
                     <Route path="/articles" element={<ProtectedRoute><ArticleDashboard /></ProtectedRoute>} />
                     <Route path="/developer" element={<ProtectedRoute><DeveloperDashboard /></ProtectedRoute>} />

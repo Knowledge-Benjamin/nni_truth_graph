@@ -19,6 +19,9 @@ from dotenv import load_dotenv
 # Ensure .env is loaded at import time for any script that imports this module first.
 load_dotenv()
 
+AIR_GAPPED_MODE = os.getenv("AIR_GAPPED_MODE", "false").lower() == "true"
+LOCAL_INFERENCE_URL = os.getenv("LOCAL_INFERENCE_URL", "http://localhost:8000/v1")
+
 from groq import Groq, RateLimitError as GroqRateLimitError
 from openai import OpenAI, RateLimitError as OpenAIRateLimitError, NotFoundError, InternalServerError
 
@@ -39,6 +42,14 @@ PROVIDERS = {
         "model_light":  "gemma-4-26b-a4b-it",
         "model_heavy":  "gemma-4-26b-a4b-it",  # gemma-4-31b-it returns 500 on Google backend; use 26b for both
         "model_vision": "gemma-4-26b-a4b-it"   # multimodal variant not yet available via API
+    },
+    "DEEPINFRA": {
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "weight": 100,
+        "env_keys": ["DEEPINFRA_API_KEY"],
+        "model_light":  "google/gemma-4-26b-a4b-it",
+        "model_heavy":  "google/gemma-4-31b-it",
+        "model_vision": "google/gemma-4-multimodal-it"
     },
     "GROQ": {
         "base_url": None,  # Uses native Groq client
@@ -205,11 +216,22 @@ class MultiProviderRouter:
         """
         seen_keys: set[str] = set()
 
-        for p_name, p_config in PROVIDERS.items():
-            for key in _load_all_keys_for_provider(p_config["env_keys"]):
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    self.clients_universal.append(RoutedClient(p_name, key, p_config))
+        if AIR_GAPPED_MODE:
+            print("[LLM Router] AIR_GAPPED_MODE ENABLED. Forcing all requests to local vLLM.")
+            p_config = {
+                "base_url": LOCAL_INFERENCE_URL,
+                "weight": 100,
+                "model_light": "gemma-local",
+                "model_heavy": "gemma-local",
+                "model_vision": "gemma-local"
+            }
+            self.clients_universal.append(RoutedClient("LOCAL_VLLM", "dummy-local-key", p_config))
+        else:
+            for p_name, p_config in PROVIDERS.items():
+                for key in _load_all_keys_for_provider(p_config["env_keys"]):
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        self.clients_universal.append(RoutedClient(p_name, key, p_config))
 
         print(f"[LLM Router] Initialized Universal Pool with {len(self.clients_universal)} keys globally.")
         if not self.clients_universal:

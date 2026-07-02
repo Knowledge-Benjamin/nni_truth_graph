@@ -88,7 +88,8 @@ async function startListenWorker(pgPool, wss) {
     try {
         client = await pgPool.connect();
         await client.query('LISTEN claim_committed');
-        console.log('[Firehose Worker] Listening for Postgres claim_committed events...');
+        await client.query('LISTEN investigation_update');
+        console.log('[Firehose Worker] Listening for Postgres claim_committed and investigation_update events...');
 
         client.on('notification', (msg) => {
             if (msg.channel === 'claim_committed') {
@@ -111,6 +112,22 @@ async function startListenWorker(pgPool, wss) {
                     });
                 } catch (e) {
                     console.error('[Firehose Worker] Error parsing Postgres payload:', e);
+                }
+            } else if (msg.channel === 'investigation_update') {
+                try {
+                    const update = JSON.parse(msg.payload);
+                    // Broadcast investigation updates to clients subscribed to '*' or 'investigations'
+                    wss.clients.forEach((ws) => {
+                        if (ws.readyState === 1 /* WebSocket.OPEN */ && 
+                            (ws.subscriptions.has('investigations') || ws.subscriptions.has('*'))) {
+                            ws.send(JSON.stringify({
+                                event: 'INVESTIGATION_UPDATE',
+                                data: update
+                            }));
+                        }
+                    });
+                } catch (e) {
+                    console.error('[Firehose Worker] Error parsing investigation_update payload:', e);
                 }
             }
         });

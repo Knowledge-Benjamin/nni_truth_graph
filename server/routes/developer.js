@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const { authenticateAdmin } = require('./auth');
 
 const router = express.Router();
@@ -132,6 +133,97 @@ router.post('/settings', async (req, res) => {
     } catch (e) {
         console.error('[Developer API Update Settings Error]', e);
         res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+// ── License Management ──
+
+// Apply a new license key (JWT)
+router.post('/license/apply', async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token) return res.status(400).json({ error: 'Token required' });
+
+        const pubKey = process.env.LICENSE_PUB_KEY;
+        if (!pubKey) return res.status(500).json({ error: 'LICENSE_PUB_KEY not configured on server' });
+
+        // Verify token
+        let payload;
+        try {
+            payload = jwt.verify(token, pubKey, { algorithms: ['HS256', 'RS256'] });
+        } catch (err) {
+            return res.status(400).json({ error: 'Invalid or expired license key' });
+        }
+
+        const creditsToAdd = payload.credits || 0;
+        const validUntil = payload.exp_date ? new Date(payload.exp_date) : null;
+
+        const client = await req.app.locals.pgPool.connect();
+        try {
+            // Ensure table exists (usually python does this, but just in case)
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS system_licenses (
+                    id SERIAL PRIMARY KEY,
+                    license_key TEXT UNIQUE NOT NULL,
+                    credits_remaining INT NOT NULL DEFAULT 0,
+                    valid_until TIMESTAMP WITH TIME ZONE,
+                    metadata JSONB,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            `);
+
+            const result = await client.query(
+                `INSERT INTO system_licenses (license_key, credits_remaining, valid_until, metadata)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (license_key) DO NOTHING
+                 RETURNING id`,
+                [token, creditsToAdd, validUntil, payload]
+            );
+
+            if (result.rowCount === 0) {
+                return res.status(400).json({ error: 'License key already applied.' });
+            }
+            res.json({ success: true, added: creditsToAdd });
+        } finally {
+            client.release();
+        }
+    } catch (e) {
+        console.error('[Developer API License Apply Error]', e);
+        res.status(500).json({ error: 'Failed to apply license' });
+    }
+});
+
+// Get current license status and remaining credits
+router.get('/license/status', async (req, res) => {
+    try {
+        const client = await req.app.locals.pgPool.connect();
+        try {
+            // Ensure table exists
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS system_licenses (
+                    id SERIAL PRIMARY KEY,
+                    license_key TEXT UNIQUE NOT NULL,
+                    credits_remaining INT NOT NULL DEFAULT 0,
+                    valid_until TIMESTAMP WITH TIME ZONE,
+                    metadata JSONB,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            `);
+
+            const { rows } = await client.query(`
+                SELECT SUM(credits_remaining) as total_credits
+                FROM system_licenses
+                WHERE valid_until > NOW() OR valid_until IS NULL
+            `);
+            
+            const total = rows[0]?.total_credits || 0;
+            res.json({ total_credits: parseInt(total) });
+        } finally {
+            client.release();
+        }
+    } catch (e) {
+        console.error('[Developer API License Status Error]', e);
+        res.status(500).json({ error: 'Failed to fetch license status' });
     }
 });
 

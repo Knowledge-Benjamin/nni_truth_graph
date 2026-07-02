@@ -20,9 +20,9 @@ app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    # 10 threads: fast stages (scrape, mutate) always have free slots
-    # even while 3-4 slots are held by slow LLM stages (resolution, extraction)
-    worker_concurrency=10,
+    # SQLite broker has a single-writer lock — concurrency above 3 causes
+    # "Database Is Locked" errors under load. If you switch to Redis, raise this to 10+.
+    worker_concurrency=3,
     task_acks_late=True,        # Don't ack until task completes — prevents silent task loss
     task_time_limit=1800,       # 30 min hard kill
     task_soft_time_limit=1500,  # 25 min: soft warning before kill

@@ -180,10 +180,6 @@ def main():
         celery_process.terminate()
         ontology_process.terminate()
         article_process.terminate()
-        # Only terminate seeder if it's still running
-        if seeder_process.poll() is None:
-            seeder_process.terminate()
-            seeder_process.wait()
         dispatcher_process.wait()
         celery_process.wait()
         ontology_process.wait()

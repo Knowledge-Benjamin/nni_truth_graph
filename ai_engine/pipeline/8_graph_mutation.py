@@ -95,13 +95,21 @@ def write_claim_to_graph(session, claim: dict):
     # 3. Article node + link to Source
     session.run("""
         MERGE (a:Article {url: $url})
-          ON CREATE SET a.title = $title, a.created_at = datetime()
+          ON CREATE SET a.title = $title,
+                        a.created_at = datetime(),
+                        a.content_sha256 = $sha256,
+                        a.snapshot_path = $snap
+          ON MATCH SET  a.content_sha256 = CASE
+                          WHEN $sha256 IS NOT NULL AND $sha256 <> '' THEN $sha256
+                          ELSE a.content_sha256 END
         WITH a
         MATCH (src:Source {name: $source_name})
         MERGE (a)-[:PUBLISHED_BY]->(src)
     """, url=claim["article_url"] or "",
          title=claim["article_title"] or "",
-         source_name=claim["source_name"])
+         source_name=claim["source_name"],
+         sha256=claim.get("content_sha256") or "",
+         snap=claim.get("snapshot_path") or "")
 
     # 4. Claim node + entity links + direct SPO edge
     session.run("""
@@ -138,9 +146,13 @@ def write_claim_to_graph(session, claim: dict):
         MATCH (s:Entity {name: $subject}), (o:Entity {name: $object})
         MERGE (c)-[:HAS_SUBJECT]->(s)
         MERGE (c)-[:HAS_OBJECT]->(o)
-        MERGE (s)-[:PREDICATE {type: $predicate, temporal: $temporal, spatial: $spatial,
-                                epistemic_score: $score,
-                                is_current: true}]->(o)
+        MERGE (s)-[r:PREDICATE {type: $predicate, temporal: $temporal, spatial: $spatial}]->(o)
+        SET r.epistemic_score = $score,
+            r.is_current = true,
+            r.discovered_by_agent = $agent,
+            r.source_sha256 = $sha256,
+            r.verified_by_red_teamer = false,
+            r.red_team_verdict = 'PENDING'
         WITH c
         MATCH (a:Article {url: $article_url})
         MERGE (c)-[:EXTRACTED_FROM]->(a)
@@ -160,7 +172,9 @@ def write_claim_to_graph(session, claim: dict):
         article_title=claim.get("article_title") or "",
         article_url=claim.get("article_url") or "",
         source_name=claim.get("source_name") or "",
-        publish_date=str(claim.get("publish_date") or ""))
+        publish_date=str(claim.get("publish_date") or ""),
+        agent="OSINT_SYNTHETIC_AGENT" if claim.get("synthetic_osint") else "WEB_SCRAPER",
+        sha256=claim.get("content_sha256") or "")
 
     # 5. Evidence node — the raw text snippet that supports the claim
     if claim.get("quote_context"):
@@ -285,6 +299,20 @@ def write_claim_to_graph(session, claim: dict):
              cross_modal_sim=claim.get("cross_modal_similarity"),
              claim_id=str(claim["id"]))
 
+    # 9. Graph Attribution (Investigation Tracking)
+    inv_id = claim.get("investigation_id")
+    if inv_id:
+        session.run("""
+            MATCH (c:Claim {id: $claim_id})
+            MERGE (inv:Investigation {id: $inv_id})
+              ON CREATE SET inv.created_at = datetime()
+            MERGE (c)-[:DISCOVERED_DURING]->(inv)
+            SET c.discovered_by = $agent
+        """, claim_id=str(claim["id"]),
+             inv_id=int(inv_id),
+             agent="OSINT_SYNTHETIC_AGENT" if claim.get("synthetic_osint") else "WEB_SCRAPER")
+
+
 def mutation_worker(worker_id: int):
     try:
         pg_conn = psycopg2.connect(DATABASE_URL)
@@ -303,7 +331,10 @@ def mutation_worker(worker_id: int):
                                cp.internet_original_url, cp.internet_original_source,
                                cp.internet_original_date, cp.neo4j_stance,
                                cp.neo4j_matched_claim_id, cp.neo4j_similarity,
-                               ec.ai_metadata, ra.id
+                               ec.ai_metadata, ra.id,
+                               ru.metadata->>'investigation_id' as inv_id,
+                               ru.metadata->>'synthetic_osint' as synthetic_osint,
+                               ra.content_sha256, ra.snapshot_path
                         FROM extracted_claims ec
                         JOIN raw_articles ra  ON ec.article_id = ra.id
                         JOIN raw_urls ru      ON ra.url_id = ru.id
@@ -333,7 +364,9 @@ def mutation_worker(worker_id: int):
                      art_title, pub_date, art_url,
                      src_name, src_trust,
                      orig_url, orig_src, orig_date,
-                     stance, matched_id, similarity, ai_metadata, raw_article_id) = row
+                     stance, matched_id, similarity, ai_metadata, raw_article_id,
+                     inv_id, synthetic_osint,
+                     content_sha256, snapshot_path) = row
 
                     import json
                     try:
@@ -401,10 +434,85 @@ def mutation_worker(worker_id: int):
                         epistemic_domain=epistemic_domain,
                         cross_modal_similarity=ai_data.get("cross_modal_similarity"),
                         corroborations=corrobs,
-                        media=media_support
+                        media=media_support,
+                        investigation_id=inv_id,
+                        synthetic_osint=(synthetic_osint == 'true' or synthetic_osint == True),
+                        content_sha256=content_sha256,
+                        snapshot_path=snapshot_path
                     )
 
                     print(f"  [W-{worker_id}] Mutating: [{pred}] {subj[:22]} -> {obj[:22]}")  # type: ignore
+
+                    # --- Red Teamer (Forensic Validator) Check ---
+                    if inv_id and quote and len(quote) > 10:
+                        try:
+                            # Use groq_pool directly to validate the epistemic logic
+                            response = groq_pool.chat_completions_create(
+                                model="TIER_HEAVY",
+                                messages=[
+                                    {
+                                        "role": "system", 
+                                        "content": (
+                                            "You are a Forensic Validator (Red Teamer) for an OSINT system. "
+                                            "Your job is to prevent hallucinations and false linkages. "
+                                            "Review the extracted claim below. Does the provided quote actually "
+                                            "prove this relationship beyond a reasonable doubt? Output EXACTLY one word: "
+                                            "'VALID' or 'REJECTED'."
+                                        )
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": (
+                                            f"Subject: {subj}\n"
+                                            f"Predicate: {pred}\n"
+                                            f"Object: {obj}\n"
+                                            f"Evidence Quote: {quote}"
+                                        )
+                                    }
+                                ],
+                                response_model=None, # Raw string response
+                                temperature=0.0
+                            )
+                            ans = response.strip().upper()
+                            if "REJECTED" in ans:
+                                cur.execute("""
+                                    UPDATE extracted_claims
+                                    SET status = 'RED_TEAM_REJECTED',
+                                        pipeline_stage = 'COMPLETE',
+                                        ai_metadata = ai_metadata || '{"red_team_rejected": true}'::jsonb
+                                    WHERE id = %s
+                                """, (claim_id,))
+
+                                # ── Re-queue the entities as high-priority leads ──────────
+                                # The claim was rejected but the entity is still worth
+                                # investigating — push it back with priority 90.
+                                if inv_id:
+                                    try:
+                                        int_inv_id = int(inv_id)
+                                        for requeue_entity in {subj, obj}:
+                                            if requeue_entity and len(requeue_entity) > 2:
+                                                cur.execute("""
+                                                    INSERT INTO investigation_leads
+                                                        (investigation_id, entity_name, lead_type, priority, status)
+                                                    VALUES (%s, %s, 'GENERAL', 90, 'PENDING')
+                                                    ON CONFLICT (investigation_id, entity_name)
+                                                    DO UPDATE SET priority = GREATEST(investigation_leads.priority, 90),
+                                                                  status = CASE
+                                                                    WHEN investigation_leads.status = 'EXPLORED'
+                                                                    THEN 'PENDING'
+                                                                    ELSE investigation_leads.status
+                                                                  END
+                                                """, (int_inv_id, requeue_entity))
+                                        print(f"      -> [W-{worker_id}] Requeued entities for re-investigation.")
+                                    except Exception as rq_e:
+                                        print(f"      -> [W-{worker_id}] Re-queue failed: {rq_e}")
+
+                                pg_conn.commit()
+                                print(f"      -> [W-{worker_id}] RED TEAM REJECTED. Sanity check failed.")
+                                items_processed += 1
+                                continue
+                        except Exception as e:
+                            print(f"      -> [W-{worker_id}] Red Teamer check failed: {e}. Proceeding.")
 
                     try:
                         with neo4j_driver.session() as session:
@@ -417,8 +525,23 @@ def mutation_worker(worker_id: int):
                             WHERE id = %s
                         """, (claim_id,))
                         pg_conn.commit()
-                        print(f"      -> [W-{worker_id}] Committed. "
-                              f"Score={score:.3f}")
+
+                        # ── Write Red Teamer VALID verdict onto the Neo4j [:PREDICATE] edge ───
+                        # Only do this if a Red Teamer check was actually performed (inv_id set).
+                        if inv_id and quote and len(quote) > 10:
+                            try:
+                                with neo4j_driver.session() as session:
+                                    session.run("""
+                                        MATCH (s:Entity {name: $subject})-[r:PREDICATE]->(o:Entity {name: $object})
+                                        WHERE r.type = $predicate
+                                        SET r.verified_by_red_teamer = true,
+                                            r.red_team_verdict = 'VALID',
+                                            r.red_team_verified_at = datetime()
+                                    """, subject=subj, object=obj, predicate=pred)
+                            except Exception as ve:
+                                print(f"      -> [W-{worker_id}] Red Teamer verdict write failed: {ve}")
+
+                        print(f"      -> [W-{worker_id}] Committed. Score={score:.3f}")
 
                     except Exception as ne:
                         import json as _json

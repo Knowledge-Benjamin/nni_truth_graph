@@ -302,6 +302,57 @@ async function runMigrations() {
         `);
         
         console.log('[Migrations] ✓ graph_outbox ready');
+
+        // ── OSINT Investigator Tables ─────────────────────────────────────────
+        // investigations: one row per long-running investigation session
+        // investigation_leads: the priority queue of entities yet to be explored
+        // These tables are additive and do NOT alter any existing columns.
+        console.log('[Migrations] Ensuring OSINT investigations tables...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS investigations (
+                id SERIAL PRIMARY KEY,
+                target TEXT NOT NULL,
+                goal_type VARCHAR(50) DEFAULT 'PROFILING',
+                -- PROFILING | EXHAUSTIVE_COLLECTION | INFRASTRUCTURE | FINANCIAL
+                status VARCHAR(20) DEFAULT 'ACTIVE',
+                -- ACTIVE | PAUSED | COMPLETED | FAILED
+                findings JSONB DEFAULT '{}',
+                -- Running summary: {answer, key_entities, confidence, novel_count}
+                max_leads INTEGER DEFAULT 500,
+                max_days INTEGER DEFAULT 14,
+                concurrent_agents INTEGER DEFAULT 5,
+                leads_explored INTEGER DEFAULT 0,
+                novel_discoveries INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP WITH TIME ZONE
+            );
+        `);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS investigation_leads (
+                id SERIAL PRIMARY KEY,
+                investigation_id INTEGER NOT NULL REFERENCES investigations(id) ON DELETE CASCADE,
+                entity_name TEXT NOT NULL,
+                lead_type VARCHAR(50) DEFAULT 'GENERAL',
+                -- GENERAL | EMAIL | IP | DOMAIN | WALLET | PERSON | ORGANISATION
+                priority INTEGER DEFAULT 50,
+                -- 0-100, higher is explored first
+                status VARCHAR(20) DEFAULT 'PENDING',
+                -- PENDING | CLAIMED | EXPLORED | IRRELEVANT
+                claimed_at TIMESTAMP WITH TIME ZONE,
+                explored_at TIMESTAMP WITH TIME ZONE,
+                sub_leads_generated INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (investigation_id, entity_name)
+            );
+        `);
+
+        await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_inv_leads_lookup
+            ON investigation_leads (investigation_id, status, priority DESC);
+        `);
+
+        console.log('[Migrations] ✓ OSINT investigation tables ready');
         console.log('[Migrations] ✓ All migrations complete');
     } catch (err) {
         console.error('[Migrations] ✗ ERROR:', err.message);
@@ -396,6 +447,8 @@ app.use('/api/media', mediaRoutes);
 const ingestRoutes = require('./routes/ingest');
 app.use('/api/ingest', ingestRoutes);
 
+const investigationsRoutes = require('./routes/investigations');
+app.use('/api/investigations', investigationsRoutes);
 
 
 app.get('/api/health', async (req, res) => {
