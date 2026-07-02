@@ -9,7 +9,7 @@ export default function ContradictionsPanel() {
 
     useEffect(() => {
         api.getControversies()
-            .then(setControversies)
+            .then(data => setControversies(Array.isArray(data) ? data : data?.items ?? []))
             .catch(console.error)
             .finally(() => setLoading(false));
     }, []);

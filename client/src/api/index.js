@@ -61,7 +61,8 @@ export const api = {
     getControversies: async () => {
         const r = await fetch(`${apiBase}/contradictions`, getFetchOptions());
         if (!r.ok) throw new Error('Contradictions fetch failed');
-        return r.json();
+        const data = await r.json();
+        return data?.items ?? data;
     },
 
     // Get Human Review queue
