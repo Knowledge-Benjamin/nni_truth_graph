@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import CytoscapeComponent from 'react-cytoscapejs';
 import cytoscape from 'cytoscape';
 import fcose from 'cytoscape-fcose';
-import { Search, Loader2, Eye, EyeOff, Sparkles, Link as LinkIcon, BookOpen, FileText, Clock, Bot, Zap, ChevronDown, ChevronLeft, ExternalLink, ArrowRight } from 'lucide-react';
+import { Search, Loader2, Eye, EyeOff, Sparkles, Link as LinkIcon, BookOpen, FileText, Clock, Bot, Zap, Globe, ChevronDown, ChevronLeft, ExternalLink, ArrowRight } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { api, apiBase } from '../api';
 import ArticleRenderer from '../components/ArticleRenderer';
