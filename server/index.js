@@ -26,6 +26,8 @@ const authModule = require('./routes/auth');
 const graphRoutes = require('./routes/graph');
 const fs = require('fs');
 const path = require('path');
+
+const MIGRATION_ADVISORY_LOCK_KEY = 1234567890;
 if (process.env.NODE_ENV !== 'production') {
     dotenv.config({ path: path.join(__dirname, '../ai_engine/.env') });
 }
@@ -79,6 +81,10 @@ app.locals.pgPool = pgPool;
 async function runMigrations() {
     const client = await pgPool.connect();
     try {
+        console.log('[Migrations] Acquiring advisory lock...');
+        await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+        console.log('[Migrations] Advisory lock acquired');
+
         console.log('[Migrations] Checking database state...');
         
         // Check if extracted_claims table exists
@@ -359,6 +365,12 @@ async function runMigrations() {
         console.error(err);
         throw err;
     } finally {
+        try {
+            await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+            console.log('[Migrations] Advisory lock released');
+        } catch (unlockErr) {
+            console.error('[Migrations] Failed to release advisory lock:', unlockErr.message);
+        }
         client.release();
     }
 
@@ -556,10 +568,10 @@ const { fork } = require('child_process');
 
 (async () => {
     try {
-        // Run migrations with 30s timeout
+        // Run migrations with a longer timeout for deploys and DDL operations
         const migrationPromise = runMigrations();
         const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Migrations timeout after 30s')), 30000)
+            setTimeout(() => reject(new Error('Migrations timeout after 60s')), 60000)
         );
         await Promise.race([migrationPromise, timeoutPromise]);
     } catch (err) {
