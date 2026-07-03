@@ -70,7 +70,7 @@ def fetch_openalex_abstracts(limit: int = 50):
                 "OpenAlex (Scientific Index)", 
                 "https://openalex.org/", 
                 "openalex.org", 
-                "Science", 
+                "API", 
                 0.98
             )
             
@@ -162,7 +162,7 @@ def fetch_gdelt_events(limit: int = 50):
                 "GDELT Global News Monitor", 
                 "https://gdeltproject.org/", 
                 "gdeltproject.org", 
-                "World", 
+                "API", 
                 0.80
             )
             

@@ -5,7 +5,8 @@ from huggingface_hub import HfApi  # type: ignore
 TOKEN = os.getenv("HF_TOKEN")
 api = HfApi(token=TOKEN)
 user = api.whoami()['name']
-repo_id = f"{user}/cc-proxy"
+repo_name = os.getenv("HF_SPACE_NAME", "cc-proxy")
+repo_id = f"{user}/{repo_name}"
 
 print(f"Deploying proxy to Space: {repo_id}")
 

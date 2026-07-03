@@ -3,6 +3,7 @@ import time
 import json
 import gzip
 import random
+import re
 import feedparser
 import requests
 import psycopg2
@@ -21,39 +22,111 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../ai_engine
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+SEARXNG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+SEARXNG_SEARCH_ENGINES = "google,bing"
+
 # ─── Configuration ────────────────────────────────────────────────────────────
+RSS_API_EXCLUDE_HOSTS = {
+    "openalex.org",
+    "gdeltproject.org",
+    "en.wikipedia.org",
+}
+
+RSS_API_EXCLUDE_URLS = {
+    "https://openalex.org/",
+    "https://gdeltproject.org/",
+    "https://en.wikipedia.org",
+}
+
+
 def get_domain_from_url(url):
     return urlparse(url).netloc
 
 
+def is_rss_candidate_source(url):
+    parsed = urlparse(url)
+    url_lower = url.lower()
+    netloc = parsed.netloc.lower()
+
+    if url_lower.rstrip('/') in RSS_API_EXCLUDE_URLS:
+        return False
+    if netloc in RSS_API_EXCLUDE_HOSTS and parsed.path in ('', '/'):
+        return False
+
+    if any(token in url_lower for token in ('rss', '/feed', 'format=rss', 'feedformat=rss', 'action=featuredfeed')):
+        return True
+    if parsed.path.endswith(('.xml', '.rss', '.atom', '.rdf')):
+        return True
+
+    if parsed.path in ('', '/'):
+        return False
+    return True
+
+
+def create_searxng_headers(secret: str = "") -> dict:
+    headers = {
+        "User-Agent": SEARXNG_USER_AGENT,
+        "Accept": "application/json",
+    }
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+        headers["X-API-KEY"] = secret
+    return headers
+
+
+def build_searxng_params(query: str, time_range: str | None = None) -> dict:
+    params = {
+        "q": query,
+        "format": "json",
+        "engines": SEARXNG_SEARCH_ENGINES,
+    }
+    if time_range:
+        params["time_range"] = time_range
+    return params
+
+
+def extract_searxng_html_links(html_text: str) -> list[str]:
+    urls = []
+    for match in re.finditer(r'<article[^>]*class=["\'][^"\']*result[^"\']*["\'][^>]*>(.*?)</article>', html_text, re.S | re.I):
+        article_html = match.group(1)
+        href_match = re.search(r'href=["\'](https?://[^"\']+)["\']', article_html, re.I)
+        if href_match:
+            urls.append(href_match.group(1))
+    if not urls:
+        urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text, re.I)
+    return urls
+
+
 def seed_sources_if_empty(cursor):
     """
-    Checks if the dynamic `sources` table is empty.
-    If so, seeds it with both the local trusted_sources.json payload
-    AND the extended open-knowledge sources (Wikipedia, arXiv, PLOS, etc.).
+    Ensures the dynamic `sources` table contains RSS/feed source seeds.
+    If trusted RSS source URLs are missing, seed them from the local config.
     """
     cursor.execute("SELECT COUNT(*) FROM sources;")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        print("Dynamic 'sources' table is empty. Seeding local + extended sources...")
+    total_count = cursor.fetchone()[0]
 
-        # ── Local sources (trusted_sources.json) ─────────────────────────────
-        sources_path = os.path.join(os.path.dirname(__file__), '../../data/trusted_sources.json')
-        with open(sources_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        static_sources = data.get("trusted_sources", [])
-        
-        # Add the fast-update Google News stream for major breaking events (Base Trust: 0.4)
-        static_sources.append({
-            "name": "Google News: Fast Update",
-            "url": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
-            "category": "Breaking",
-            "trust_score": 4  # Will be normalized
-        })
-        
-        for source in static_sources:
+    sources_path = os.path.join(os.path.dirname(__file__), '../../data/trusted_sources.json')
+    with open(sources_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    static_sources = data.get("trusted_sources", [])
+    static_sources.append({
+        "name": "Google News: Fast Update",
+        "url": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+        "category": "Breaking",
+        "trust_score": 4
+    })
+
+    seed_urls = [source["url"] for source in static_sources]
+    cursor.execute("SELECT url FROM sources WHERE url = ANY(%s);", (seed_urls,))
+    existing_urls = {row[0] for row in cursor.fetchall()}
+    missing_sources = [source for source in static_sources if source["url"] not in existing_urls]
+
+    if total_count == 0 or missing_sources:
+        print("Dynamic 'sources' table needs seeding. Adding local + extended sources...")
+
+        seeded = 0
+        for source in missing_sources:
             domain = get_domain_from_url(source["url"])
             raw_score = source.get("trust_score", 4)
             trust_score = float(raw_score) / 10.0 if raw_score > 1 else raw_score
@@ -62,10 +135,11 @@ def seed_sources_if_empty(cursor):
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO NOTHING;
             """, (source.get("name", domain), source["url"], domain, source.get("category", "General"), trust_score))
-        
-        print(f"  Seeded {len(static_sources)} local sources.")
+            if cursor.rowcount == 1:
+                seeded += 1
 
-        # ── Extended open-knowledge sources ───────────────────────────────────
+        print(f"  Seeded {seeded} new local sources.")
+
         try:
             import sys as _sys
             _scripts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../scripts'))
@@ -75,9 +149,8 @@ def seed_sources_if_empty(cursor):
             add_extended_sources()
         except Exception as _ext_err:
             print(f"  Warning: Could not seed extended sources: {_ext_err}")
-
     else:
-        print(f"Dynamic 'sources' table already initialized ({count} active sources).")
+        print(f"Dynamic 'sources' table already initialized ({total_count} active sources).")
 
 def ingest_urls():
     """
@@ -122,19 +195,37 @@ def ingest_urls():
                      
                 print(f"  -> dynamically hunting for: {search_query}")
                 
-                params = {
-                    "q": search_query,
-                    "format": "json",
-                    "engines": "google,bing,duckduckgo",
-                    "time_range": "day" # Only get recent stuff for ingestion
-                }
-                headers = {}
-                # If you implemented header-based auth in SearXNG, you'd pass it here, usually it's open if bot limiter is off
+                params = build_searxng_params(search_query, time_range="day")
+                headers = create_searxng_headers(searxng_secret)
                 
                 resp = requests.get(f"{searxng_url.rstrip('/')}/search", params=params, headers=headers, timeout=15)
                 if resp.status_code == 200:
-                    results = resp.json().get("results", [])
+                    try:
+                        searx_json = resp.json()
+                    except Exception as parse_err:
+                        print(f"  -> SearXNG JSON parse failed: {parse_err}")
+                        print(f"  -> Response text: {resp.text[:500]}")
+                        searx_json = {}
+
+                    results = searx_json.get("results") or searx_json.get("data") or searx_json.get("hits") or []
+                    if isinstance(results, dict):
+                        results = results.get("results") or results.get("data") or []
+                    if not isinstance(results, list):
+                        print(f"  -> Unexpected SearXNG results format: {type(results).__name__}")
+                        results = []
+
+                    if len(results) == 0 and isinstance(searx_json, dict):
+                        print(f"  -> SearXNG payload keys: {list(searx_json.keys())}")
+                        if resp.headers.get("Content-Type", "").startswith("text/html"):
+                            fallback_urls = extract_searxng_html_links(resp.text)
+                            if fallback_urls:
+                                print(f"  -> Fallback HTML scraping found {len(fallback_urls)} links.")
+                                results = [{"url": url} for url in fallback_urls]
+
                     print(f"  -> SearXNG returned {len(results)} dynamic results.")
+                    
+                    if len(results) == 0 and isinstance(searx_json, dict):
+                        print(f"  -> SearXNG payload keys: {list(searx_json.keys())}")
                     
                     # Ensure we have a generic "Dynamic SearXNG" source to tie these to
                     cursor.execute("""
@@ -186,7 +277,7 @@ def ingest_urls():
 
         # === 2. Static RSS Ingestion ===
         # Load evolving sources directly from the database, including fetch state
-        cursor.execute("SELECT id, name, url, domain, epistemic_trust_score, feed_etag, feed_modified FROM sources WHERE category NOT IN ('Dynamic', 'Discovered', 'Revalidation') ORDER BY epistemic_trust_score DESC;")
+        cursor.execute("SELECT id, name, url, domain, epistemic_trust_score, feed_etag, feed_modified FROM sources WHERE category NOT IN ('Dynamic', 'Discovered', 'Revalidation', 'API') ORDER BY epistemic_trust_score DESC;")
         active_sources = cursor.fetchall()
         
         print(f"Loaded {len(active_sources)} evolving sources for RSS ingestion.")
@@ -194,6 +285,11 @@ def ingest_urls():
         for source_id, name, url, domain, trust_score, etag, modified in active_sources:
             print(f"Fetching from {name} (Trust: {trust_score})...")
             
+            if not is_rss_candidate_source(url):
+                print(f"  -> [SKIP] Not an RSS/feed endpoint: {url}")
+                cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP WHERE id = %s;", (source_id,))
+                continue
+
             feed = None
             try:
                 feed = feedparser.parse(url, etag=etag, modified=modified)

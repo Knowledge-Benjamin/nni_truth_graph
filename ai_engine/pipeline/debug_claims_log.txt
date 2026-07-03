@@ -1,0 +1,2 @@
+DEBUG LOG for claims inserted by extraction worker
+Format: timestamp | article_id | chunk_idx | claim_count | truncated JSON of claims

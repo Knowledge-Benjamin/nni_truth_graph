@@ -57,6 +57,7 @@ router.get('/', authenticateAdmin, async (req, res) => {
                     i.created_at, i.completed_at,
                     COUNT(il.id) FILTER (WHERE il.status = 'PENDING')  AS pending_leads,
                     COUNT(il.id) FILTER (WHERE il.status = 'EXPLORED') AS explored_leads,
+                    i.findings->>'goal_achieved' AS goal_achieved,
                     i.findings->>'last_harvest_summary' AS last_summary
              FROM investigations i
              LEFT JOIN investigation_leads il ON il.investigation_id = i.id
@@ -82,7 +83,9 @@ router.get('/:id', authenticateAdmin, async (req, res) => {
             `SELECT i.*,
                     COUNT(il.id) FILTER (WHERE il.status = 'PENDING')  AS pending_leads,
                     COUNT(il.id) FILTER (WHERE il.status = 'EXPLORED') AS explored_leads,
-                    COUNT(il.id) FILTER (WHERE il.status = 'CLAIMED')  AS active_leads
+                    COUNT(il.id) FILTER (WHERE il.status = 'CLAIMED')  AS active_leads,
+                    i.findings->>'goal_achieved' AS goal_achieved,
+                    i.findings->>'last_harvest_summary' AS last_summary
              FROM investigations i
              LEFT JOIN investigation_leads il ON il.investigation_id = i.id
              WHERE i.id = $1

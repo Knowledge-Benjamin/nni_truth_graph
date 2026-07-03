@@ -23,7 +23,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../ai_engine
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Scraper is non-AI and uses Playwright only; increase concurrency for throughput
-MAX_WORKERS = 2
+MAX_WORKERS = 10
 
 # ── Forensic Auditability ──────────────────────────────────────────────────────
 # Local directory to store gzipped HTML snapshots. Relative to project root so
@@ -86,19 +86,14 @@ def _ping_archive_org(url: str, url_id: int, db_url: str) -> None:
         print(f"      -> [ARCHIVE.ORG WARNING] Could not ping archive.org: {e}")
 
 PAYWALL_DOMAINS = {
-    "bloomberg.com", "wsj.com", "ft.com", "nytimes.com",
-    "economist.com", "thetimes.co.uk", "telegraph.co.uk",
-    "washingtonpost.com", "theathletic.com", "barrons.com",
+   
 }
 
 # Sites that are permanently inaccessible to scrapers (DOI redirectors,
 # JS-only portals, hard bot walls). Mark as FAILED_NO_ACCESS immediately
 # — no retries wasted.
 DEAD_END_DOMAINS = {
-    "science.org", "doi.org", "nature.com", "cell.com",
-    "thelancet.com", "nejm.org", "jamanetwork.com",
-    "link.springer.com", "onlinelibrary.wiley.com",
-    "reuters.com", "apnews.com",  # Heavy JS/bot wall via raw fetch
+      # Heavy JS/bot wall via raw fetch
 }
 
 MAX_SCRAPE_RETRIES = 3   # How many times to retry a FAILED URL before giving up
@@ -253,6 +248,7 @@ def scraper_worker(worker_id):
                             SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
                             FROM raw_urls
                             WHERE status IN ('PENDING_SCRAPE')
+                            ORDER BY CASE WHEN metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, id ASC
                             LIMIT 1
                             FOR UPDATE SKIP LOCKED;
                         """)
@@ -449,7 +445,7 @@ def process_scraping_queue():
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Found {pending_count} pending URLs. Spinning up {workers_to_use} concurrent threads...")
         
         # Spin up the scalable worker pool
-        with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             # We launch Exactly N workers. The workers will self-assign using SKIP LOCKED and terminate when the queue hits 0.
             futures = [executor.submit(scraper_worker, i) for i in range(workers_to_use)]
             for f in futures:

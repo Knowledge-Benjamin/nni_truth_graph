@@ -99,8 +99,9 @@ def cross_ref_worker(worker_id: int):
                         JOIN sources s       ON ru.source_id = s.id
                         WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF'
                           AND ec.status = 'PROCESSING'
+                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
                         LIMIT 1
-                        FOR UPDATE SKIP LOCKED;
+                        FOR UPDATE OF ec SKIP LOCKED;
                     """)
                     row = cur.fetchone()
                     if not row:
@@ -254,7 +255,7 @@ def process_cross_ref_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims. Spinning {workers} stance-detection threads...")
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(cross_ref_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()

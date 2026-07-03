@@ -14,11 +14,49 @@ import os
 import sys
 import time
 import json
+import re
 import hashlib
 import requests
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 from pydantic import BaseModel, Field
+
+SEARXNG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+SEARXNG_SEARCH_ENGINES = "google,bing"
+
+
+def create_searxng_headers(secret: str = "") -> dict:
+    headers = {
+        "User-Agent": SEARXNG_USER_AGENT,
+        "Accept": "application/json",
+    }
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+        headers["X-API-KEY"] = secret
+    return headers
+
+
+def build_searxng_params(query: str, time_range: str | None = None) -> dict:
+    params = {
+        "q": query,
+        "format": "json",
+        "engines": SEARXNG_SEARCH_ENGINES,
+    }
+    if time_range:
+        params["time_range"] = time_range
+    return params
+
+
+def extract_searxng_html_links(html_text: str) -> list[str]:
+    urls = []
+    for match in re.finditer(r'<article[^>]*class=["\'][^"\']*result[^"\']*["\'][^>]*>(.*?)</article>', html_text, re.S | re.I):
+        article_html = match.group(1)
+        href_match = re.search(r'href=["\'](https?://[^"\']+)["\']', article_html, re.I)
+        if href_match:
+            urls.append(href_match.group(1))
+    if not urls:
+        urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text, re.I)
+    return urls
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from ai_engine.core.llm_router import llm_pool
@@ -225,18 +263,28 @@ def run_lead_agent(
         try:
             resp = requests.get(
                 f"{searxng_url.rstrip('/')}/search",
-                params={
-                    "q":        query,
-                    "format":   "json",
-                    "engines":  "google,bing,duckduckgo",
-                    "time_range": "",  # no time restriction for investigations
-                },
+                params=build_searxng_params(query),
+                headers=create_searxng_headers(os.getenv("SEARXNG_SECRET_KEY", "")),
                 timeout=15,
             )
             if resp.status_code != 200:
                 continue
 
-            results = resp.json().get("results", [])
+            results = []
+            try:
+                results = resp.json().get("results") or resp.json().get("data") or resp.json().get("hits") or []
+            except Exception:
+                pass
+            if isinstance(results, dict):
+                results = results.get("results") or results.get("data") or []
+            if not isinstance(results, list):
+                results = []
+
+            if not results and resp.headers.get("Content-Type", "").startswith("text/html"):
+                fallback_urls = extract_searxng_html_links(resp.text)
+                if fallback_urls:
+                    results = [{"url": url} for url in fallback_urls]
+
             with pg_conn.cursor() as cur:
                 for r in results:
                     url = r.get("url", "")

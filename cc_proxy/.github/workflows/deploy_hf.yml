@@ -18,6 +18,18 @@ jobs:
       - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_ACCOUNT: ${{ secrets.HF_ACCOUNT }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
         run: |
-          git remote add hf https://bravadoben:${HF_TOKEN}@huggingface.co/spaces/bravadoben/cc-proxy
+          HF_ACCOUNT="${{ secrets.HF_ACCOUNT }}"
+          HF_SPACE_NAME="${{ secrets.HF_SPACE_NAME }}"
+          if [ -z "$HF_ACCOUNT" ]; then
+            echo "HF_ACCOUNT is not set, falling back to bravadoben"
+            HF_ACCOUNT="bravadoben"
+          fi
+          if [ -z "$HF_SPACE_NAME" ]; then
+            echo "HF_SPACE_NAME is not set, falling back to cc-proxy"
+            HF_SPACE_NAME="cc-proxy"
+          fi
+          git remote add hf https://$HF_ACCOUNT:$HF_TOKEN@huggingface.co/spaces/$HF_ACCOUNT/$HF_SPACE_NAME
           git push hf main --force

@@ -44,6 +44,9 @@ S11_INTERVAL = 8    # OSINT Orchestrator — every 2 min  (8 × 15s)
 # QUEUE-DEPTH QUERIES — one per stage
 # ─────────────────────────────────────────────────────────────────────────────
 PRESSURE_QUERIES = {
+    "active_investigations": """
+        SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'
+    """,
     "2_scrape.py": """
         SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
     """,
@@ -300,14 +303,19 @@ class StageScheduler:
             self._actions[script] = f"{depth:4d}  {pressure_bar(depth):16s}  {action}"
             update_stuck(script, depth, True)
 
-        # ── Stage 1 — Ingest (fixed interval, suppressed if S2 overflowing) ─
+        # ── Stage 1 — Ingest (fixed interval, suppressed if S2 overflowing unless an active investigation exists) ─
         self._s1_timer -= 1
         s2_pres = pressures.get("2_scrape.py", 0)
+        active_inv = pressures.get("active_investigations", 0)
         if self._s1_timer <= 0:
             self._s1_timer = S1_INTERVAL
-            if s2_pres <= OVERFLOW_THRESHOLD:
+            if s2_pres <= OVERFLOW_THRESHOLD or active_inv > 0:
                 to_dispatch.append("1_ingest.py")
-                self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH] "
+                if active_inv > 0 and s2_pres > OVERFLOW_THRESHOLD:
+                    note = " (override for active investigation)"
+                else:
+                    note = ""
+                self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]{note} "
             else:
                 self._actions["1_ingest.py"] = f"  --  {'':16s}  [SKIP-BP]  "
         else:
@@ -411,6 +419,21 @@ def _run_osint_orchestrator(neo4j_driver=None):
         print(f"[Orchestrator] Error during tick: {e}")
 
 
+def _has_active_investigations() -> bool:
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        return bool(active_count)
+    except Exception as e:
+        print(f"[Startup] Failed to check active investigations: {e}")
+        return False
+
+
 def main():
     print("=== AI Engine Pipeline Orchestrator (Smart Adaptive Dispatcher) ===")
 
@@ -426,6 +449,16 @@ def main():
     print(f"[+] Smart dispatcher online. Tick interval: {TICK_INTERVAL}s")
     print(f"[+] Thresholds: LOW={LOW_THRESHOLD} | HIGH={HIGH_THRESHOLD} | OVERFLOW={OVERFLOW_THRESHOLD}")
     print(f"[+] Press Ctrl+C to shut down.\n")
+
+    # --- Run OSINT orchestrator once immediately to kick off investigations ---
+    try:
+        if _has_active_investigations():
+            print("[Orchestrator] Active investigations detected on startup. Running immediate sweep...")
+            _run_osint_orchestrator()
+        else:
+            print("[Orchestrator] No active investigations found at startup.")
+    except Exception as e:
+        print(f"[Orchestrator] Initial run failed: {e}")
 
     # Tier-3 timer (separate cadence — every 15 min)
     last_tier3: float = 0.0

@@ -170,7 +170,7 @@ def seed_worker(entity_name: str):
             # 1. Ensure Wikipedia is a registered Source
             cur.execute("""
                 INSERT INTO sources (name, url, domain, category, epistemic_trust_score)
-                VALUES ('Wikipedia (Foundational)', 'https://en.wikipedia.org', 'wikipedia.org', 'Encyclopedia', 0.95)
+                VALUES ('Wikipedia (Foundational)', 'https://en.wikipedia.org', 'wikipedia.org', 'API', 0.95)
                 ON CONFLICT (url) DO NOTHING
                 RETURNING id;
             """)

@@ -217,13 +217,16 @@ def dedup_worker(worker_id: int):
                 with pg_conn.cursor() as cur:
                     # Fetch one claim to deduplicate
                     cur.execute("""
-                        SELECT id, subject, predicate, object_entity, temporal_anchor, spatial_anchor,
-                               extraction_confidence, epistemic_score, article_id
-                        FROM extracted_claims
-                        WHERE pipeline_stage = 'STAGE_6_DEDUP'
-                          AND status = 'PROCESSING'
+                        SELECT ec.id, ec.subject, ec.predicate, ec.object_entity, ec.temporal_anchor, ec.spatial_anchor,
+                               ec.extraction_confidence, ec.epistemic_score, ec.article_id
+                        FROM extracted_claims ec
+                        JOIN raw_articles ra ON ec.article_id = ra.id
+                        JOIN raw_urls ru     ON ra.url_id = ru.id
+                        WHERE ec.pipeline_stage = 'STAGE_6_DEDUP'
+                          AND ec.status = 'PROCESSING'
+                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
                         LIMIT 1
-                        FOR UPDATE SKIP LOCKED;
+                        FOR UPDATE OF ec SKIP LOCKED;
                     """)
                     row = cur.fetchone()
                     if not row:
@@ -408,7 +411,7 @@ def process_dedup_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims pending. Spinning {workers} dedup threads...")
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(dedup_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()

@@ -78,6 +78,7 @@ def process_video():
                     FROM raw_urls 
                     WHERE status IN ('PENDING_SCRAPE')
                       AND domain IN %s
+                    ORDER BY CASE WHEN metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, id ASC
                     LIMIT 1 
                     FOR UPDATE SKIP LOCKED;
                 """, (VIDEO_DOMAINS,))

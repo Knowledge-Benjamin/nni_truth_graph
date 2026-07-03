@@ -44,11 +44,13 @@ def classification_worker(worker_id):
                 with conn.cursor() as cursor:
                     # Fetch 1 article to classify
                     cursor.execute("""
-                        SELECT id, title, raw_text 
-                        FROM raw_articles 
-                        WHERE status = 'PENDING_CLASSIFICATION' 
+                        SELECT a.id, a.title, a.raw_text 
+                        FROM raw_articles a
+                        JOIN raw_urls ru ON a.url_id = ru.id
+                        WHERE a.status = 'PENDING_CLASSIFICATION' 
+                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, a.id ASC
                         LIMIT 1 
-                        FOR UPDATE SKIP LOCKED;
+                        FOR UPDATE OF a SKIP LOCKED;
                     """)
                     
                     row = cursor.fetchone()
@@ -143,7 +145,7 @@ def process_classification_queue():
         workers_to_use = min(MAX_WORKERS, max(1, pending_count))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Found {pending_count} pending articles. Spinning up {workers_to_use} classification threads...")
         
-        with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(classification_worker, i) for i in range(workers_to_use)]
             for f in futures:
                 f.result()

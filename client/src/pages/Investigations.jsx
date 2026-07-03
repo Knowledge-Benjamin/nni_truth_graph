@@ -12,6 +12,8 @@ function Investigations() {
     const [showNewModal, setShowNewModal] = useState(false);
     
     const [selectedInvId, setSelectedInvId] = useState(null);
+    const [selectedInvestigation, setSelectedInvestigation] = useState(null);
+    const [selectedInvestigationLoading, setSelectedInvestigationLoading] = useState(false);
     const [leads, setLeads] = useState([]);
     const [leadsLoading, setLeadsLoading] = useState(false);
 
@@ -24,10 +26,29 @@ function Investigations() {
         try {
             const data = await api.listInvestigations();
             setInvestigations(data);
+            if (selectedInvId) {
+                const current = data.find(inv => inv.id === selectedInvId);
+                if (current) {
+                    setSelectedInvestigation(current);
+                }
+            }
         } catch (err) {
             setError(err.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchInvestigation = async (id) => {
+        if (!id) return;
+        setSelectedInvestigationLoading(true);
+        try {
+            const data = await api.getInvestigation(id);
+            setSelectedInvestigation(data);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setSelectedInvestigationLoading(false);
         }
     };
 
@@ -40,6 +61,10 @@ function Investigations() {
     useEffect(() => {
         if (selectedInvId) {
             fetchLeads(selectedInvId);
+            fetchInvestigation(selectedInvId);
+        } else {
+            setLeads([]);
+            setSelectedInvestigation(null);
         }
     }, [selectedInvId]);
 
@@ -71,7 +96,10 @@ function Investigations() {
         try {
             if (inv.status === 'ACTIVE') await api.pauseInvestigation(inv.id);
             else if (inv.status === 'PAUSED') await api.resumeInvestigation(inv.id);
-            fetchInvestigations();
+            await fetchInvestigations();
+            if (selectedInvId === inv.id) {
+                await fetchInvestigation(inv.id);
+            }
         } catch (err) {
             console.error(err);
         }
@@ -138,9 +166,16 @@ function Investigations() {
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                                 <div>
-                                    <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#f8fafc' }}>{inv.target}</div>
-                                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <Target size={12} /> {inv.goal_type}
+                                    <div>
+                                        <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#f8fafc' }}>{inv.target}</div>
+                                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            <Target size={12} /> {inv.goal_type}
+                                        </div>
+                                        {inv.last_summary && (
+                                            <div style={{ marginTop: '8px', fontSize: '12px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                                                {inv.last_summary.length > 120 ? `${inv.last_summary.slice(0, 117)}...` : inv.last_summary}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -185,10 +220,44 @@ function Investigations() {
                 {selectedInvId ? (
                     <>
                         <div style={{ padding: '20px', borderBottom: '1px solid #1e293b', background: '#1e293b' }}>
-                            <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Investigation Leads</h3>
-                            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '4px' }}>Live view of the AI agent's priority queue and findings.</p>
+                            <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Investigation Details</h3>
+                            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '4px' }}>Live status, summary, and lead queue for the selected investigation.</p>
                         </div>
-                        <div style={{ flex: '1', overflowY: 'auto', padding: '20px' }}>
+                        <div style={{ padding: '20px', display: 'grid', gap: '16px' }}>
+                            <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: '12px', padding: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start' }}>
+                                    <div>
+                                        <div style={{ fontSize: '18px', fontWeight: '700', color: '#f8fafc' }}>
+                                            {selectedInvestigation?.target || 'Investigation'}
+                                        </div>
+                                        <div style={{ marginTop: '8px', color: '#94a3b8', fontSize: '13px' }}>
+                                            {selectedInvestigation?.goal_type} · {selectedInvestigation?.status}
+                                            {selectedInvestigation?.goal_achieved === 'true' && ' · Goal Achieved'}
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                        <div style={{ padding: '10px 14px', background: '#111827', border: '1px solid #334155', borderRadius: '10px', color: '#f8fafc' }}>
+                                            <div style={{ fontSize: '12px', color: '#94a3b8' }}>Explored</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700' }}>{selectedInvestigation?.leads_explored ?? 0}</div>
+                                        </div>
+                                        <div style={{ padding: '10px 14px', background: '#111827', border: '1px solid #334155', borderRadius: '10px', color: '#f8fafc' }}>
+                                            <div style={{ fontSize: '12px', color: '#94a3b8' }}>Pending</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700' }}>{selectedInvestigation?.pending_leads ?? 0}</div>
+                                        </div>
+                                        <div style={{ padding: '10px 14px', background: '#111827', border: '1px solid #334155', borderRadius: '10px', color: '#f8fafc' }}>
+                                            <div style={{ fontSize: '12px', color: '#94a3b8' }}>Active Leads</div>
+                                            <div style={{ fontSize: '16px', fontWeight: '700' }}>{selectedInvestigation?.active_leads ?? 0}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {selectedInvestigation?.last_summary && (
+                                    <div style={{ marginTop: '16px', color: '#cbd5e1', lineHeight: '1.6', fontSize: '13px' }}>
+                                        <strong style={{ color: '#f8fafc' }}>Latest insight:</strong> {selectedInvestigation.last_summary}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div style={{ flex: '1', overflowY: 'auto', padding: '0 20px 20px 20px' }}>
                             {leadsLoading ? (
                                 <div style={{ color: '#94a3b8' }}>Loading leads...</div>
                             ) : leads.length === 0 ? (

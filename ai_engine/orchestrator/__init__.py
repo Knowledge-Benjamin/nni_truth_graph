@@ -33,6 +33,7 @@ from .triage    import triage_target, persist_triage
 from .lead_agent import run_lead_agent
 from .harvester  import run_harvester
 from .terminator import check_termination, complete_investigation
+from .report_writer import run_report_tick
 from ai_engine.core.license_manager import validate_license
 
 _has_run_startup_recovery = False
@@ -61,16 +62,57 @@ def _get_or_create_searxng_source(pg_conn) -> int:
 def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searxng_source_id: int) -> None:
     """Executes the triage's initial queries immediately and injects URLs into raw_urls."""
     import requests
+    def create_searxng_headers(secret: str = "") -> dict:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        if secret:
+            headers["Authorization"] = f"Bearer {secret}"
+            headers["X-API-KEY"] = secret
+        return headers
+
+    def build_searxng_params(query: str, time_range: str | None = None) -> dict:
+        params = {"q": query, "format": "json", "engines": "google,bing"}
+        if time_range:
+            params["time_range"] = time_range
+        return params
+
+    def extract_searxng_html_links(html_text: str) -> list[str]:
+        import re
+        urls = []
+        for match in re.finditer(r'<article[^>]*class=["\'][^"\']*result[^"\']*["\'][^>]*>(.*?)</article>', html_text, re.S | re.I):
+            article_html = match.group(1)
+            href_match = re.search(r'href=["\'](https?://[^"\']+)["\']', article_html, re.I)
+            if href_match:
+                urls.append(href_match.group(1))
+        if not urls:
+            urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text, re.I)
+        return urls
+
     for q in queries:
         try:
             resp = requests.get(
                 f"{SEARXNG_URL.rstrip('/')}/search",
-                params={"q": q, "format": "json", "engines": "google,bing,duckduckgo"},
+                params=build_searxng_params(q),
+                headers=create_searxng_headers(os.getenv("SEARXNG_SECRET_KEY", "")),
                 timeout=15,
             )
             if resp.status_code != 200:
                 continue
-            results = resp.json().get("results", [])
+            results = []
+            try:
+                results = resp.json().get("results") or resp.json().get("data") or resp.json().get("hits") or []
+            except Exception:
+                results = []
+            if isinstance(results, dict):
+                results = results.get("results") or results.get("data") or []
+            if not isinstance(results, list):
+                results = []
+            if not results and resp.headers.get("Content-Type", "").startswith("text/html"):
+                fallback_urls = extract_searxng_html_links(resp.text)
+                if fallback_urls:
+                    results = [{"url": url} for url in fallback_urls]
             with pg_conn.cursor() as cur:
                 for r in results:
                     url = r.get("url", "")
@@ -178,6 +220,20 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
             except Exception as e:
                 print(f"[Orchestrator] Harvester failed for #{inv_id}: {e}")
 
+            # ── Step 2b: Incrementally update the living investigation report ─────
+            try:
+                report_conn = psycopg2.connect(DATABASE_URL)
+                report_conn.autocommit = False
+                run_report_tick(
+                    investigation_id     = inv_id,
+                    investigation_target = target,
+                    pg_conn              = report_conn,
+                    inv_meta             = dict(inv),
+                )
+                report_conn.close()
+            except Exception as e:
+                print(f"[Orchestrator] Report writer failed for #{inv_id} (non-fatal): {e}")
+
             # ── Step 3: Check termination before spinning up agents ───────────────
             should_stop, reason = check_termination(inv_id, pg_conn)
             if should_stop:
@@ -233,9 +289,19 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
 
             print(f"[Orchestrator] Investigation #{inv_id}: agent sweep complete")
 
-            # Broadcast update to the frontend firehose
+            # Broadcast update to the frontend firehose and status listeners.
+            findings = inv.get("findings") or {}
             with pg_conn.cursor() as cur:
-                payload = json.dumps({"id": inv_id, "target": target, "status": "update"})
+                payload = json.dumps({
+                    "id": inv_id,
+                    "target": target,
+                    "status": inv.get("status"),
+                    "leads_explored": inv.get("leads_explored", 0),
+                    "novel_discoveries": inv.get("novel_discoveries", 0),
+                    "goal_achieved": findings.get("goal_achieved", False),
+                    "last_summary": findings.get("last_harvest_summary"),
+                    "timestamp": int(time.time())
+                })
                 cur.execute("NOTIFY investigation_update, %s", (payload,))
             pg_conn.commit()
 

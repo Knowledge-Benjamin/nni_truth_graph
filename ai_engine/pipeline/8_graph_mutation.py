@@ -614,7 +614,7 @@ def process_mutation_queue():
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
               f"{pending} claims. Spinning {workers} graph-write threads...")
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(mutation_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()

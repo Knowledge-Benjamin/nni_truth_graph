@@ -11,6 +11,7 @@ app = FastAPI()
 # Cache the CC index info on startup — avoids per-request overhead
 CACHED_COLLINFO = None
 COMMON_CRAWL_BASE = "https://index.commoncrawl.org"
+WAYBACK_BASE = "https://web.archive.org"
 HEADERS = {"User-Agent": "KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)"}
 
 import asyncio
@@ -55,8 +56,13 @@ async def get_collinfo():
 
 @app.get("/{path:path}")
 async def proxy_get(path: str, request: Request):
-    """Transparently proxy any CDX query to index.commoncrawl.org."""
-    target_url = f"{COMMON_CRAWL_BASE}/{path}"
+    """Transparently proxy Common Crawl and Wayback CDX queries."""
+    raw_path = path.lower()
+    if raw_path.startswith("wayback/cdx/") or raw_path.startswith("cdx/search/cdx"):
+        target_url = f"{WAYBACK_BASE}/{path}"
+    else:
+        target_url = f"{COMMON_CRAWL_BASE}/{path}"
+
     params = dict(request.query_params)
     
     async with httpx.AsyncClient() as client:

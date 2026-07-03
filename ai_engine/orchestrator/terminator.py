@@ -151,7 +151,18 @@ def complete_investigation(investigation_id: int, reason: str, pg_conn, neo4j_dr
         )
     pg_conn.commit()
     print(f"[Terminator] Investigation #{investigation_id} COMPLETED — reason: {reason}")
-    
+
+    # ── Compile & export the final sealed investigation report ───────────────
+    try:
+        from ai_engine.orchestrator.report_compiler import compile_final_report
+        compile_final_report(
+            investigation_id  = investigation_id,
+            termination_reason= reason,
+            pg_conn           = pg_conn,
+        )
+    except Exception as report_e:
+        print(f"[Terminator] Report compilation failed (non-fatal): {report_e}")
+
     # Securely deduct 1 compute credit upon successful completion
     try:
         decrement_investigation_credit(pg_conn, investigation_id)

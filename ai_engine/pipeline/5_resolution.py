@@ -84,9 +84,12 @@ llm_client   = groq_pool
 # Increased from 2 to 10 per request.
 MAX_WORKERS = 4
 
-WAYBACK_CDX = "https://web.archive.org/cdx/search/cdx"
+WAYBACK_CDX = os.getenv(
+    "WAYBACK_CDX_URL",
+    f"{os.getenv('CC_PROXY_BASE', 'https://cc-proxy-qvem3ril2q-uc.a.run.app')}/wayback/cdx/search/cdx"
+)
 SEARXNG_SEARCH_URL = f"{SEARXNG_URL}/search"
-CC_PROXY_BASE = "https://cc-proxy-qvem3ril2q-uc.a.run.app"
+CC_PROXY_BASE = os.getenv("CC_PROXY_BASE", "https://cc-proxy-qvem3ril2q-uc.a.run.app")
 
 _cc_index_url_cache: str | None = None
 
@@ -97,7 +100,8 @@ def _get_cc_index_url() -> str | None:
         return _cc_index_url_cache
     try:
         headers = {'User-Agent': 'KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)'}
-        resp = requests.get(f"{CC_PROXY_BASE}/collinfo.json", headers=headers, timeout=20)
+        timeout = int(os.getenv('CC_PROXY_TIMEOUT', '10'))
+        resp = requests.get(f"{CC_PROXY_BASE}/collinfo.json", headers=headers, timeout=timeout)
         resp.raise_for_status()
         raw = resp.json()
         if raw:
@@ -108,6 +112,10 @@ def _get_cc_index_url() -> str | None:
             else:
                 # Fully qualified — replace index.commoncrawl.org with the proxy
                 _cc_index_url_cache = raw_path.replace("https://index.commoncrawl.org", CC_PROXY_BASE)
+    except requests.exceptions.RequestException as e:
+        print(f"  [CC] Network error fetching collinfo via proxy: {e}")
+        # Leave cache unset; caller will treat as unavailable
+        return None
     except Exception as e:
         print(f"  [CC] Failed to fetch collinfo via proxy: {e}")
     return _cc_index_url_cache
@@ -137,13 +145,17 @@ def searxng_search(query: str, date_before: Optional[str] = None) -> list[dict]:
     payload = {
         "q": query,
         "format": "json",
-        "engines": "google,bing,duckduckgo,brave,qwant"
+        "engines": "google,bing,brave,qwant"
+    }
+    headers = {
+        "User-Agent": "KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)",
+        "Accept": "application/json",
     }
     # If date_before is strict, SearXNG doesn't seamlessly support "before X date" out of the box
     # across all engines, but time_range="year" can be used if recent. 
     # For now, we rely on Wayback CDX for exact timestamp validation anyway.
     
-    resp = requests.post(SEARXNG_SEARCH_URL, data=payload, timeout=15)
+    resp = requests.post(SEARXNG_SEARCH_URL, data=payload, headers=headers, timeout=15)
     resp.raise_for_status()
     data = resp.json()
     return data.get("results", [])
@@ -173,26 +185,34 @@ def wayback_first_seen(url: str) -> datetime | None:
     try:
         _apply_rate_limit()
         headers = {'User-Agent': 'KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)'}
+        timeout = int(os.getenv('WAYBACK_TIMEOUT', '60'))
         params = {
             "url": url, "output": "json", "fl": "timestamp",
             "limit": 1, "from": "19900101", "filter": "statuscode:200"
         }
-        resp = requests.get(WAYBACK_CDX, params=params, headers=headers, timeout=30)
+        try:
+            resp = requests.get(WAYBACK_CDX, params=params, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            # Network issues (timeout, connection error, DNS). Log and return None to avoid crashing worker.
+            print(f"  [WAYBACK NETWORK] {e} -- treating as 'not archived' for now")
+            return None
+
         if not resp.text.strip():
             return None # URL not archived
-            
+
         try:
             data = resp.json()
         except ValueError:
             return None # Invalid JSON usually means not archived
-            
+
         if data and len(data) > 1:
             ts = data[1][0]  # Skip header row
             return datetime.strptime(ts, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
         return None
-    except (requests.exceptions.RequestException, Exception) as e:
-        print(f"  [WAYBACK ERROR] {repr(e)} | Retrying {url[:30]}...")
-        raise e
+    except Exception as e:
+        # Unexpected errors: log and return None rather than raising to keep worker alive
+        print(f"  [WAYBACK ERROR] Unexpected exception: {e}")
+        return None
 
 @retry(
     wait=wait_exponential(multiplier=1.5, min=2, max=6),
@@ -392,8 +412,9 @@ def resolution_worker(worker_id: int):
                         JOIN sources s       ON ru.source_id = s.id
                         WHERE ec.status = 'PROCESSING'
                           AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
+                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
                         LIMIT 1
-                        FOR UPDATE SKIP LOCKED;
+                        FOR UPDATE OF ec SKIP LOCKED;
                     """)
                     row = cur.fetchone()
                     if not row:
@@ -596,7 +617,7 @@ def process_resolution_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims pending. Spinning {workers} provenance threads...")
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = [executor.submit(resolution_worker, i) for i in range(workers)]  # type: ignore[arg-type]
             for f in futures:
                 f.result()
