@@ -80,6 +80,18 @@ function Investigations() {
         }
     };
 
+    const downloadSummary = () => {
+        const summary = selectedInvestigation?.report?.ch0_executive_summary?.content;
+        if (!summary) return;
+        const blob = new Blob([summary], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `investigation-${selectedInvestigation.id}-summary.txt`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+
     const renderCompletedReport = () => {
         if (selectedInvestigation?.status !== 'COMPLETED') return null;
 
@@ -98,24 +110,42 @@ function Investigations() {
         ];
 
         return (
-            <div style={{ background: '#111827', border: '1px solid #334155', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '12px' }}>
+            <div style={{ background: '#111827', border: '1px solid #334155', borderRadius: '12px', padding: '16px', marginBottom: '16px', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '12px', alignItems: 'flex-start' }}>
                     <div>
                         <div style={{ fontSize: '16px', fontWeight: '700', color: '#f8fafc' }}>Final Investigation Report</div>
                         <div style={{ marginTop: '6px', fontSize: '13px', color: '#94a3b8' }}>Sealed report content and findings for this completed investigation.</div>
                     </div>
-                    {reportLink && (
-                        <a
-                            href={reportLink}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                                padding: '10px 16px', background: '#2563eb', color: 'white', borderRadius: '10px', textDecoration: 'none', fontWeight: 700,
-                            }}
-                        >
-                            Download Report
-                        </a>
-                    )}
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {reportLink && (
+                            <a
+                                href={reportLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                    padding: '10px 16px', background: '#2563eb', color: 'white', borderRadius: '10px', textDecoration: 'none', fontWeight: 700,
+                                }}
+                            >
+                                Download Report
+                            </a>
+                        )}
+                        {summary && (
+                            <button
+                                onClick={downloadSummary}
+                                type="button"
+                                style={{
+                                    padding: '10px 16px', background: '#047857', color: 'white', borderRadius: '10px', border: 'none', fontWeight: 700, cursor: 'pointer'
+                                }}
+                            >
+                                Export Summary
+                            </button>
+                        )}
+                        {!reportLink && !summary && (
+                            <span style={{ padding: '10px 16px', background: '#334155', color: '#94a3b8', borderRadius: '10px', fontSize: '12px' }}>
+                                No downloadable report available
+                            </span>
+                        )}
+                    </div>
                 </div>
 
                 {summary ? (
@@ -187,10 +217,10 @@ function Investigations() {
     };
 
     return (
-        <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto', display: 'flex', gap: '24px', height: '100%' }}>
+        <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto', display: 'flex', gap: '24px', height: '100%', minHeight: 0 }}>
             
             {/* Left Panel: Investigations List */}
-            <div style={{ flex: '1', display: 'flex', flexDirection: 'column', gap: '16px', minWidth: '400px' }}>
+            <div style={{ flex: '1', display: 'flex', flexDirection: 'column', gap: '16px', minWidth: '400px', minHeight: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h2 style={{ fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <FolderSearch size={24} color="#3b82f6" /> OSINT Investigations
@@ -276,14 +306,14 @@ function Investigations() {
             </div>
 
             {/* Right Panel: Investigation Details & Leads */}
-            <div style={{ flex: '2', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ flex: '2', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
                 {selectedInvId ? (
-                    <>
+                    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, overflow: 'hidden' }}>
                         <div style={{ padding: '20px', borderBottom: '1px solid #1e293b', background: '#1e293b' }}>
                             <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Investigation Details</h3>
                             <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '4px' }}>Live status, summary, and lead queue for the selected investigation.</p>
                         </div>
-                        <div style={{ padding: '20px', display: 'grid', gap: '16px' }}>
+                        <div style={{ flex: '1', display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto', padding: '20px', gap: '16px' }}>
                             <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: '12px', padding: '16px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start' }}>
                                     <div>
@@ -315,86 +345,50 @@ function Investigations() {
                                         <strong style={{ color: '#f8fafc' }}>Latest insight:</strong> {selectedInvestigation.last_summary}
                                     </div>
                                 )}
-                                {selectedInvestigation?.status === 'COMPLETED' && (
-                                    <div style={{ marginTop: '16px', color: '#cbd5e1', lineHeight: '1.6', fontSize: '13px' }}>
-                                        <h4 style={{ color: '#f8fafc', marginBottom: '8px' }}>Final Report</h4>
-                                        {/* Executive Summary (sealed) */}
-                                        {selectedInvestigation?.report?.ch0_executive_summary?.content ? (
-                                            <div style={{ background: '#0b1220', padding: '12px', borderRadius: '8px', border: '1px solid #112033', marginBottom: '8px' }}>
-                                                <div style={{ fontSize: '14px', color: '#f8fafc', marginBottom: '8px' }}>Executive Summary</div>
-                                                <div style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>
-                                                    {selectedInvestigation.report.ch0_executive_summary.content}
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>No sealed executive summary available.</div>
-                                        )}
-
-                                        {/* Findings list and download link */}
-                                        <div style={{ marginTop: '8px' }}>
-                                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Findings</div>
-                                            {selectedInvestigation?.findings ? (
-                                                <div style={{ fontSize: '13px', color: '#cbd5e1' }}>
-                                                    <ul style={{ margin: 0, paddingLeft: '18px' }}>
-                                                        {Object.entries(selectedInvestigation.findings).map(([k, v]) => (
-                                                            <li key={k} style={{ marginBottom: '6px' }}>
-                                                                <strong style={{ color: '#f8fafc' }}>{k}:</strong>&nbsp;
-                                                                {k === 'report_file' && v ? (
-                                                                    <a href={v} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>Download report</a>
-                                                                ) : (
-                                                                    <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
-                                                                )}
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                </div>
-                                            ) : (
-                                                <div style={{ fontSize: '13px', color: '#94a3b8' }}>No findings saved for this investigation.</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
+                                {selectedInvestigation?.status === 'COMPLETED' && renderCompletedReport()}
                             </div>
                         </div>
-                        <div style={{ flex: '1', overflowY: 'auto', padding: '0 20px 20px 20px' }}>
+                        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: '12px', padding: '16px', minHeight: 0 }}>
                             {leadsLoading ? (
                                 <div style={{ color: '#94a3b8' }}>Loading leads...</div>
                             ) : leads.length === 0 ? (
                                 <div style={{ color: '#64748b' }}>No leads generated yet.</div>
                             ) : (
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                                    <thead>
-                                        <tr style={{ color: '#94a3b8', borderBottom: '1px solid #334155', textAlign: 'left' }}>
-                                            <th style={{ padding: '12px 8px' }}>Entity</th>
-                                            <th style={{ padding: '12px 8px' }}>Type</th>
-                                            <th style={{ padding: '12px 8px' }}>Status</th>
-                                            <th style={{ padding: '12px 8px' }}>Priority</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {leads.map(lead => (
-                                            <tr key={lead.id} style={{ borderBottom: '1px solid #1e293b' }}>
-                                                <td style={{ padding: '12px 8px', color: '#f8fafc', fontWeight: '500' }}>{lead.entity_name}</td>
-                                                <td style={{ padding: '12px 8px', color: '#94a3b8' }}>{lead.lead_type}</td>
-                                                <td style={{ padding: '12px 8px' }}>
-                                                    <span style={{ 
-                                                        fontSize: '11px', padding: '4px 8px', borderRadius: '4px',
-                                                        background: lead.status === 'EXPLORED' ? 'rgba(16, 185, 129, 0.1)' : 
-                                                                  lead.status === 'CLAIMED' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(255, 255, 255, 0.05)',
-                                                        color: lead.status === 'EXPLORED' ? '#34d399' : 
-                                                              lead.status === 'CLAIMED' ? '#60a5fa' : '#94a3b8'
-                                                    }}>
-                                                        {lead.status}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: '12px 8px', color: '#cbd5e1' }}>{lead.priority}</td>
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <thead>
+                                            <tr style={{ color: '#94a3b8', borderBottom: '1px solid #334155', textAlign: 'left' }}>
+                                                <th style={{ padding: '12px 8px' }}>Entity</th>
+                                                <th style={{ padding: '12px 8px' }}>Type</th>
+                                                <th style={{ padding: '12px 8px' }}>Status</th>
+                                                <th style={{ padding: '12px 8px' }}>Priority</th>
                                             </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                            {leads.map(lead => (
+                                                <tr key={lead.id} style={{ borderBottom: '1px solid #1e293b' }}>
+                                                    <td style={{ padding: '12px 8px', color: '#f8fafc', fontWeight: '500' }}>{lead.entity_name}</td>
+                                                    <td style={{ padding: '12px 8px', color: '#94a3b8' }}>{lead.lead_type}</td>
+                                                    <td style={{ padding: '12px 8px' }}>
+                                                        <span style={{ 
+                                                            fontSize: '11px', padding: '4px 8px', borderRadius: '4px',
+                                                            background: lead.status === 'EXPLORED' ? 'rgba(16, 185, 129, 0.1)' : 
+                                                                      lead.status === 'CLAIMED' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(255, 255, 255, 0.05)',
+                                                            color: lead.status === 'EXPLORED' ? '#34d399' : 
+                                                                  lead.status === 'CLAIMED' ? '#60a5fa' : '#94a3b8'
+                                                        }}>
+                                                            {lead.status}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '12px 8px', color: '#cbd5e1' }}>{lead.priority}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             )}
                         </div>
-                    </>
+                    </div>
                 ) : (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>
                         Select an investigation to view details
