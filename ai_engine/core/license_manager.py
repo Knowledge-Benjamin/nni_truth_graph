@@ -13,7 +13,11 @@ import os
 import time
 import psycopg2
 from psycopg2.extras import Json
-import jwt  # PyJWT
+
+try:
+    import jwt  # PyJWT
+except Exception:  # pragma: no cover - optional dependency in some environments
+    jwt = None
 
 # Using ENV vars to configure licensing backend
 ENVIRONMENT = os.getenv("ENVIRONMENT", "dev").lower()
@@ -120,6 +124,9 @@ def apply_license_key(pg_conn, signed_jwt: str) -> dict:
     Offline/Air-Gapped license top-up. The client pastes a JWT provided by you.
     You sign the JWT offline with your private key. The OVM verifies it using LICENSE_PUB_KEY.
     """
+    if jwt is None:
+        raise RuntimeError("PyJWT is not installed; license verification is unavailable.")
+
     if not LICENSE_PUB_KEY:
         raise ValueError("LICENSE_PUB_KEY not configured on this appliance.")
         
@@ -148,7 +155,9 @@ def apply_license_key(pg_conn, signed_jwt: str) -> dict:
         
         return {"status": "success", "added": credits_to_add}
         
-    except jwt.ExpiredSignatureError:
-        raise InvalidLicenseError("This license key has expired.")
-    except jwt.InvalidTokenError as e:
+    except Exception as e:
+        if jwt is not None and hasattr(jwt, "ExpiredSignatureError") and isinstance(e, jwt.ExpiredSignatureError):
+            raise InvalidLicenseError("This license key has expired.")
+        if jwt is not None and hasattr(jwt, "InvalidTokenError") and isinstance(e, jwt.InvalidTokenError):
+            raise InvalidLicenseError(f"Cryptographic verification failed: {e}")
         raise InvalidLicenseError(f"Cryptographic verification failed: {e}")

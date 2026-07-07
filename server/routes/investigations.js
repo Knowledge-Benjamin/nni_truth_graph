@@ -14,8 +14,12 @@
  */
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const router  = express.Router();
 const { authenticateAdmin } = require('./auth');
+
+const REPORT_OUTPUT_DIR = path.resolve(process.cwd(), process.env.REPORT_OUTPUT_DIR || './investigation_reports');
 
 // ─── POST /api/investigations ─────────────────────────────────────────────────
 // Body: { target, goal_type?, max_leads?, max_days?, concurrent_agents? }
@@ -97,6 +101,40 @@ router.get('/:id', authenticateAdmin, async (req, res) => {
     } catch (err) {
         console.error('[Investigations API] GET single error:', err.message);
         res.status(500).json({ error: 'Failed to fetch investigation' });
+    }
+});
+
+router.get('/:id/report/file', authenticateAdmin, async (req, res) => {
+    const pgPool = req.app.locals.pgPool;
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+    try {
+        const result = await pgPool.query(
+            `SELECT findings->>'report_file' AS report_file FROM investigations WHERE id = $1`,
+            [id]
+        );
+        if (!result.rows.length) return res.status(404).json({ error: 'Investigation not found' });
+
+        const reportFile = result.rows[0].report_file;
+        if (!reportFile) return res.status(404).json({ error: 'Report file not found' });
+
+        const resolvedPath = path.isAbsolute(reportFile)
+            ? reportFile
+            : path.resolve(process.cwd(), reportFile);
+
+        if (!resolvedPath.startsWith(REPORT_OUTPUT_DIR)) {
+            return res.status(403).json({ error: 'Report download forbidden' });
+        }
+
+        if (!fs.existsSync(resolvedPath)) {
+            return res.status(404).json({ error: 'Report file not found on disk' });
+        }
+
+        res.sendFile(resolvedPath);
+    } catch (err) {
+        console.error('[Investigations API] GET report file error:', err.message);
+        res.status(500).json({ error: 'Failed to fetch report file' });
     }
 });
 

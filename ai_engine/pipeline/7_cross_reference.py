@@ -81,153 +81,169 @@ Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."""
 
 def cross_ref_worker(worker_id: int):
     try:
-        pg_conn = psycopg2.connect(DATABASE_URL)
         items_processed = 0
 
         while items_processed < 50:
             try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                               ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
-                               ec.enrichment_target_neo4j_id,
-                               s.epistemic_trust_score,
-                               ec.ai_metadata
-                        FROM extracted_claims ec
-                        JOIN raw_articles ra ON ec.article_id = ra.id
-                        JOIN raw_urls ru     ON ra.url_id = ru.id
-                        JOIN sources s       ON ru.source_id = s.id
-                        WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF'
-                          AND ec.status = 'PROCESSING'
-                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
-                        LIMIT 1
-                        FOR UPDATE OF ec SKIP LOCKED;
-                    """)
-                    row = cur.fetchone()
-                    if not row:
-                        pg_conn.rollback()
-                        break
+                claim_id = None
+                subj = None
+                pred = None
+                obj = None
+                temporal = None
+                spatial = None
+                conf = None
+                score = None
+                enrich_target = None
+                src_trust = None
+                ai_metadata = None
 
-                    claim_id, subj, pred, obj, temporal, spatial, conf, score, enrich_target, src_trust, ai_metadata = row
-                    
-                    import json
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                                   ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
+                                   ec.enrichment_target_neo4j_id,
+                                   s.epistemic_trust_score,
+                                   ec.ai_metadata
+                            FROM extracted_claims ec
+                            JOIN raw_articles ra ON ec.article_id = ra.id
+                            JOIN raw_urls ru     ON ra.url_id = ru.id
+                            JOIN sources s       ON ru.source_id = s.id
+                            WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF'
+                              AND ec.status = 'PROCESSING'
+                            ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
+                            LIMIT 1
+                            FOR UPDATE OF ec SKIP LOCKED;
+                        """)
+                        row = cur.fetchone()
+                        if not row:
+                            pg_conn.rollback()
+                            break
+
+                        claim_id, subj, pred, obj, temporal, spatial, conf, score, enrich_target, src_trust, ai_metadata = row
+                        cur.execute("UPDATE extracted_claims SET pipeline_stage = 'STAGE_7_CROSS_REF_IN_PROGRESS' WHERE id = %s", (claim_id,))
+                        pg_conn.commit()
+
+                if claim_id is None or subj is None or pred is None or obj is None:
+                    break
+
+                import json
+                try:
+                    ai_data = json.loads(ai_metadata) if ai_metadata else {}
+                except Exception:
+                    ai_data = {}
+                epistemic_domain = ai_data.get("epistemic_domain", "EMPIRICAL")
+
+                new_claim = {"subject": subj, "predicate": pred, "object_entity": obj, "temporal_anchor": temporal, "spatial_anchor": spatial}
+
+                print(f"  [W-{worker_id}] Cross-Ref: [{pred}] {subj[:25]} -> {obj[:25]}")
+
+                stances = []
+                contradiction_weights = []
+                support_count = 0
+                final_matched_id = None
+
+                if enrich_target:
+                    stances.append("ENRICHES")
+                    final_matched_id = str(enrich_target)
+                    support_count += 1
+                    print(f"      -> [W-{worker_id}] ENRICHMENT pass-through. Target: {enrich_target}")
+                else:
                     try:
-                        ai_data = json.loads(ai_metadata) if ai_metadata else {}
-                    except Exception:
-                        ai_data = {}
-                    epistemic_domain = ai_data.get("epistemic_domain", "EMPIRICAL")
+                        with neo4j_driver.session() as session:
+                            records = session.run("""
+                                MATCH (c:Claim)
+                                WHERE (toLower(c.subject) CONTAINS toLower($subject)
+                                   OR toLower(c.object) CONTAINS toLower($subject))
+                                  AND coalesce(c.epistemic_domain, 'EMPIRICAL') = $domain
+                                RETURN c.id AS id, c.subject AS subject,
+                                       c.predicate AS predicate, c.object AS object,
+                                       c.epistemic_score AS score
+                                LIMIT 20
+                            """, subject=subj[:50], domain=epistemic_domain).data()
 
-                    new_claim = {"subject": subj, "predicate": pred, "object_entity": obj, "temporal_anchor": temporal, "spatial_anchor": spatial}
+                            for rec in records:
+                                if not rec.get("predicate"):
+                                    continue
+                                existing = {
+                                    "subject": rec["subject"] or "",
+                                    "predicate": rec["predicate"] or "",
+                                    "object": rec["object"] or "",
+                                    "score": float(rec["score"] or 0.4)
+                                }
+                                stance = detect_stance(new_claim, existing)
+                                stances.append(stance)
 
-                    print(f"  [W-{worker_id}] Cross-Ref: [{pred}] {subj[:25]} -> {obj[:25]}")
+                                if stance in ("CONTRADICTS", "EVOLVES", "SUPPORTS") and final_matched_id is None:
+                                    final_matched_id = str(rec["id"])
 
-                    stances = []
-                    contradiction_weights = []
-                    support_count = 0
-                    final_matched_id = None
+                                if stance == "CONTRADICTS":
+                                    contradiction_weights.append(existing["score"])
+                                elif stance in ("SUPPORTS", "EVOLVES"):
+                                    support_count += 1
 
-                    if enrich_target:
-                        stances.append("ENRICHES")
-                        final_matched_id = str(enrich_target)
-                        support_count += 1
-                        print(f"      -> [W-{worker_id}] ENRICHMENT pass-through. Target: {enrich_target}")
-                    else:
-                        # Query Neo4j for existing claims about the same subject
-                        try:
-                            with neo4j_driver.session() as session:
-                                records = session.run("""
-                                    MATCH (c:Claim)
-                                    WHERE (toLower(c.subject) CONTAINS toLower($subject)
-                                       OR toLower(c.object) CONTAINS toLower($subject))
-                                      AND coalesce(c.epistemic_domain, 'EMPIRICAL') = $domain
-                                    RETURN c.id AS id, c.subject AS subject,
-                                           c.predicate AS predicate, c.object AS object,
-                                           c.epistemic_score AS score
-                                    LIMIT 20
-                                """, subject=subj[:50], domain=epistemic_domain).data()
+                    except Exception as neo_err:
+                        print(f"    [NEO4J] {neo_err}")
 
-                                for rec in records:
-                                    if not rec.get("predicate"):
-                                        continue
-                                    existing = {
-                                        "subject": rec["subject"] or "",
-                                        "predicate": rec["predicate"] or "",
-                                        "object": rec["object"] or "",
-                                        "score": float(rec["score"] or 0.4)
-                                    }
-                                    stance = detect_stance(new_claim, existing)
-                                    stances.append(stance)
+                if "ENRICHES" in stances:
+                    final_stance = "ENRICHES"
+                elif "CONTRADICTS" in stances:
+                    final_stance = "CONTRADICTS"
+                elif "EVOLVES" in stances:
+                    final_stance = "EVOLVES"
+                elif "SUPPORTS" in stances:
+                    final_stance = "SUPPORTS"
+                else:
+                    final_stance = "NOVEL"
 
-                                    if stance in ("CONTRADICTS", "EVOLVES", "SUPPORTS") and final_matched_id is None:
-                                        final_matched_id = str(rec["id"])
+                src_tier = 1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3)
+                new_score = _scorer.calculate_epistemic_score(
+                    extraction_confidence=conf or 0.5,
+                    source_tier=src_tier,
+                    support_count=support_count,
+                    contradiction_weights=contradiction_weights,
+                    days_since_extracted=0,
+                    historical_source_reliability=src_trust or 0.40,
+                    media_synthetic_prob=ai_data.get("synthetic_probability")
+                )
 
-                                    if stance == "CONTRADICTS":
-                                        contradiction_weights.append(existing["score"])
-                                    elif stance in ("SUPPORTS", "EVOLVES"):
-                                        support_count += 1  # type: ignore
+                routing = _scorer.determine_routing(new_score)
 
-                        except Exception as neo_err:
-                            print(f"    [NEO4J] {neo_err}")
+                new_status = {
+                    "AUTO_APPROVE": "AUTO_APPROVE",
+                    "HUMAN_REVIEW": "HUMAN_REVIEW",
+                    "AUTO_REJECT":  "AUTO_REJECT"
+                }.get(routing, "PROCESSING")
 
-                    # Determine final stance label
-                    if "ENRICHES" in stances:
-                        final_stance = "ENRICHES"
-                    elif "CONTRADICTS" in stances:
-                        final_stance = "CONTRADICTS"
-                    elif "EVOLVES" in stances:
-                        final_stance = "EVOLVES"
-                    elif "SUPPORTS" in stances:
-                        final_stance = "SUPPORTS"
-                    else:
-                        final_stance = "NOVEL"
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
+                        cur.execute("""
+                            UPDATE extracted_claims
+                            SET epistemic_score = %s,
+                                status = %s,
+                                pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+                            WHERE id = %s
+                        """, (new_score, new_status, claim_id))
 
-                    # Re-score with cross-reference intelligence
-                    src_tier = 1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3)
-                    new_score = _scorer.calculate_epistemic_score(
-                        extraction_confidence=conf or 0.5,
-                        source_tier=src_tier,
-                        support_count=support_count,
-                        contradiction_weights=contradiction_weights,
-                        days_since_extracted=0,
-                        historical_source_reliability=src_trust or 0.40,
-                        media_synthetic_prob=ai_data.get("synthetic_probability")
-                    )
+                        cur.execute("""
+                            UPDATE claim_provenance
+                            SET neo4j_stance = %s, neo4j_matched_claim_id = %s
+                            WHERE claim_id = %s
+                        """, (final_stance, final_matched_id, claim_id))
+                        pg_conn.commit()
 
-                    routing = _scorer.determine_routing(new_score)
-
-                    # Map routing to status
-                    new_status = {
-                        "AUTO_APPROVE": "AUTO_APPROVE",
-                        "HUMAN_REVIEW": "HUMAN_REVIEW",
-                        "AUTO_REJECT":  "AUTO_REJECT"
-                    }.get(routing, "PROCESSING")
-
-                    cur.execute("""
-                        UPDATE extracted_claims
-                        SET epistemic_score = %s,
-                            status = %s,
-                            pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-                        WHERE id = %s
-                    """, (new_score, new_status, claim_id))
-
-                    # Attach stance and contradiction count to provenance record
-                    cur.execute("""
-                        UPDATE claim_provenance
-                        SET neo4j_stance = %s, neo4j_matched_claim_id = %s
-                        WHERE claim_id = %s
-                    """, (final_stance, final_matched_id, claim_id))
-
-                    pg_conn.commit()
-                    print(f"      -> [W-{worker_id}] {final_stance} | Score: {new_score:.3f} | Route: {routing}")
-                    items_processed += 1
-                    time.sleep(0.2)
+                print(f"      -> [W-{worker_id}] {final_stance} | Score: {new_score:.3f} | Route: {routing}")
+                items_processed += 1
+                time.sleep(0.2)
 
             except Exception as loop_err:
                 print(f"  [ERROR W-{worker_id}] {loop_err}. Rolling back to keep in queue.")
-                pg_conn.rollback()
+                try:
+                    with psycopg2.connect(DATABASE_URL) as rollback_conn:
+                        rollback_conn.rollback()
+                except Exception:
+                    pass
                 time.sleep(10)
-
-        pg_conn.close()
     except Exception as fatal:
         print(f"[FATAL W-{worker_id}] {fatal}")
 

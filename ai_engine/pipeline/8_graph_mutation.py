@@ -315,276 +315,308 @@ def write_claim_to_graph(session, claim: dict):
 
 def mutation_worker(worker_id: int):
     try:
-        pg_conn = psycopg2.connect(DATABASE_URL)
         items_processed = 0
 
         while items_processed < 50:
             try:
-                with pg_conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                               ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence,
-                               ec.epistemic_score, ec.is_verifiable,
-                               ec.spo_fingerprint, ec.quote_context,
-                               ra.title, ra.publish_date, ru.url,
-                               s.name, s.epistemic_trust_score,
-                               cp.internet_original_url, cp.internet_original_source,
-                               cp.internet_original_date, cp.neo4j_stance,
-                               cp.neo4j_matched_claim_id, cp.neo4j_similarity,
-                               ec.ai_metadata, ra.id,
-                               ru.metadata->>'investigation_id' as inv_id,
-                               ru.metadata->>'synthetic_osint' as synthetic_osint,
-                               ra.content_sha256, ra.snapshot_path
-                        FROM extracted_claims ec
-                        JOIN raw_articles ra  ON ec.article_id = ra.id
-                        JOIN raw_urls ru      ON ra.url_id = ru.id
-                        JOIN sources s        ON ru.source_id = s.id
-                        LEFT JOIN claim_provenance cp ON cp.claim_id = ec.id
-                        WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-                          AND (
-                            ec.status IN ('AUTO_APPROVE', 'PROCESSING')
-                            OR (
-                              ec.status = 'FAILED_MUTATION'
-                              AND COALESCE((ec.ai_metadata->>'mutation_retries')::int, 0) < 3
-                            )
-                          )
-                        ORDER BY
-                          CASE WHEN ec.status = 'FAILED_MUTATION' THEN 1 ELSE 0 END,
-                          ec.id
-                        LIMIT 1
-                        FOR UPDATE OF ec SKIP LOCKED;
-                    """)
-                    row = cur.fetchone()
-                    if not row:
-                        pg_conn.rollback()
-                        break
+                claim_id = None
+                subj = None
+                pred = None
+                obj = None
+                temporal = None
+                spatial = None
+                conf = None
+                score = None
+                verifiable = None
+                fingerprint = None
+                quote = None
+                art_title = None
+                pub_date = None
+                art_url = None
+                src_name = None
+                src_trust = None
+                orig_url = None
+                orig_src = None
+                orig_date = None
+                stance = None
+                matched_id = None
+                similarity = None
+                ai_metadata = None
+                raw_article_id = None
+                inv_id = None
+                synthetic_osint = None
+                content_sha256 = None
+                snapshot_path = None
 
-                    (claim_id, subj, pred, obj, temporal, spatial, conf, score,
-                     verifiable, fingerprint, quote,
-                     art_title, pub_date, art_url,
-                     src_name, src_trust,
-                     orig_url, orig_src, orig_date,
-                     stance, matched_id, similarity, ai_metadata, raw_article_id,
-                     inv_id, synthetic_osint,
-                     content_sha256, snapshot_path) = row
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                                   ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence,
+                                   ec.epistemic_score, ec.is_verifiable,
+                                   ec.spo_fingerprint, ec.quote_context,
+                                   ra.title, ra.publish_date, ru.url,
+                                   s.name, s.epistemic_trust_score,
+                                   cp.internet_original_url, cp.internet_original_source,
+                                   cp.internet_original_date, cp.neo4j_stance,
+                                   cp.neo4j_matched_claim_id, cp.neo4j_similarity,
+                                   ec.ai_metadata, ra.id,
+                                   ru.metadata->>'investigation_id' as inv_id,
+                                   ru.metadata->>'synthetic_osint' as synthetic_osint,
+                                   ra.content_sha256, ra.snapshot_path
+                            FROM extracted_claims ec
+                            JOIN raw_articles ra  ON ec.article_id = ra.id
+                            JOIN raw_urls ru      ON ra.url_id = ru.id
+                            JOIN sources s        ON ru.source_id = s.id
+                            LEFT JOIN claim_provenance cp ON cp.claim_id = ec.id
+                            WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+                              AND (
+                                ec.status IN ('AUTO_APPROVE', 'PROCESSING')
+                                OR (
+                                  ec.status = 'FAILED_MUTATION'
+                                  AND COALESCE((ec.ai_metadata->>'mutation_retries')::int, 0) < 3
+                                )
+                              )
+                            ORDER BY
+                              CASE WHEN ec.status = 'FAILED_MUTATION' THEN 1 ELSE 0 END,
+                              ec.id
+                            LIMIT 1
+                            FOR UPDATE OF ec SKIP LOCKED;
+                        """)
+                        row = cur.fetchone()
+                        if not row:
+                            pg_conn.rollback()
+                            break
 
-                    import json
-                    try:
-                        ai_data = json.loads(ai_metadata) if ai_metadata else {}
-                    except Exception:
-                        ai_data = {}
-                    epistemic_domain = ai_data.get("epistemic_domain", "EMPIRICAL")
+                        (claim_id, subj, pred, obj, temporal, spatial, conf, score,
+                         verifiable, fingerprint, quote,
+                         art_title, pub_date, art_url,
+                         src_name, src_trust,
+                         orig_url, orig_src, orig_date,
+                         stance, matched_id, similarity, ai_metadata, raw_article_id,
+                         inv_id, synthetic_osint,
+                         content_sha256, snapshot_path) = row
+                        cur.execute("UPDATE extracted_claims SET pipeline_stage = 'STAGE_8_MUTATION_IN_PROGRESS' WHERE id = %s", (claim_id,))
+                        pg_conn.commit()
 
-                    src_tier = 1 if (src_trust or 0) >= 0.80 \
-                               else (2 if (src_trust or 0) >= 0.50 else 3)
-                               
-                    # --- Aggregate Temporal Provenance Matrix (Fossil Record) ---
-                    cur.execute("""
-                        SELECT cc.quote_context, cc.discovered_at, 
-                               ra.title, ru.url, 
-                               s.name, s.tier, s.epistemic_trust_score
-                        FROM claim_corroborations cc
-                        JOIN raw_articles ra ON cc.raw_article_id = ra.id
-                        JOIN raw_urls ru ON ra.url_id = ru.id
-                        JOIN sources s ON ru.source_id = s.id
-                        WHERE cc.claim_id = %s
-                    """, (claim_id,))
-                    corrobs = []
-                    for c_row in cur.fetchall():
-                        corrobs.append({
-                            "quote": c_row[0] or "",
-                            "date": str(c_row[1] or ""),
-                            "title": c_row[2] or "",
-                            "url": c_row[3] or "",
-                            "source_name": c_row[4] or "",
-                            "source_tier": c_row[5] or 3,
-                            "source_trust": c_row[6] or 0.40
-                        })
+                if claim_id is None or subj is None or pred is None or obj is None:
+                    break
 
-                    # --- Visual Media Support ---
-                    cur.execute("""
-                        SELECT media_url, phash, synthetic_probability
-                        FROM media_provenance
-                        WHERE raw_article_id = %s
-                    """, (raw_article_id,))
-                    m_row = cur.fetchone()
-                    media_support = None
-                    if m_row:
-                        media_support = {
-                            "url": m_row[0],
-                            "phash": m_row[1],
-                            "synthetic_probability": float(m_row[2] or 0.0)
-                        }
+                import json
+                try:
+                    ai_data = json.loads(ai_metadata) if ai_metadata else {}
+                except Exception:
+                    ai_data = {}
+                epistemic_domain = ai_data.get("epistemic_domain", "EMPIRICAL")
 
-                    claim = dict(
-                        id=claim_id, subject=subj, predicate=pred,
-                        object_entity=obj, temporal_anchor=temporal, spatial_anchor=spatial,
-                        extraction_confidence=conf, epistemic_score=score,
-                        is_verifiable=verifiable, spo_fingerprint=fingerprint,
-                        quote_context=quote,
-                        article_title=art_title, publish_date=pub_date,
-                        article_url=art_url, source_name=src_name,
-                        source_trust=src_trust, source_tier=src_tier,
-                        internet_original_url=orig_url,
-                        internet_original_source=orig_src,
-                        internet_original_date=orig_date,
-                        neo4j_stance=stance,
-                        neo4j_matched_claim_id=matched_id,
-                        neo4j_similarity=similarity,
-                        epistemic_domain=epistemic_domain,
-                        cross_modal_similarity=ai_data.get("cross_modal_similarity"),
-                        corroborations=corrobs,
-                        media=media_support,
-                        investigation_id=inv_id,
-                        synthetic_osint=(synthetic_osint == 'true' or synthetic_osint == True),
-                        content_sha256=content_sha256,
-                        snapshot_path=snapshot_path
-                    )
+                src_tier = 1 if (src_trust or 0) >= 0.80 else (2 if (src_trust or 0) >= 0.50 else 3)
 
-                    print(f"  [W-{worker_id}] Mutating: [{pred}] {subj[:22]} -> {obj[:22]}")  # type: ignore
-
-                    # --- Red Teamer (Forensic Validator) Check ---
-                    if inv_id and quote and len(quote) > 10:
-                        try:
-                            # Use groq_pool directly to validate the epistemic logic
-                            response = groq_pool.chat_completions_create(
-                                model="TIER_HEAVY",
-                                messages=[
-                                    {
-                                        "role": "system", 
-                                        "content": (
-                                            "You are a Forensic Validator (Red Teamer) for an OSINT system. "
-                                            "Your job is to prevent hallucinations and false linkages. "
-                                            "Review the extracted claim below. Does the provided quote actually "
-                                            "prove this relationship beyond a reasonable doubt? Output EXACTLY one word: "
-                                            "'VALID' or 'REJECTED'."
-                                        )
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": (
-                                            f"Subject: {subj}\n"
-                                            f"Predicate: {pred}\n"
-                                            f"Object: {obj}\n"
-                                            f"Evidence Quote: {quote}"
-                                        )
-                                    }
-                                ],
-                                response_model=None, # Raw string response
-                                temperature=0.0
-                            )
-                            ans = response.strip().upper()
-                            if "REJECTED" in ans:
-                                cur.execute("""
-                                    UPDATE extracted_claims
-                                    SET status = 'RED_TEAM_REJECTED',
-                                        pipeline_stage = 'COMPLETE',
-                                        ai_metadata = ai_metadata || '{"red_team_rejected": true}'::jsonb
-                                    WHERE id = %s
-                                """, (claim_id,))
-
-                                # ── Re-queue the entities as high-priority leads ──────────
-                                # The claim was rejected but the entity is still worth
-                                # investigating — push it back with priority 90.
-                                if inv_id:
-                                    try:
-                                        int_inv_id = int(inv_id)
-                                        for requeue_entity in {subj, obj}:
-                                            if requeue_entity and len(requeue_entity) > 2:
-                                                cur.execute("""
-                                                    INSERT INTO investigation_leads
-                                                        (investigation_id, entity_name, lead_type, priority, status)
-                                                    VALUES (%s, %s, 'GENERAL', 90, 'PENDING')
-                                                    ON CONFLICT (investigation_id, entity_name)
-                                                    DO UPDATE SET priority = GREATEST(investigation_leads.priority, 90),
-                                                                  status = CASE
-                                                                    WHEN investigation_leads.status = 'EXPLORED'
-                                                                    THEN 'PENDING'
-                                                                    ELSE investigation_leads.status
-                                                                  END
-                                                """, (int_inv_id, requeue_entity))
-                                        print(f"      -> [W-{worker_id}] Requeued entities for re-investigation.")
-                                    except Exception as rq_e:
-                                        print(f"      -> [W-{worker_id}] Re-queue failed: {rq_e}")
-
-                                pg_conn.commit()
-                                print(f"      -> [W-{worker_id}] RED TEAM REJECTED. Sanity check failed.")
-                                items_processed += 1
-                                continue
-                        except Exception as e:
-                            print(f"      -> [W-{worker_id}] Red Teamer check failed: {e}. Proceeding.")
-
-                    try:
-                        with neo4j_driver.session() as session:
-                            write_claim_to_graph(session, claim)
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT cc.quote_context, cc.discovered_at,
+                                   ra.title, ru.url,
+                                   s.name, s.tier, s.epistemic_trust_score
+                            FROM claim_corroborations cc
+                            JOIN raw_articles ra ON cc.raw_article_id = ra.id
+                            JOIN raw_urls ru ON ra.url_id = ru.id
+                            JOIN sources s ON ru.source_id = s.id
+                            WHERE cc.claim_id = %s
+                        """, (claim_id,))
+                        corrobs = []
+                        for c_row in cur.fetchall():
+                            corrobs.append({
+                                "quote": c_row[0] or "",
+                                "date": str(c_row[1] or ""),
+                                "title": c_row[2] or "",
+                                "url": c_row[3] or "",
+                                "source_name": c_row[4] or "",
+                                "source_tier": c_row[5] or 3,
+                                "source_trust": c_row[6] or 0.40
+                            })
 
                         cur.execute("""
-                            UPDATE extracted_claims
-                            SET status = 'GRAPH_COMMITTED',
-                                pipeline_stage = 'COMPLETE'
-                            WHERE id = %s
-                        """, (claim_id,))
-                        pg_conn.commit()
+                            SELECT media_url, phash, synthetic_probability
+                            FROM media_provenance
+                            WHERE raw_article_id = %s
+                        """, (raw_article_id,))
+                        m_row = cur.fetchone()
+                        media_support = None
+                        if m_row:
+                            media_support = {
+                                "url": m_row[0],
+                                "phash": m_row[1],
+                                "synthetic_probability": float(m_row[2] or 0.0)
+                            }
 
-                        # ── Write Red Teamer VALID verdict onto the Neo4j [:PREDICATE] edge ───
-                        # Only do this if a Red Teamer check was actually performed (inv_id set).
-                        if inv_id and quote and len(quote) > 10:
-                            try:
-                                with neo4j_driver.session() as session:
-                                    session.run("""
-                                        MATCH (s:Entity {name: $subject})-[r:PREDICATE]->(o:Entity {name: $object})
-                                        WHERE r.type = $predicate
-                                        SET r.verified_by_red_teamer = true,
-                                            r.red_team_verdict = 'VALID',
-                                            r.red_team_verified_at = datetime()
-                                    """, subject=subj, object=obj, predicate=pred)
-                            except Exception as ve:
-                                print(f"      -> [W-{worker_id}] Red Teamer verdict write failed: {ve}")
+                claim = dict(
+                    id=claim_id, subject=subj, predicate=pred,
+                    object_entity=obj, temporal_anchor=temporal, spatial_anchor=spatial,
+                    extraction_confidence=conf, epistemic_score=score,
+                    is_verifiable=verifiable, spo_fingerprint=fingerprint,
+                    quote_context=quote,
+                    article_title=art_title, publish_date=pub_date,
+                    article_url=art_url, source_name=src_name,
+                    source_trust=src_trust, source_tier=src_tier,
+                    internet_original_url=orig_url,
+                    internet_original_source=orig_src,
+                    internet_original_date=orig_date,
+                    neo4j_stance=stance,
+                    neo4j_matched_claim_id=matched_id,
+                    neo4j_similarity=similarity,
+                    epistemic_domain=epistemic_domain,
+                    cross_modal_similarity=ai_data.get("cross_modal_similarity"),
+                    corroborations=corrobs,
+                    media=media_support,
+                    investigation_id=inv_id,
+                    synthetic_osint=(synthetic_osint == 'true' or synthetic_osint == True),
+                    content_sha256=content_sha256,
+                    snapshot_path=snapshot_path
+                )
 
-                        print(f"      -> [W-{worker_id}] Committed. Score={score:.3f}")
+                print(f"  [W-{worker_id}] Mutating: [{pred}] {subj[:22]} -> {obj[:22]}")
 
-                    except Exception as ne:
-                        import json as _json
+                if inv_id and quote and len(quote) > 10:
+                    try:
+                        response = groq_pool.chat_completions_create(
+                            model="TIER_HEAVY",
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a Forensic Validator (Red Teamer) for an OSINT system. "
+                                        "Your job is to prevent hallucinations and false linkages. "
+                                        "Review the extracted claim below. Does the provided quote actually "
+                                        "prove this relationship beyond a reasonable doubt? Output EXACTLY one word: "
+                                        "'VALID' or 'REJECTED'."
+                                    )
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Subject: {subj}\n"
+                                        f"Predicate: {pred}\n"
+                                        f"Object: {obj}\n"
+                                        f"Evidence Quote: {quote}"
+                                    )
+                                }
+                            ],
+                            response_model=None,
+                            temperature=0.0
+                        )
+                        ans = response.strip().upper()
+                        if "REJECTED" in ans:
+                            with psycopg2.connect(DATABASE_URL) as pg_conn:
+                                with pg_conn.cursor() as cur:
+                                    cur.execute("""
+                                        UPDATE extracted_claims
+                                        SET status = 'RED_TEAM_REJECTED',
+                                            pipeline_stage = 'COMPLETE',
+                                            ai_metadata = ai_metadata || '{"red_team_rejected": true}'::jsonb
+                                        WHERE id = %s
+                                    """, (claim_id,))
+
+                                    if inv_id:
+                                        try:
+                                            int_inv_id = int(inv_id)
+                                            for requeue_entity in {subj, obj}:
+                                                if requeue_entity and len(requeue_entity) > 2:
+                                                    cur.execute("""
+                                                        INSERT INTO investigation_leads
+                                                            (investigation_id, entity_name, lead_type, priority, status)
+                                                        VALUES (%s, %s, 'GENERAL', 90, 'PENDING')
+                                                        ON CONFLICT (investigation_id, entity_name)
+                                                        DO UPDATE SET priority = GREATEST(investigation_leads.priority, 90),
+                                                                      status = CASE
+                                                                        WHEN investigation_leads.status = 'EXPLORED'
+                                                                        THEN 'PENDING'
+                                                                        ELSE investigation_leads.status
+                                                                      END
+                                                    """, (int_inv_id, requeue_entity))
+                                            print(f"      -> [W-{worker_id}] Requeued entities for re-investigation.")
+                                        except Exception as rq_e:
+                                            print(f"      -> [W-{worker_id}] Re-queue failed: {rq_e}")
+                                    pg_conn.commit()
+                            print(f"      -> [W-{worker_id}] RED TEAM REJECTED. Sanity check failed.")
+                            items_processed += 1
+                            continue
+                    except Exception as e:
+                        print(f"      -> [W-{worker_id}] Red Teamer check failed: {e}. Proceeding.")
+
+                try:
+                    with neo4j_driver.session() as session:
+                        write_claim_to_graph(session, claim)
+
+                    with psycopg2.connect(DATABASE_URL) as pg_conn:
+                        with pg_conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE extracted_claims
+                                SET status = 'GRAPH_COMMITTED',
+                                    pipeline_stage = 'COMPLETE'
+                                WHERE id = %s
+                            """, (claim_id,))
+                            pg_conn.commit()
+
+                    if inv_id and quote and len(quote) > 10:
                         try:
-                            _ai = _json.loads(ai_metadata) if ai_metadata else {}
-                        except Exception:
-                            _ai = {}
-                        retries = _ai.get('mutation_retries', 0) + 1
-                        _ai['mutation_retries'] = retries
-                        _ai['last_mutation_error'] = str(ne)[:200]
+                            with neo4j_driver.session() as session:
+                                session.run("""
+                                    MATCH (s:Entity {name: $subject})-[r:PREDICATE]->(o:Entity {name: $object})
+                                    WHERE r.type = $predicate
+                                    SET r.verified_by_red_teamer = true,
+                                        r.red_team_verdict = 'VALID',
+                                        r.red_team_verified_at = datetime()
+                                """, subject=subj, object=obj, predicate=pred)
+                        except Exception as ve:
+                            print(f"      -> [W-{worker_id}] Red Teamer verdict write failed: {ve}")
 
-                        if retries >= 3:
-                            # Escalate to dead-letter — permanently visible in dashboard
-                            cur.execute("""
-                                UPDATE extracted_claims
-                                SET status = 'DEAD_LETTER',
-                                    pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
-                                    ai_metadata = ai_metadata || %s::jsonb
+                    print(f"      -> [W-{worker_id}] Committed. Score={score:.3f}")
+
+                except Exception as ne:
+                    import json as _json
+                    try:
+                        _ai = _json.loads(ai_metadata) if ai_metadata else {}
+                    except Exception:
+                        _ai = {}
+                    retries = _ai.get('mutation_retries', 0) + 1
+                    _ai['mutation_retries'] = retries
+                    _ai['last_mutation_error'] = str(ne)[:200]
+
+                    with psycopg2.connect(DATABASE_URL) as pg_conn:
+                        with pg_conn.cursor() as cur:
+                            if retries >= 3:
+                                cur.execute("""
+                                    UPDATE extracted_claims
+                                    SET status = 'DEAD_LETTER',
+                                        pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
+                                        ai_metadata = ai_metadata || %s::jsonb
+                                    WHERE id = %s
+                                """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
+                                print(f"      -> [W-{worker_id}] DEAD_LETTER after {retries} attempts: {ne}")
+                            else:
+                                cur.execute("""
+                                    UPDATE extracted_claims
+                                    SET status = 'FAILED_MUTATION',
+                                        pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
+                                        ai_metadata = ai_metadata || %s::jsonb
                                 WHERE id = %s
-                            """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
-                            print(f"      -> [W-{worker_id}] DEAD_LETTER after {retries} attempts: {ne}")
-                        else:
-                            # Re-queue for retry with incremented counter
-                            cur.execute("""
-                                UPDATE extracted_claims
-                                SET status = 'FAILED_MUTATION',
-                                    pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
-                                    ai_metadata = ai_metadata || %s::jsonb
-                                WHERE id = %s
-                            """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
-                            print(f"      -> [W-{worker_id}] FAILED (attempt {retries}/3): {ne}")
-                        pg_conn.commit()
-                    items_processed += 1
-                    time.sleep(0.05)
+                                """, (_json.dumps({"mutation_retries": retries, "last_mutation_error": str(ne)[:200]}), claim_id))
+                                print(f"      -> [W-{worker_id}] FAILED (attempt {retries}/3): {ne}")
+                            pg_conn.commit()
+
+                items_processed += 1
+                time.sleep(0.05)
 
             except Exception as le:
                 print(f"  [ERROR W-{worker_id}] {le}")
-                pg_conn.rollback()
+                try:
+                    with psycopg2.connect(DATABASE_URL) as rollback_conn:
+                        rollback_conn.rollback()
+                except Exception:
+                    pass
                 time.sleep(2)
-
-        pg_conn.close()
-    except Exception as fe:
-        print(f"[FATAL W-{worker_id}] {fe}")
+    except Exception as fatal:
+        print(f"[FATAL W-{worker_id}] {fatal}")
 
 
 def process_mutation_queue():

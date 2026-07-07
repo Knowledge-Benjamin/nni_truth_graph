@@ -195,36 +195,36 @@ def revalidate_claim(pg_cur, claim_id: int, subject: str,
 def revalidation_sweep():
     """Full sweep of all ACTIVE claims older than REVALIDATION_THRESHOLD_DAYS."""
     try:
-        pg_conn = psycopg2.connect(DATABASE_URL)
-        pg_conn.autocommit = False
-        pg_cur  = pg_conn.cursor()
+        with psycopg2.connect(DATABASE_URL) as pg_conn:
+            pg_conn.autocommit = False
+            with pg_conn.cursor() as pg_cur:
+                threshold = datetime.now(timezone.utc) - \
+                            timedelta(days=REVALIDATION_THRESHOLD_DAYS)
 
-        threshold = datetime.now(timezone.utc) - \
-                    timedelta(days=REVALIDATION_THRESHOLD_DAYS)
+                pg_cur.execute("""
+                    SELECT id, subject, predicate, object_entity, valid_from, lifecycle
+                    FROM extracted_claims
+                    WHERE lifecycle = 'ACTIVE'
+                      AND pipeline_stage = 'COMPLETE'
+                      AND status = 'GRAPH_COMMITTED'
+                      AND valid_from < %s
+                    ORDER BY valid_from ASC
+                    LIMIT 100;
+                """, (threshold,))
+                rows = pg_cur.fetchall()
 
-        pg_cur.execute("""
-            SELECT id, subject, predicate, object_entity, valid_from, lifecycle
-            FROM extracted_claims
-            WHERE lifecycle = 'ACTIVE'
-              AND pipeline_stage = 'COMPLETE'
-              AND status = 'GRAPH_COMMITTED'
-              AND valid_from < %s
-            ORDER BY valid_from ASC
-            LIMIT 100;
-        """, (threshold,))
-        rows = pg_cur.fetchall()
+                print(f"[Revalidation] {len(rows)} claims due for revalidation.")
 
-        print(f"[Revalidation] {len(rows)} claims due for revalidation.")
+                for row in rows:
+                    claim_id, subj, pred, obj, valid_from, lifecycle = row
+                    with psycopg2.connect(DATABASE_URL) as claim_conn:
+                        claim_conn.autocommit = False
+                        with claim_conn.cursor() as claim_cur:
+                            revalidate_claim(claim_cur, claim_id, subj, pred, obj,
+                                             valid_from, lifecycle)
+                            claim_conn.commit()
 
-        for row in rows:
-            claim_id, subj, pred, obj, valid_from, lifecycle = row
-            revalidate_claim(pg_cur, claim_id, subj, pred, obj,
-                             valid_from, lifecycle)
-            pg_conn.commit()
-
-        pg_cur.close()
-        pg_conn.close()
-        return len(rows)
+                return len(rows)
 
     except Exception as e:
         print(f"[Stage 10 ERROR] {e}")

@@ -14,8 +14,8 @@ import re
 import json
 import psycopg2
 from psycopg2.extras import Json
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Union, Any
+from pydantic import BaseModel, Field, field_validator
 
 import os
 import sys
@@ -53,6 +53,7 @@ class TriageResult(BaseModel):
         )
     )
     initial_queries: list[str] = Field(
+        default_factory=list,
         description=(
             "3-7 specific SearXNG search strings to launch the investigation. "
             "Crafted like a professional OSINT analyst: specific, using operators where useful."
@@ -66,6 +67,39 @@ class TriageResult(BaseModel):
         )
     )
     rationale: str = Field(description="1-2 sentences explaining the triage decisions made.")
+
+    @field_validator('initial_queries', mode='before')
+    def _accept_flexible_initial_queries(cls, v: Any) -> list[str]:
+        """
+        Accept either a list of strings or a list of dicts for `initial_queries`.
+        If dicts are provided, extract the best textual representation
+        (`entity_name`, `query`, `text`, `name`) or fall back to stringifying
+        the dict.
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        if not isinstance(v, list):
+            return [str(v)]
+
+        out: list[str] = []
+        for item in v:
+            if isinstance(item, str):
+                out.append(item)
+                continue
+            if isinstance(item, dict):
+                s = item.get('entity_name') or item.get('query') or item.get('text') or item.get('name')
+                if not s:
+                    try:
+                        # Join values to make a reasonable search string
+                        s = ' '.join(str(x) for x in item.values() if x)
+                    except Exception:
+                        s = json.dumps(item)
+                out.append(s)
+                continue
+            out.append(str(item))
+        return out
 
 
 # ── Regex-based pre-classification (fast, no LLM) ───────────────────────────

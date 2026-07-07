@@ -376,87 +376,75 @@ def handle_confirmed(session, pg_cur, claim_id: int, confirming_source_url: str,
 
 def evolution_sweep():
     """Single sweep over all GRAPH_COMMITTED claims with stance != NOVEL/ORIGINAL."""
-    pg_conn = None  # guard: ensure rollback in except is always safe
     try:
-        pg_conn = psycopg2.connect(DATABASE_URL)
-        pg_conn.autocommit = False
-        pg_cur = pg_conn.cursor()
-
-        pg_cur.execute("""
-            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                   ec.epistemic_score, ec.temporal_anchor, ec.spatial_anchor,
-                   cp.neo4j_stance, cp.neo4j_matched_claim_id, cp.neo4j_similarity,
-                   ru.source_id
-            FROM extracted_claims ec
-            JOIN claim_provenance cp ON cp.claim_id = ec.id
-            JOIN raw_articles ra     ON ec.article_id = ra.id
-            JOIN raw_urls ru         ON ra.url_id = ru.id
-            WHERE ec.pipeline_stage = 'COMPLETE'
-              AND ec.lifecycle = 'ACTIVE'
-              AND cp.neo4j_stance IN ('EVOLVES', 'CONTRADICTS', 'CORROBORATES', 'ENRICHES')
-              AND ec.status = 'GRAPH_COMMITTED'
-            LIMIT 50;
-        """)
-        rows = pg_cur.fetchall()
-
-        if not rows:
-            return 0
-
-        print(f"  [Stage 9] Processing {len(rows)} stance-resolved claims...")
-
-        with neo4j_driver.session() as session:
-            for row in rows:
-                (claim_id, subj, pred, obj, score, temporal, spatial,
-                 stance, matched_id, similarity, source_id) = row
-
-                claim = dict(id=claim_id, subject=subj, predicate=pred,
-                             object_entity=obj, epistemic_score=score,
-                             temporal_anchor=temporal, spatial_anchor=spatial, source_id=source_id)
-
-                if stance == "EVOLVES" and matched_id:
-                    handle_evolves(session, pg_cur, claim,
-                                   matched_id, similarity)
-
-                elif stance == "ENRICHES" and matched_id:
-                    handle_enriches(session, pg_cur, claim,
-                                   matched_id, similarity)
-
-                elif stance == "CONTRADICTS" and matched_id:
-                    # Get matched claim's score from Neo4j
-                    rec = session.run(
-                        "MATCH (c:Claim {id: $id}) RETURN c.epistemic_score AS s",
-                        id=str(matched_id)
-                    ).single()
-                    matched_score = float(rec["s"] or 0.4) if rec else 0.4
-                    handle_contradicts(session, pg_cur, claim,
-                                       matched_id, matched_score)
-
-                elif stance == "CORROBORATES":
-                    # Stage 6 (deduplication) already inserted the claim_corroborations
-                    # row and recalculated epistemic_score. Stage 9 only needs to apply
-                    # the minor source trust nudge to reward corroborating sources.
-                    # DO NOT re-boost epistemic_score here — that causes double-counting.
-                    adjust_source_trust(pg_cur, source_id, +0.005)
-                    print(f"    [CORROBORATES] Claim {matched_id} acknowledged. Source trust +0.005.")
-
-                # Mark as evolution-processed to avoid re-processing
+        with psycopg2.connect(DATABASE_URL) as pg_conn:
+            pg_conn.autocommit = False
+            with pg_conn.cursor() as pg_cur:
                 pg_cur.execute("""
-                    UPDATE extracted_claims SET lifecycle = 'EVOLUTION_PROCESSED'
-                    WHERE id = %s
-                """, (claim_id,))
+                    SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                           ec.epistemic_score, ec.temporal_anchor, ec.spatial_anchor,
+                           cp.neo4j_stance, cp.neo4j_matched_claim_id, cp.neo4j_similarity,
+                           ru.source_id
+                    FROM extracted_claims ec
+                    JOIN claim_provenance cp ON cp.claim_id = ec.id
+                    JOIN raw_articles ra     ON ec.article_id = ra.id
+                    JOIN raw_urls ru         ON ra.url_id = ru.id
+                    WHERE ec.pipeline_stage = 'COMPLETE'
+                      AND ec.lifecycle = 'ACTIVE'
+                      AND cp.neo4j_stance IN ('EVOLVES', 'CONTRADICTS', 'CORROBORATES', 'ENRICHES')
+                      AND ec.status = 'GRAPH_COMMITTED'
+                    LIMIT 50;
+                """)
+                rows = pg_cur.fetchall()
 
-        pg_conn.commit()
-        pg_cur.close()
-        pg_conn.close()
-        return len(rows)
+                if not rows:
+                    return 0
+
+                print(f"  [Stage 9] Processing {len(rows)} stance-resolved claims...")
+
+                with neo4j_driver.session() as session:
+                    for row in rows:
+                        (claim_id, subj, pred, obj, score, temporal, spatial,
+                         stance, matched_id, similarity, source_id) = row
+
+                        claim = dict(id=claim_id, subject=subj, predicate=pred,
+                                     object_entity=obj, epistemic_score=score,
+                                     temporal_anchor=temporal, spatial_anchor=spatial, source_id=source_id)
+
+                        with psycopg2.connect(DATABASE_URL) as claim_conn:
+                            claim_conn.autocommit = False
+                            with claim_conn.cursor() as claim_cur:
+                                if stance == "EVOLVES" and matched_id:
+                                    handle_evolves(session, claim_cur, claim,
+                                                   matched_id, similarity)
+
+                                elif stance == "ENRICHES" and matched_id:
+                                    handle_enriches(session, claim_cur, claim,
+                                                    matched_id, similarity)
+
+                                elif stance == "CONTRADICTS" and matched_id:
+                                    rec = session.run(
+                                        "MATCH (c:Claim {id: $id}) RETURN c.epistemic_score AS s",
+                                        id=str(matched_id)
+                                    ).single()
+                                    matched_score = float(rec["s"] or 0.4) if rec else 0.4
+                                    handle_contradicts(session, claim_cur, claim,
+                                                       matched_id, matched_score)
+
+                                elif stance == "CORROBORATES":
+                                    adjust_source_trust(claim_cur, source_id, +0.005)
+                                    print(f"    [CORROBORATES] Claim {matched_id} acknowledged. Source trust +0.005.")
+
+                                claim_cur.execute("""
+                                    UPDATE extracted_claims SET lifecycle = 'EVOLUTION_PROCESSED'
+                                    WHERE id = %s
+                                """, (claim_id,))
+                                claim_conn.commit()
+
+                return len(rows)
 
     except Exception as e:
         print(f"  [Stage 9 ERROR] {e}")
-        try:
-            if pg_conn:
-                pg_conn.rollback()
-        except Exception:
-            pass
         return 0
 
 

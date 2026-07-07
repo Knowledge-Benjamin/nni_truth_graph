@@ -12,7 +12,9 @@ All third-party cloud providers (Google AI Studio, DeepInfra, OpenRouter,
 Groq, GitHub) are weight-zeroed and disabled.
 """
 
+import json
 import os
+import re
 import time
 import random
 import threading
@@ -20,8 +22,9 @@ from typing import Any
 import instructor
 from dotenv import load_dotenv
 
-# Ensure .env is loaded at import time for any script that imports this module first.
-load_dotenv()
+# Ensure the ai_engine .env is loaded at import time for any script that imports this module first.
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(dotenv_path=env_path, override=True)
 
 # Controls whether the engine routes to self-hosted local inference or to cloud API providers.
 # Set EXECUTION_MODE=cloud to use cloud provider API keys, or EXECUTION_MODE=local to use local Ollama.
@@ -60,9 +63,9 @@ PROVIDERS = {
         "base_url": None,
         "weight": 0,  # Disabled: self-hosted Ollama is exclusive
         "env_keys": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-        "model_light":  "gemma-4-26b-a4b-it",
-        "model_heavy":  "gemma-4-26b-a4b-it",
-        "model_vision": "gemma-4-26b-a4b-it"
+        "model_light":  "gemini-2.5-flash",
+        "model_heavy":  "gemini-2.5-pro",
+        "model_vision": "gemini-2.5-flash"
     },
     "DEEPINFRA": {
         "base_url": "https://api.deepinfra.com/v1/openai",
@@ -224,14 +227,27 @@ class _OllamaCompletionsShim:
             payload["options"] = options
 
         url = f"{self._base_url}/api/chat"
-        try:
-            resp = _requests.post(url, json=payload, stream=True, timeout=300)
-            resp.raise_for_status()
-        except _requests.exceptions.HTTPError as e:
-            raise RuntimeError(f"[OllamaShim] HTTP {resp.status_code} from {url}: {e}") from e
-        except _requests.exceptions.RequestException as e:
-            raise RuntimeError(f"[OllamaShim] Connection error to {url}: {e}") from e
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = _requests.post(url, json=payload, stream=True, timeout=600)
+                resp.raise_for_status()
+                break
+            except _requests.exceptions.HTTPError as e:
+                last_error = RuntimeError(f"[OllamaShim] HTTP {getattr(resp, 'status_code', 'unknown')} from {url}: {e}")
+                if attempt == 2:
+                    raise last_error from e
+            except _requests.exceptions.Timeout as e:
+                last_error = RuntimeError(f"[OllamaShim] Timeout from {url}: {e}")
+                if attempt == 2:
+                    raise last_error from e
+            except _requests.exceptions.RequestException as e:
+                last_error = RuntimeError(f"[OllamaShim] Connection error to {url}: {e}")
+                if attempt == 2:
+                    raise last_error from e
+            time.sleep(2)
 
+        resp = resp  # type: ignore[assignment]
         # Collect streamed NDJSON tokens into a full response string
         full_text = []
         for raw_line in resp.iter_lines():
@@ -319,6 +335,291 @@ class MultiProviderRouter:
         self.clients_universal: list[RoutedClient] = []
         self._lock = threading.Lock()
         self._bootstrap()
+
+    def _extract_json_payload(self, text: str) -> Any | None:
+        """Best-effort extraction of a JSON object from model output."""
+        if not text:
+            return None
+
+        candidate = text.strip()
+        if not candidate:
+            return None
+
+        if candidate.startswith("```"):
+            match = re.match(r"```(?:json)?\s*(.*?)\s*```", candidate, re.S | re.I)
+            if match:
+                candidate = match.group(1).strip()
+
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        decoder = json.JSONDecoder()
+        for idx, ch in enumerate(candidate):
+            if ch in "[{":
+                try:
+                    parsed, _ = decoder.raw_decode(candidate[idx:])
+                    return parsed
+                except json.JSONDecodeError:
+                    continue
+        return None
+
+    def _build_structured_prompt(self, messages: list[dict], response_model: Any) -> list[dict]:
+        """Append a JSON-only instruction so Gemini can return a parseable payload."""
+        schema = {}
+        if hasattr(response_model, "model_json_schema"):
+            schema = response_model.model_json_schema()
+
+        # Build a short, explicit example JSON for common response models
+        example = None
+        try:
+            model_name = getattr(response_model, '__name__', '')
+            keys = set(schema.get('properties', {}).keys() if isinstance(schema, dict) else [])
+            if model_name == 'TriageResult' or {'goal_type', 'initial_queries'}.issubset(keys):
+                example = {
+                    "goal_type": "PROFILING",
+                    "target_type": "PERSON",
+                    "canonical_target": "elon musk",
+                    "exhaust_predicate": None,
+                    "initial_queries": [
+                        "\"Elon Musk\" biography site:twitter.com",
+                        "\"Elon Musk\" funding OR investors site:news",
+                        "Elon Musk SpaceX regulatory filings"
+                    ],
+                    "seed_leads": [
+                        {"entity_name": "Tesla", "lead_type": "ORGANISATION", "priority": 90}
+                    ],
+                    "rationale": "PROFILING: focus on public profiles, corporate links, and funding." 
+                }
+        except Exception:
+            example = None
+
+        schema_hint = (
+            "\n\nReturn ONLY a single JSON OBJECT that matches the requested schema. "
+            "Do not return the JSON Schema, property descriptions, or any metadata (no 'properties', 'type', 'required', 'title'). "
+            "Do not wrap it in markdown code fences or add commentary.\n"
+            f"Schema: {json.dumps(schema, indent=2)}"
+        )
+        if example is not None:
+            try:
+                schema_hint += "\nExample JSON:\n" + json.dumps(example, indent=2)
+            except Exception:
+                pass
+
+        if not messages:
+            return [{"role": "user", "content": schema_hint}]
+
+        updated = [dict(m) for m in messages]
+        if updated and updated[-1].get("role") == "user":
+            updated[-1]["content"] = str(updated[-1].get("content", "")) + schema_hint
+        else:
+            updated.append({"role": "user", "content": schema_hint})
+        return updated
+
+    def _run_structured_fallback(self, client_wrapper: RoutedClient, call_kwargs: dict, response_model: Any) -> Any:
+        """Fallback for providers that reject instructor/structured-output schemas."""
+        fallback_kwargs = dict(call_kwargs)
+        fallback_kwargs.pop("response_model", None)
+        fallback_kwargs.pop("max_retries", None)
+        fallback_kwargs["messages"] = self._build_structured_prompt(
+            fallback_kwargs.get("messages", []),
+            response_model,
+        )
+
+        try:
+            raw_response = client_wrapper.raw_client.chat.completions.create(**fallback_kwargs)
+        except Exception as exc:
+            raise RuntimeError(f"Structured-output fallback failed: {exc}") from exc
+
+        text = self.extract_text_from_response(raw_response)
+        parsed = self._extract_json_payload(text or "")
+
+        if parsed is None:
+            # If we couldn't parse JSON, log and fall back to an empty mapping so
+            # downstream validation can produce a safe default instance instead
+            print(f"[LLM Router] Structured-output fallback could not parse JSON from provider response: {text}")
+            parsed = {}
+
+        # If the provider returned a bare list but the expected response
+        # model is a Pydantic model (object), attempt to coerce the list
+        # into a dict by placing it under a likely list-typed field name.
+        # This handles cases where models return the list of items for a
+        # single-list field (e.g. `initial_queries`) instead of a wrapper.
+        try:
+            if isinstance(parsed, list) and isinstance(response_model, type):
+                # Prefer Pydantic v2 `model_fields`, fall back to v1 `__fields__`.
+                model_fields = getattr(response_model, 'model_fields', None) or getattr(response_model, '__fields__', None) or {}
+                # Look for an obvious list-typed field name first.
+                candidates = ['initial_queries', 'items', 'results', 'entities', 'candidates']
+                chosen = None
+                for cname in candidates:
+                    if cname in model_fields:
+                        chosen = cname
+                        break
+                if chosen is None:
+                    # Otherwise find first field whose annotation indicates a list
+                    for fname, finfo in model_fields.items():
+                        ann = getattr(finfo, 'annotation', None)
+                        ann_name = getattr(ann, '__name__', '') if ann is not None else ''
+                        if ann_name == 'list' or str(ann).startswith('typing.List'):
+                            chosen = fname
+                            break
+                if chosen is not None:
+                    parsed = {chosen: parsed}
+        except Exception:
+            # If coercion fails for any reason, keep parsed as-is and let
+            # downstream validation handle it.
+            pass
+
+        # Normalization: if the parsed payload contains `initial_queries`
+        # as a list of dicts, coerce each dict to a search string by
+        # preferring `entity_name`, `query`, `text`, or `name` fields.
+        try:
+            if isinstance(parsed, dict):
+                iq = parsed.get('initial_queries')
+                if isinstance(iq, list) and iq:
+                    need_norm = any(isinstance(x, dict) for x in iq)
+                    if need_norm:
+                        new_iq = []
+                        for item in iq:
+                            if isinstance(item, str):
+                                new_iq.append(item)
+                                continue
+                            if isinstance(item, dict):
+                                s = item.get('entity_name') or item.get('query') or item.get('text') or item.get('name')
+                                if not s:
+                                    try:
+                                        s = ' '.join(str(v) for v in item.values() if v)
+                                    except Exception:
+                                        s = json.dumps(item)
+                                new_iq.append(s)
+                                continue
+                            new_iq.append(str(item))
+                        parsed['initial_queries'] = new_iq
+
+                # Ensure required top-level fields exist with safe defaults
+                if 'goal_type' not in parsed or not parsed.get('goal_type'):
+                    parsed.setdefault('goal_type', 'UNKNOWN')
+                if 'target_type' not in parsed or not parsed.get('target_type'):
+                    parsed.setdefault('target_type', 'UNKNOWN')
+                if 'canonical_target' not in parsed:
+                    parsed.setdefault('canonical_target', '')
+                if 'rationale' not in parsed:
+                    parsed.setdefault('rationale', '')
+
+                # Debugging aid: compact print of the normalized parsed JSON
+                try:
+                    print(f"[LLM Router] Parsed structured JSON (normalized): {json.dumps(parsed, separators=(',',':'))[:1000]}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # If the model accidentally returned a JSON Schema object (it echoed
+        # the schema instead of filling it), attempt to extract concrete
+        # values from the `properties` mapping. This handles cases like the
+        # provider returning {"properties": {"queries": [...]}, "title": ...}
+        try:
+            if isinstance(parsed, dict) and 'properties' in parsed and isinstance(parsed['properties'], dict):
+                props = parsed['properties']
+                instance: dict = {}
+                for fname, fval in props.items():
+                    # If the property value is already a concrete value, use it
+                    if isinstance(fval, (str, int, float, bool, list)):
+                        instance[fname] = fval
+                        continue
+
+                    # If the property appears to be a schema fragment, prefer
+                    # explicit examples/defaults/constants if present.
+                    if isinstance(fval, dict):
+                        if 'default' in fval:
+                            instance[fname] = fval['default']
+                            continue
+                        if 'example' in fval:
+                            instance[fname] = fval['example']
+                            continue
+                        if 'const' in fval:
+                            instance[fname] = fval['const']
+                            continue
+
+                        # Otherwise, scan nested values for any concrete list/string
+                        found = None
+                        for subv in fval.values():
+                            if isinstance(subv, (list, str)):
+                                found = subv
+                                break
+                        if found is not None:
+                            instance[fname] = found
+                        else:
+                            # As a last resort, keep the raw fragment so validation
+                            # can decide, but stringify to avoid nested schema objects.
+                            try:
+                                instance[fname] = json.dumps(fval)
+                            except Exception:
+                                instance[fname] = str(fval)
+                    else:
+                        try:
+                            instance[fname] = str(fval)
+                        except Exception:
+                            instance[fname] = None
+
+                # Merge top-level scalar values if present (goal_type/rationale etc.)
+                for k in ('goal_type', 'target_type', 'canonical_target', 'rationale'):
+                    if k in parsed and parsed[k]:
+                        instance.setdefault(k, parsed[k])
+
+                parsed = instance
+                try:
+                    print(f"[LLM Router] Converted JSON-Schema-like output into instance: {json.dumps(parsed, separators=(',',':'))[:1000]}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Try to coerce/validate into the requested Pydantic model, but be
+        # defensive: if validation fails, return a default instance with safe
+        # placeholder values rather than raising and disabling providers.
+        try:
+            if hasattr(response_model, "model_validate"):
+                return response_model.model_validate(parsed)
+            if isinstance(response_model, type):
+                if isinstance(parsed, dict):
+                    return response_model(**parsed)
+                return response_model()
+            return parsed
+        except Exception as e:
+            print(f"[LLM Router] Structured parsing to {getattr(response_model, '__name__', str(response_model))} failed: {e}")
+            # Build a safe default instance from the model schema. If the model
+            # output is malformed (e.g. a list instead of an object), coerce it
+            # to the expected field types rather than returning a plain dict.
+            try:
+                defaults = {}
+                fields = getattr(response_model, '__fields__', {})
+                for fname, finfo in fields.items():
+                    default_value = None
+                    if isinstance(parsed, dict) and fname in parsed:
+                        value = parsed[fname]
+                        if isinstance(value, list) and finfo.annotation is not list:
+                            default_value = [] if getattr(finfo, 'default_factory', None) is not None else []
+                        else:
+                            default_value = value
+                    else:
+                        if finfo.default is not None:
+                            default_value = finfo.default
+                        elif hasattr(finfo, 'default_factory') and finfo.default_factory is not None:
+                            try:
+                                default_value = finfo.default_factory()
+                            except Exception:
+                                default_value = None
+                        elif getattr(finfo.annotation, '__name__', None) == 'list':
+                            default_value = []
+                        else:
+                            default_value = None
+                    defaults[fname] = default_value
+                return response_model(**defaults)
+            except Exception:
+                return response_model()
 
     def _bootstrap(self):
         """
@@ -448,17 +749,24 @@ class MultiProviderRouter:
                 # text generations (ArticleWorker, stance detection, etc.)
                 # don't hit Instructor's strict `response_model` requirement.
                 if "response_model" in call_kwargs and call_kwargs["response_model"] is not None:
-                    # Instructor/genai path: some underlying genai implementations do not
-                    # accept OpenAI-style kwargs such as `temperature` and will raise
-                    # "Models.generate_content() got an unexpected keyword argument 'temperature'".
-                    # Avoid passing `temperature` into the instructor-wrapped client to
-                    # prevent that error. Keep `max_retries` behavior intact.
-                    if "temperature" in call_kwargs and client_wrapper.provider == "GOOGLE_AI_STUDIO":
-                        call_kwargs.pop("temperature")
+                    response_model = call_kwargs["response_model"]
+                    if client_wrapper.provider in {"GOOGLE_AI_STUDIO", "SELF_HOSTED_OLLAMA"}:
+                        # The local Ollama path and Gemini fallback both work better with a
+                        # plain-text JSON response that we parse locally instead of the
+                        # instructor wrapper, which is prone to timeouts and schema issues.
+                        response = self._run_structured_fallback(client_wrapper, call_kwargs, response_model)
+                    else:
+                        # Instructor/genai path: some underlying genai implementations do not
+                        # accept OpenAI-style kwargs such as `temperature` and will raise
+                        # "Models.generate_content() got an unexpected keyword argument 'temperature'".
+                        # Avoid passing `temperature` into the instructor-wrapped client to
+                        # prevent that error. Keep `max_retries` behavior intact.
+                        if "temperature" in call_kwargs and client_wrapper.provider == "GOOGLE_AI_STUDIO":
+                            call_kwargs.pop("temperature")
 
-                    if "max_retries" not in call_kwargs and client_wrapper.provider != "SELF_HOSTED_OLLAMA":
-                        call_kwargs["max_retries"] = 3
-                    response = client_wrapper.client.chat.completions.create(**call_kwargs)
+                        if "max_retries" not in call_kwargs and client_wrapper.provider != "SELF_HOSTED_OLLAMA":
+                            call_kwargs["max_retries"] = 3
+                        response = client_wrapper.client.chat.completions.create(**call_kwargs)
                 else:
                     response = client_wrapper.raw_client.chat.completions.create(**call_kwargs)
 
@@ -487,14 +795,49 @@ class MultiProviderRouter:
                 
             except (GroqRateLimitError, OpenAIRateLimitError, NotFoundError, InternalServerError) as e:
                 reason = f"provider failure: {type(e).__name__} {str(e)[:200]}"
-                client_wrapper.disable(reason)
+                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and "timeout" in str(e).lower():
+                    print(f"[LLM Router] Transient local timeout from {client_wrapper.provider}; retrying without disabling provider: {e}")
+                    client_wrapper.cooldown_until = time.time() + 5
+                else:
+                    client_wrapper.disable(reason)
                 exceptions.append(e)
             except Exception as e:
                 err_str = str(e).lower()
                 err_type = str(type(e)).lower()
                 reason = f"error: {type(e).__name__} {str(e)[:200]}"
 
-                if any(x in err_str for x in ["429", "too many requests", "timeout", "500", "404", "401", "400", "unauthorized", "bad request"]):
+                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and any(x in err_str for x in ["timeout", "timed out", "connection", "temporarily unavailable", "retry", "failed_attempts", "validation", "json", "parse"]):
+                    print(f"[LLM Router] Local provider fallback issue from {client_wrapper.provider}; returning safe fallback instead of disabling provider: {e}")
+                    client_wrapper.cooldown_until = time.time() + 5
+                    if "response_model" in kwargs and kwargs.get("response_model") is not None:
+                        try:
+                            response_model = kwargs["response_model"]
+                            if hasattr(response_model, "model_fields"):
+                                defaults = {}
+                                for name, field in response_model.model_fields.items():
+                                    if getattr(field, "default", None) is not None:
+                                        defaults[name] = field.default
+                                    elif getattr(field, "default_factory", None) is not None:
+                                        try:
+                                            defaults[name] = field.default_factory()
+                                        except Exception:
+                                            defaults[name] = None
+                                    else:
+                                        defaults[name] = None
+                                try:
+                                    return response_model(**defaults)
+                                except Exception:
+                                    # Fall back to a no-arg constructor to ensure we
+                                    # return a model instance rather than a plain dict.
+                                    return response_model()
+                            return response_model()
+                        except Exception:
+                            try:
+                                return response_model()
+                            except Exception:
+                                return {}
+                    return {}
+                elif any(x in err_str for x in ["429", "too many requests", "timeout", "500", "404", "401", "400", "unauthorized", "bad request"]):
                     client_wrapper.disable(reason)
                 elif "validation" in err_type or "json" in err_str or "parse" in err_str:
                     print(f"[LLM Router] Caught validation/parse error from {client_wrapper.provider}. Disabling key and retrying...")

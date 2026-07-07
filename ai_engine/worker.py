@@ -11,6 +11,7 @@ import sys
 import time
 import signal
 import psycopg2  # type: ignore
+from celery.result import AsyncResult
 from dotenv import load_dotenv  # type: ignore
 
 # Force UTF-8 stdout so Unicode box-drawing characters don't crash on Windows
@@ -26,7 +27,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # ─────────────────────────────────────────────────────────────────────────────
 # TUNING CONSTANTS  (all times in ticks; 1 tick = TICK_INTERVAL seconds)
 # ─────────────────────────────────────────────────────────────────────────────
-TICK_INTERVAL      = 15    # seconds between scheduler cycles
+TICK_INTERVAL      = 15  # seconds between scheduler cycles
 IDLE_COOLDOWN      = 8     # ticks to wait after queue goes empty
 LOW_THRESHOLD      = 10    # queue depth below which we go SLOW
 HIGH_THRESHOLD     = 100   # queue depth above which we BURST
@@ -34,11 +35,12 @@ OVERFLOW_THRESHOLD = 300   # downstream pressure that triggers back-pressure on 
 SLOW_COOLDOWN      = 3     # ticks between dispatches when pressure is LOW
 BURST_EXTRA        = 2     # extra Celery tasks dispatched per tick when BURSTing
 
-# Fixed-interval stages (in ticks)
-S1_INTERVAL  = 20   # Ingest        — every 5 min  (20 × 15s)
-S9_INTERVAL  = 20   # Evolution     — every 5 min
-S10_INTERVAL = 1440 # Revalidation  — every 6 hours
-S11_INTERVAL = 8    # OSINT Orchestrator — every 2 min  (8 × 15s)
+# Backlog-driven stages: dispatch when the underlying queue has pending work.
+# The old .env interval settings are no longer used for the investigation loop.
+S1_INTERVAL  = 1
+S9_INTERVAL  = 1
+S10_INTERVAL = 1
+S11_INTERVAL = 1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QUEUE-DEPTH QUERIES — one per stage
@@ -162,12 +164,8 @@ class StageScheduler:
     def __init__(self):
         # Cooldown remaining (in ticks) per stage
         self._cooldown: dict[str, int] = {s: 0 for s in PIPELINE_ORDER}
-        # Fixed-interval timers (count down to 0 → fire)
-        self._s1_timer: int  = 0
-        self._s9_timer: int  = 0
-        self._s10_timer: int = 0
-        self._s11_timer: int = 0  # OSINT Orchestrator
         self._tick: int      = 0
+        self._orchestrator_running = False
         # Stuck-stage detection: track last seen depth and dispatch count per stage
         self._last_depth: dict[str, int] = {s: -1 for s in PIPELINE_ORDER}  # depth at last dispatch (-1 as None)
         self._dispatch_since: dict[str, int] = {s: 0 for s in PIPELINE_ORDER}  # dispatches since last progress
@@ -189,12 +187,29 @@ class StageScheduler:
         }
         self._last_fired: dict[str, int] = {s: -999 for s in PIPELINE_ORDER}  # tick of last dispatch
         self._actions: dict[str, str] = {}
+        self._active_tasks: dict[str, list[str]] = {s: [] for s in PIPELINE_ORDER}
+
+    def _prune_completed_tasks(self) -> None:
+        for script, task_ids in list(self._active_tasks.items()):
+            if not task_ids:
+                continue
+            remaining = []
+            for task_id in task_ids:
+                try:
+                    result = AsyncResult(task_id, app=app)
+                    if result.state in {"SUCCESS", "FAILURE", "REVOKED", "RETRY"}:
+                        continue
+                except Exception:
+                    continue
+                remaining.append(task_id)
+            self._active_tasks[script] = remaining
 
     def tick(self, pressures: dict) -> list[str]:
         """
         Evaluate stage eligibility for this tick.
         Returns list of script names to dispatch.
         """
+        self._prune_completed_tasks()
         self._tick += 1
         to_dispatch = []
         self._actions = {}   # label → action string for dashboard
@@ -237,6 +252,9 @@ class StageScheduler:
             min_gap = self._REFIRE_MIN.get(script, 1)
             return (self._tick - self._last_fired[script]) >= min_gap
 
+        def has_active(script):
+            return bool(self._active_tasks.get(script, []))
+
         def do_dispatch(script):
             to_dispatch.append(script)
             self._last_fired[script] = self._tick
@@ -278,6 +296,12 @@ class StageScheduler:
                 update_stuck(script, depth, False) # No dispatch, so no progress expected
                 continue
 
+            if has_active(script):
+                self._actions[script] = (
+                    f"{depth:4d}  {pressure_bar(depth):16s}  [RUNNING]{bp_tag}{stuck_tag}"
+                )
+                continue
+
             # Refire guard: don't re-dispatch if we just fired recently
             if not refire_ok(script):
                 ticks_left = self._REFIRE_MIN[script] - (self._tick - self._last_fired[script])
@@ -303,57 +327,41 @@ class StageScheduler:
             self._actions[script] = f"{depth:4d}  {pressure_bar(depth):16s}  {action}"
             update_stuck(script, depth, True)
 
-        # ── Stage 1 — Ingest (fixed interval, suppressed if S2 overflowing unless an active investigation exists) ─
-        self._s1_timer -= 1
+        # ── Stage 1 — Ingest (dispatch when scrape backlog exists or there are active investigations) ─
         s2_pres = pressures.get("2_scrape.py", 0)
         active_inv = pressures.get("active_investigations", 0)
-        if self._s1_timer <= 0:
-            self._s1_timer = S1_INTERVAL
-            if s2_pres <= OVERFLOW_THRESHOLD or active_inv > 0:
-                to_dispatch.append("1_ingest.py")
-                if active_inv > 0 and s2_pres > OVERFLOW_THRESHOLD:
-                    note = " (override for active investigation)"
-                else:
-                    note = ""
-                self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]{note} "
+        if s2_pres <= OVERFLOW_THRESHOLD or active_inv > 0:
+            to_dispatch.append("1_ingest.py")
+            if active_inv > 0 and s2_pres > OVERFLOW_THRESHOLD:
+                note = " (override for active investigation)"
             else:
-                self._actions["1_ingest.py"] = f"  --  {'':16s}  [SKIP-BP]  "
+                note = ""
+            self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]{note} "
         else:
-            self._actions["1_ingest.py"] = (
-                f"  --  {'':16s}  [IN {fmt_timer(self._s1_timer):>7s}]"
-            )
+            self._actions["1_ingest.py"] = f"  --  {'':16s}  [IDLE]"
 
-        # ── Stage 9 — Evolution (every S9_INTERVAL ticks) ───────────────────
-        self._s9_timer -= 1
-        if self._s9_timer <= 0:
-            self._s9_timer = S9_INTERVAL
+        # ── Stage 9 — Evolution (dispatch only when there is pending evolution work) ─
+        if pressures.get("9_truth_evolution.py", 0) > 0:
             to_dispatch.append("9_truth_evolution.py")
             self._actions["9_truth_evolution.py"] = f"  --  {'':16s}  [DISPATCH] "
         else:
-            self._actions["9_truth_evolution.py"] = (
-                f"  --  {'':16s}  [IN {fmt_timer(self._s9_timer):>7s}]"
-            )
+            self._actions["9_truth_evolution.py"] = f"  --  {'':16s}  [IDLE]"
 
-        # ── Stage 10 — Revalidation (every S10_INTERVAL ticks) ──────────────
-        self._s10_timer -= 1
-        if self._s10_timer <= 0:
-            self._s10_timer = S10_INTERVAL
+        # ── Stage 10 — Revalidation (dispatch only when there is pending revalidation work) ─
+        if pressures.get("10_revalidation.py", 0) > 0:
             to_dispatch.append("10_revalidation.py")
             self._actions["10_revalidation.py"] = f"  --  {'':16s}  [DISPATCH] "
         else:
-            self._actions["10_revalidation.py"] = (
-                f"  --  {'':16s}  [IN {fmt_timer(self._s10_timer):>8s}]"
-            )
+            self._actions["10_revalidation.py"] = f"  --  {'':16s}  [IDLE]"
 
-        # ── Stage 11 — OSINT Orchestrator (every S11_INTERVAL ticks) ─────────
-        self._s11_timer -= 1
-        if self._s11_timer <= 0:
-            self._s11_timer = S11_INTERVAL
+        # ── Stage 11 — OSINT Orchestrator (run whenever active investigations exist and no run is in flight) ─────────
+        active_inv = pressures.get("active_investigations", 0)
+        if active_inv > 0 and not self._orchestrator_running:
             to_dispatch.append("orchestrator")
             self._actions["orchestrator"] = f"  --  {'':16s}  [DISPATCH] "
         else:
             self._actions["orchestrator"] = (
-                f"  --  {'':16s}  [IN {fmt_timer(self._s11_timer):<7s}]"
+                f"  --  {'':16s}  [IDLE]"
             )
 
         return to_dispatch
@@ -477,14 +485,18 @@ def main():
             dispatched = []
             for script in to_dispatch:
                 if script == "orchestrator":
-                    # Run the OSINT orchestrator synchronously in this process
-                    _run_osint_orchestrator()
+                    scheduler._orchestrator_running = True
+                    try:
+                        _run_osint_orchestrator()
+                    finally:
+                        scheduler._orchestrator_running = False
                     dispatched.append(script)
                     continue
                 try:
-                    launch_pipeline_stage.delay(script)
+                    task = launch_pipeline_stage.delay(script)
+                    scheduler._active_tasks.setdefault(script, []).append(task.id)
                     dispatched.append(script)
-                    time.sleep(0.3)   # small gap between dispatches
+                    time.sleep(0.3)
                 except Exception as e:
                     print(f"  [Dispatch ERROR] {script}: {e}")
 

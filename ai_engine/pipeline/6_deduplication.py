@@ -209,162 +209,168 @@ Reply with exactly one word: RICHER or SAME_DETAIL."""
 
 def dedup_worker(worker_id: int):
     try:
-        pg_conn = psycopg2.connect(DATABASE_URL)
         items_processed = 0
 
         while items_processed < 50:
             try:
-                with pg_conn.cursor() as cur:
-                    # Fetch one claim to deduplicate
-                    cur.execute("""
-                        SELECT ec.id, ec.subject, ec.predicate, ec.object_entity, ec.temporal_anchor, ec.spatial_anchor,
-                               ec.extraction_confidence, ec.epistemic_score, ec.article_id
-                        FROM extracted_claims ec
-                        JOIN raw_articles ra ON ec.article_id = ra.id
-                        JOIN raw_urls ru     ON ra.url_id = ru.id
-                        WHERE ec.pipeline_stage = 'STAGE_6_DEDUP'
-                          AND ec.status = 'PROCESSING'
-                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
-                        LIMIT 1
-                        FOR UPDATE OF ec SKIP LOCKED;
-                    """)
-                    row = cur.fetchone()
-                    if not row:
-                        pg_conn.rollback()
-                        break
+                claim_id = None
+                subj = None
+                pred = None
+                obj = None
+                temporal = None
+                spatial = None
+                conf = None
+                score = None
+                art_id = None
 
-                    claim_id, subj, pred, obj, temporal, spatial, conf, score, art_id = row
-                    claim_a = {"subject": subj, "predicate": pred, "object_entity": obj, "temporal_anchor": temporal, "spatial_anchor": spatial}
-
-                    print(f"  [W-{worker_id}] Dedup: [{pred}] {subj[:20]} -> {obj[:20]}")
-
-                    # ── LAYER 1: Exact fingerprint check ─────────────────────
-                    fingerprint = make_fingerprint(subj, pred, obj)
-                    cur.execute("""
-                        SELECT id, epistemic_score, temporal_anchor, spatial_anchor
-                        FROM extracted_claims
-                        WHERE spo_fingerprint = %s
-                          AND id != %s
-                          AND status IN ('CANONICAL', 'AUTO_APPROVE', 'HUMAN_REVIEW', 'PROCESSING')
-                        LIMIT 1;
-                    """, (fingerprint, claim_id))
-                    exact_match = cur.fetchone()
-
-                    if exact_match:
-                        canonical_id, c_score, c_temporal, c_spatial = exact_match
-                        
-                        # Only merge safely in Layer 1 if temporal and spatial match exactly as well
-                        if (temporal or "").strip() == (c_temporal or "").strip() and (spatial or "").strip() == (c_spatial or "").strip():
-                            # Exact match — immediately merge with higher-scoring canonical
-                            if (score or 0) > (c_score or 0):
-                                # Our claim is better — replace the existing canonical
-                                cur.execute("""
-                                    UPDATE extracted_claims SET status = 'DUPLICATE',
-                                        pipeline_stage = 'STAGE_6_DEDUP_DONE' WHERE id = %s
-                                """, (canonical_id,))
-                                cur.execute("""
-                                    UPDATE extracted_claims SET spo_fingerprint = %s,
-                                        pipeline_stage = 'STAGE_7_CROSS_REF', status = 'PROCESSING'
-                                    WHERE id = %s
-                                """, (fingerprint, claim_id))
-                                _add_corroboration(cur, claim_id, claim_id)
-                                _add_corroboration(cur, claim_id, canonical_id)
-                            else:
-                                # Canonical is better — mark ours as duplicate
-                                cur.execute("""
-                                    UPDATE extracted_claims SET status = 'DUPLICATE',
-                                        pipeline_stage = 'STAGE_6_DEDUP_DONE' WHERE id = %s
-                                """, (claim_id,))
-                                _add_corroboration(cur, canonical_id, canonical_id)
-                                _add_corroboration(cur, canonical_id, claim_id)
-                            print(f"      -> [L1 EXACT HASH DUPLICATE] Merged with claim {canonical_id}.")
-                            pg_conn.commit()
-                            continue
-
-                    # Store fingerprint on this claim
-                    cur.execute("UPDATE extracted_claims SET spo_fingerprint = %s WHERE id = %s", (fingerprint, claim_id))
-
-                    # ── LAYER 2: Vector cosine similarity ────────────────────
-                    emb_a = get_article_embedding(cur, art_id)
-                    merged = False
-
-                    if emb_a:
-                        # Find all CANONICAL claims within same predicate family that have an article embedding
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
                         cur.execute("""
-                            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                                   ec.temporal_anchor, ec.spatial_anchor, ec.epistemic_score, ec.article_id
+                            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity, ec.temporal_anchor, ec.spatial_anchor,
+                                   ec.extraction_confidence, ec.epistemic_score, ec.article_id
                             FROM extracted_claims ec
-                            WHERE ec.predicate = %s
-                              AND ec.id != %s
-                              AND ec.status IN ('CANONICAL', 'AUTO_APPROVE', 'HUMAN_REVIEW', 'PROCESSING')
-                              AND ec.article_id != %s
-                            LIMIT 100;
-                        """, (pred, claim_id, art_id))
-                        candidates = cur.fetchall()
+                            JOIN raw_articles ra ON ec.article_id = ra.id
+                            JOIN raw_urls ru     ON ra.url_id = ru.id
+                            WHERE ec.pipeline_stage = 'STAGE_6_DEDUP'
+                              AND ec.status = 'PROCESSING'
+                            ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
+                            LIMIT 1
+                            FOR UPDATE OF ec SKIP LOCKED;
+                        """)
+                        row = cur.fetchone()
+                        if not row:
+                            pg_conn.rollback()
+                            break
 
-                        for cand in candidates:
-                            cand_id, c_subj, c_pred, c_obj, c_temp, c_spatial, c_score, c_art_id = cand
-                            emb_b = get_article_embedding(cur, c_art_id)
-                            if not emb_b:
-                                continue
+                        claim_id, subj, pred, obj, temporal, spatial, conf, score, art_id = row
+                        cur.execute("UPDATE extracted_claims SET pipeline_stage = 'STAGE_6_DEDUP_IN_PROGRESS' WHERE id = %s", (claim_id,))
+                        pg_conn.commit()
 
-                            sim = cosine_similarity(emb_a, emb_b)
-                            if sim < COSINE_THRESHOLD:
-                                continue
+                if claim_id is None or subj is None or pred is None or obj is None:
+                    break
 
-                            # ── LAYER 3: LLM Semantic Judge ──────────────────
-                            claim_b = {"subject": c_subj, "predicate": c_pred, "object_entity": c_obj, "temporal_anchor": c_temp, "spatial_anchor": c_spatial}
-                            if llm_are_same_fact(claim_a, claim_b):
-                                if llm_is_enrichment(claim_a, claim_b):
-                                    # Incoming is richer. Route to Stage 7 as ENRICHMENT.
-                                    cur.execute("""
-                                        UPDATE extracted_claims
-                                        SET pipeline_stage = 'STAGE_7_CROSS_REF',
-                                            status = 'PROCESSING',
-                                            enrichment_target_neo4j_id = %s
-                                        WHERE id = %s
-                                    """, (str(cand_id), claim_id))
-                                    print(f"      -> [L3 LLM ENRICHMENT] Rescued richer claim {claim_id}. Targets {cand_id}.")
-                                else:
-                                    better_id = claim_id if (score or 0) >= (c_score or 0) else cand_id
-                                    weaker_id = cand_id if better_id == claim_id else claim_id
+                claim_a = {"subject": subj, "predicate": pred, "object_entity": obj, "temporal_anchor": temporal, "spatial_anchor": spatial}
 
+                print(f"  [W-{worker_id}] Dedup: [{pred}] {subj[:20]} -> {obj[:20]}")
+
+                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with pg_conn.cursor() as cur:
+                        fingerprint = make_fingerprint(subj, pred, obj)
+                        cur.execute("""
+                            SELECT id, epistemic_score, temporal_anchor, spatial_anchor
+                            FROM extracted_claims
+                            WHERE spo_fingerprint = %s
+                              AND id != %s
+                              AND status IN ('CANONICAL', 'AUTO_APPROVE', 'HUMAN_REVIEW', 'PROCESSING')
+                            LIMIT 1;
+                        """, (fingerprint, claim_id))
+                        exact_match = cur.fetchone()
+
+                        if exact_match:
+                            canonical_id, c_score, c_temporal, c_spatial = exact_match
+                            if (temporal or "").strip() == (c_temporal or "").strip() and (spatial or "").strip() == (c_spatial or "").strip():
+                                if (score or 0) > (c_score or 0):
                                     cur.execute("""
                                         UPDATE extracted_claims SET status = 'DUPLICATE',
                                             pipeline_stage = 'STAGE_6_DEDUP_DONE' WHERE id = %s
-                                    """, (weaker_id,))
+                                    """, (canonical_id,))
                                     cur.execute("""
-                                        UPDATE extracted_claims
-                                        SET pipeline_stage = 'STAGE_7_CROSS_REF',
-                                            status = 'PROCESSING'
+                                        UPDATE extracted_claims SET spo_fingerprint = %s,
+                                            pipeline_stage = 'STAGE_7_CROSS_REF', status = 'PROCESSING'
                                         WHERE id = %s
-                                    """, (better_id,))
-                                    _add_corroboration(cur, better_id, better_id)
-                                    _add_corroboration(cur, better_id, weaker_id)
-                                    print(f"      -> [L3 LLM DUPLICATE sim={sim:.2f}] Merged with claim {better_id}.")
-                                merged = True
-                                break
+                                    """, (fingerprint, claim_id))
+                                    _add_corroboration(cur, claim_id, claim_id)
+                                    _add_corroboration(cur, claim_id, canonical_id)
+                                else:
+                                    cur.execute("""
+                                        UPDATE extracted_claims SET status = 'DUPLICATE',
+                                            pipeline_stage = 'STAGE_6_DEDUP_DONE' WHERE id = %s
+                                    """, (claim_id,))
+                                    _add_corroboration(cur, canonical_id, canonical_id)
+                                    _add_corroboration(cur, canonical_id, claim_id)
+                                print(f"      -> [L1 EXACT HASH DUPLICATE] Merged with claim {canonical_id}.")
+                                pg_conn.commit()
+                                continue
 
-                    if not merged:
-                        # Unique fact — advance to Stage 7 Cross-Reference
-                        cur.execute("""
-                            UPDATE extracted_claims
-                            SET pipeline_stage = 'STAGE_7_CROSS_REF',
-                                status = 'PROCESSING'
-                            WHERE id = %s
-                        """, (claim_id,))
-                        print(f"      -> [W-{worker_id}] UNIQUE. Routed to Stage 7.")
+                        cur.execute("UPDATE extracted_claims SET spo_fingerprint = %s WHERE id = %s", (fingerprint, claim_id))
+                        emb_a = get_article_embedding(cur, art_id)
+                        merged = False
 
-                    pg_conn.commit()
+                        if emb_a:
+                            cur.execute("""
+                                SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                                       ec.temporal_anchor, ec.spatial_anchor, ec.epistemic_score, ec.article_id
+                                FROM extracted_claims ec
+                                WHERE ec.predicate = %s
+                                  AND ec.id != %s
+                                  AND ec.status IN ('CANONICAL', 'AUTO_APPROVE', 'HUMAN_REVIEW', 'PROCESSING')
+                                  AND ec.article_id != %s
+                                LIMIT 100;
+                            """, (pred, claim_id, art_id))
+                            candidates = cur.fetchall()
+
+                            for cand in candidates:
+                                cand_id, c_subj, c_pred, c_obj, c_temp, c_spatial, c_score, c_art_id = cand
+                                emb_b = get_article_embedding(cur, c_art_id)
+                                if not emb_b:
+                                    continue
+
+                                sim = cosine_similarity(emb_a, emb_b)
+                                if sim < COSINE_THRESHOLD:
+                                    continue
+
+                                claim_b = {"subject": c_subj, "predicate": c_pred, "object_entity": c_obj, "temporal_anchor": c_temp, "spatial_anchor": c_spatial}
+                                if llm_are_same_fact(claim_a, claim_b):
+                                    if llm_is_enrichment(claim_a, claim_b):
+                                        cur.execute("""
+                                            UPDATE extracted_claims
+                                            SET pipeline_stage = 'STAGE_7_CROSS_REF',
+                                                status = 'PROCESSING',
+                                                enrichment_target_neo4j_id = %s
+                                            WHERE id = %s
+                                        """, (str(cand_id), claim_id))
+                                        print(f"      -> [L3 LLM ENRICHMENT] Rescued richer claim {claim_id}. Targets {cand_id}.")
+                                    else:
+                                        better_id = claim_id if (score or 0) >= (c_score or 0) else cand_id
+                                        weaker_id = cand_id if better_id == claim_id else claim_id
+
+                                        cur.execute("""
+                                            UPDATE extracted_claims SET status = 'DUPLICATE',
+                                                pipeline_stage = 'STAGE_6_DEDUP_DONE' WHERE id = %s
+                                        """, (weaker_id,))
+                                        cur.execute("""
+                                            UPDATE extracted_claims
+                                            SET pipeline_stage = 'STAGE_7_CROSS_REF',
+                                                status = 'PROCESSING'
+                                            WHERE id = %s
+                                        """, (better_id,))
+                                        _add_corroboration(cur, better_id, better_id)
+                                        _add_corroboration(cur, better_id, weaker_id)
+                                        print(f"      -> [L3 LLM DUPLICATE sim={sim:.2f}] Merged with claim {better_id}.")
+                                    merged = True
+                                    break
+
+                        if not merged:
+                            cur.execute("""
+                                UPDATE extracted_claims
+                                SET pipeline_stage = 'STAGE_7_CROSS_REF',
+                                    status = 'PROCESSING'
+                                WHERE id = %s
+                            """, (claim_id,))
+                            print(f"      -> [W-{worker_id}] UNIQUE. Routed to Stage 7.")
+
+                        pg_conn.commit()
                     items_processed += 1
                     time.sleep(0.1)
 
             except Exception as loop_err:
                 print(f"  [ERROR W-{worker_id}] {loop_err}. Rolling back to keep in queue.")
-                pg_conn.rollback()
+                try:
+                    with psycopg2.connect(DATABASE_URL) as rollback_conn:
+                        rollback_conn.rollback()
+                except Exception:
+                    pass
                 time.sleep(10)
-
-        pg_conn.close()
     except Exception as fatal:
         print(f"[FATAL W-{worker_id}] {fatal}")
 

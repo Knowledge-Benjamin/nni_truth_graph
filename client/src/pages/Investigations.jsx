@@ -80,6 +80,66 @@ function Investigations() {
         }
     };
 
+    const renderCompletedReport = () => {
+        if (selectedInvestigation?.status !== 'COMPLETED') return null;
+
+        const report = selectedInvestigation?.report || {};
+        const findings = selectedInvestigation?.findings || {};
+        const summary = report?.ch0_executive_summary?.content;
+        const reportFile = findings?.report_file;
+        const reportLink = reportFile ? `/api/investigations/${selectedInvestigation.id}/report/file` : null;
+
+        const findingsItems = [
+            ['Goal Achieved', findings?.goal_achieved ?? 'N/A'],
+            ['Termination Reason', findings?.termination_reason ?? 'N/A'],
+            ['Last Harvest Summary', findings?.last_harvest_summary ?? 'N/A'],
+            ['Completed At', findings?.completed_at ?? 'N/A'],
+            ['Report File', reportFile ? reportFile : 'Not available'],
+        ];
+
+        return (
+            <div style={{ background: '#111827', border: '1px solid #334155', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '12px' }}>
+                    <div>
+                        <div style={{ fontSize: '16px', fontWeight: '700', color: '#f8fafc' }}>Final Investigation Report</div>
+                        <div style={{ marginTop: '6px', fontSize: '13px', color: '#94a3b8' }}>Sealed report content and findings for this completed investigation.</div>
+                    </div>
+                    {reportLink && (
+                        <a
+                            href={reportLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                                padding: '10px 16px', background: '#2563eb', color: 'white', borderRadius: '10px', textDecoration: 'none', fontWeight: 700,
+                            }}
+                        >
+                            Download Report
+                        </a>
+                    )}
+                </div>
+
+                {summary ? (
+                    <div style={{ padding: '14px', background: '#0f172a', borderRadius: '10px', color: '#cbd5e1', lineHeight: '1.6', fontSize: '13px', whiteSpace: 'pre-wrap' }}>
+                        {summary}
+                    </div>
+                ) : (
+                    <div style={{ padding: '14px', background: '#0f172a', borderRadius: '10px', color: '#94a3b8', fontSize: '13px' }}>
+                        Executive summary not available for this investigation.
+                    </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginTop: '16px' }}>
+                    {findingsItems.map(([label, value]) => (
+                        <div key={label} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '10px', padding: '12px' }}>
+                            <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>{label}</div>
+                            <div style={{ fontSize: '14px', color: '#f8fafc', wordBreak: 'break-word' }}>{String(value)}</div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
     const handleStart = async (e) => {
         e.preventDefault();
         try {
@@ -253,6 +313,45 @@ function Investigations() {
                                 {selectedInvestigation?.last_summary && (
                                     <div style={{ marginTop: '16px', color: '#cbd5e1', lineHeight: '1.6', fontSize: '13px' }}>
                                         <strong style={{ color: '#f8fafc' }}>Latest insight:</strong> {selectedInvestigation.last_summary}
+                                    </div>
+                                )}
+                                {selectedInvestigation?.status === 'COMPLETED' && (
+                                    <div style={{ marginTop: '16px', color: '#cbd5e1', lineHeight: '1.6', fontSize: '13px' }}>
+                                        <h4 style={{ color: '#f8fafc', marginBottom: '8px' }}>Final Report</h4>
+                                        {/* Executive Summary (sealed) */}
+                                        {selectedInvestigation?.report?.ch0_executive_summary?.content ? (
+                                            <div style={{ background: '#0b1220', padding: '12px', borderRadius: '8px', border: '1px solid #112033', marginBottom: '8px' }}>
+                                                <div style={{ fontSize: '14px', color: '#f8fafc', marginBottom: '8px' }}>Executive Summary</div>
+                                                <div style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>
+                                                    {selectedInvestigation.report.ch0_executive_summary.content}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>No sealed executive summary available.</div>
+                                        )}
+
+                                        {/* Findings list and download link */}
+                                        <div style={{ marginTop: '8px' }}>
+                                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px' }}>Findings</div>
+                                            {selectedInvestigation?.findings ? (
+                                                <div style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                                                    <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                                                        {Object.entries(selectedInvestigation.findings).map(([k, v]) => (
+                                                            <li key={k} style={{ marginBottom: '6px' }}>
+                                                                <strong style={{ color: '#f8fafc' }}>{k}:</strong>&nbsp;
+                                                                {k === 'report_file' && v ? (
+                                                                    <a href={v} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>Download report</a>
+                                                                ) : (
+                                                                    <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                                                                )}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            ) : (
+                                                <div style={{ fontSize: '13px', color: '#94a3b8' }}>No findings saved for this investigation.</div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>

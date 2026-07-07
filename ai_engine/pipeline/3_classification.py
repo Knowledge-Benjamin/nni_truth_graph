@@ -36,81 +36,94 @@ def classification_worker(worker_id):
     Routes to PENDING_EXTRACTION.
     """
     try:
-        conn = psycopg2.connect(DATABASE_URL)
         items_processed = 0
-        
+
         while items_processed < 50:
             try:
-                with conn.cursor() as cursor:
-                    # Fetch 1 article to classify
-                    cursor.execute("""
-                        SELECT a.id, a.title, a.raw_text 
-                        FROM raw_articles a
-                        JOIN raw_urls ru ON a.url_id = ru.id
-                        WHERE a.status = 'PENDING_CLASSIFICATION' 
-                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, a.id ASC
-                        LIMIT 1 
-                        FOR UPDATE OF a SKIP LOCKED;
-                    """)
-                    
-                    row = cursor.fetchone()
-                    if not row:
-                        conn.rollback()
-                        break 
-                        
-                    article_id, title, raw_text = row
-                    print(f"  [W-{worker_id}] Classifying: {title[:50]}...")
-                    
-                    # --- LOCAL LANGUAGE DETECTION & TRANSLATION ---
-                    try:
-                        from langdetect import detect
-                        from ai_engine.core.sunbird_api import SunbirdClient
-                        
-                        detected_lang = detect(raw_text)
-                        if detected_lang != 'en':
-                            print(f"      -> [TRANSLATION] Detected non-English language ({detected_lang}). Routing to Sunbird AI...")
-                            translated_text = SunbirdClient.translate_to_english(raw_text)
-                            
-                            # If translation was successful and different, update the DB so Extraction gets English
-                            if translated_text and translated_text != raw_text:
-                                cursor.execute("UPDATE raw_articles SET raw_text = %s WHERE id = %s", (translated_text, article_id))
-                                raw_text = translated_text
-                                print(f"      -> [SUNBIRD SUCCESS] Translated to English.")
-                    except Exception as lang_e:
-                        print(f"      -> [LANGDETECT ERROR] Could not detect language: {lang_e}")
+                article_id = None
+                title = None
+                raw_text = None
 
-                    # Truncate text for embedding model (to fit within token limits, usually ~2000-8000 depending on model)
-                    # For broad classification of an article, the first 4000 chars are densely informative
-                    chunk_to_embed = raw_text[:4000] 
-                    embedding = embed_text(chunk_to_embed)
-                    
-                    if embedding:
-                        # Insert into vector store table
-                        # Format list of floats as a string literal for pgvector e.g., '[0.1, 0.2, ...]'
-                        embedding_literal = f"[{','.join(str(f) for f in embedding)}]"
-                        
+                with psycopg2.connect(DATABASE_URL) as claim_conn:
+                    with claim_conn.cursor() as cursor:
                         cursor.execute("""
-                            INSERT INTO article_categories (article_id, embedding)
-                            VALUES (%s, %s::vector)
-                        """, (article_id, embedding_literal))
-                        
-                        # Advance state machine
-                        cursor.execute("UPDATE raw_articles SET status = 'PENDING_EXTRACTION' WHERE id = %s", (article_id,))
-                        print(f"      -> [SUCCESS W-{worker_id}] Generated 768D Semantic Projection.")
-                    else:
-                        # Revert back to PENDING_CLASSIFICATION on failure so it can be retried
-                        cursor.execute("UPDATE raw_articles SET status = 'PENDING_CLASSIFICATION' WHERE id = %s", (article_id,))
-                        print(f"      -> [FAILED W-{worker_id}] Classification aborted. Kept in queue.")
-                        
-                    conn.commit()
-                    items_processed += 1
-                    time.sleep(0.5) # Polite sleeper
+                            SELECT a.id, a.title, a.raw_text
+                            FROM raw_articles a
+                            JOIN raw_urls ru ON a.url_id = ru.id
+                            WHERE a.status = 'PENDING_CLASSIFICATION'
+                            ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, a.id ASC
+                            LIMIT 1
+                            FOR UPDATE OF a SKIP LOCKED;
+                        """)
+
+                        row = cursor.fetchone()
+                        if not row:
+                            claim_conn.rollback()
+                            break
+
+                        article_id, title, raw_text = row
+                        cursor.execute("UPDATE raw_articles SET status = 'PROCESSING_CLASSIFICATION' WHERE id = %s", (article_id,))
+                        claim_conn.commit()
+
+                if article_id is None or title is None or raw_text is None:
+                    break
+
+                print(f"  [W-{worker_id}] Classifying: {title[:50]}...")
+
+                # --- LOCAL LANGUAGE DETECTION & TRANSLATION ---
+                try:
+                    from langdetect import detect
+                    from ai_engine.core.sunbird_api import SunbirdClient
+
+                    detected_lang = detect(raw_text)
+                    if detected_lang != 'en':
+                        print(f"      -> [TRANSLATION] Detected non-English language ({detected_lang}). Routing to Sunbird AI...")
+                        translated_text = SunbirdClient.translate_to_english(raw_text)
+
+                        if translated_text and translated_text != raw_text:
+                            with psycopg2.connect(DATABASE_URL) as update_conn:
+                                with update_conn.cursor() as cursor:
+                                    cursor.execute("UPDATE raw_articles SET raw_text = %s WHERE id = %s", (translated_text, article_id))
+                                update_conn.commit()
+                            raw_text = translated_text
+                            print(f"      -> [SUNBIRD SUCCESS] Translated to English.")
+                except Exception as lang_e:
+                    print(f"      -> [LANGDETECT ERROR] Could not detect language: {lang_e}")
+
+                chunk_to_embed = raw_text[:4000]
+                embedding = embed_text(chunk_to_embed)
+
+                if embedding:
+                    embedding_literal = f"[{','.join(str(f) for f in embedding)}]"
+                    with psycopg2.connect(DATABASE_URL) as write_conn:
+                        with write_conn.cursor() as cursor:
+                            cursor.execute("""
+                                INSERT INTO article_categories (article_id, embedding)
+                                VALUES (%s, %s::vector)
+                            """, (article_id, embedding_literal))
+                            cursor.execute("UPDATE raw_articles SET status = 'PENDING_EXTRACTION' WHERE id = %s", (article_id,))
+                        write_conn.commit()
+                    print(f"      -> [SUCCESS W-{worker_id}] Generated 768D Semantic Projection.")
+                else:
+                    with psycopg2.connect(DATABASE_URL) as write_conn:
+                        with write_conn.cursor() as cursor:
+                            cursor.execute("UPDATE raw_articles SET status = 'PENDING_CLASSIFICATION' WHERE id = %s", (article_id,))
+                        write_conn.commit()
+                    print(f"      -> [FAILED W-{worker_id}] Classification aborted. Kept in queue.")
+
+                items_processed += 1
+                time.sleep(0.5)
             except Exception as e:
-                print(f"  [ERROR W-{worker_id} Loop] {e}")
-                conn.rollback()
+                print(f"  [ERROR W-{worker_id}] Loop] {e}")
+                try:
+                    with psycopg2.connect(DATABASE_URL) as rollback_conn:
+                        with rollback_conn.cursor() as cursor:
+                            if 'article_id' in locals() and article_id is not None:
+                                cursor.execute("UPDATE raw_articles SET status = 'PENDING_CLASSIFICATION' WHERE id = %s", (article_id,))
+                        rollback_conn.commit()
+                except Exception:
+                    pass
                 time.sleep(2)
-        
-        conn.close()
     except Exception as fatal_e:
         print(f"[FATAL W-{worker_id}] {fatal_e}")
 
