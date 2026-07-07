@@ -18,6 +18,13 @@ export const api = {
         return r.json();
     },
 
+    // Calibration Curve
+    getCalibrationCurve: async () => {
+        const r = await fetch(`${apiBase}/calibration/curve`, getFetchOptions());
+        if (!r.ok) throw new Error('Failed to fetch calibration curve');
+        return r.json();
+    },
+
     // Natural Language Graph Chat (Conversational)
     sendChat: async (messages, context) => {
         const r = await fetch(`${apiBase}/chat`, {

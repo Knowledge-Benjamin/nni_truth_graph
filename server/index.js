@@ -462,6 +462,9 @@ app.use('/api/ingest', ingestRoutes);
 const investigationsRoutes = require('./routes/investigations');
 app.use('/api/investigations', investigationsRoutes);
 
+const calibrationRoutes = require('./routes/calibration');
+app.use('/api/calibration', calibrationRoutes);
+
 
 app.get('/api/health', async (req, res) => {
     try {

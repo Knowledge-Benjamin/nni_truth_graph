@@ -100,7 +100,8 @@ def mark_article_attempt(neo4j_session, entity_name: str, succeeded: bool):
         """, name=entity_name)
 
 
-def fetch_entity_claims(pg_conn, entity_name: str) -> list[dict]:
+def fetch_entity_claims(entity_name: str) -> list[dict]:
+    pg_conn = psycopg2.connect(DATABASE_URL)
     with pg_conn.cursor() as cur:
         # Layer 2: Corroboration Engine included via scalar subquery
         cur.execute("""
@@ -166,10 +167,11 @@ def fetch_entity_claims(pg_conn, entity_name: str) -> list[dict]:
                 except Exception:
                     c['synthetic_prob'] = None
                     
+        pg_conn.close()
         return claims
 
 
-def fetch_relevant_excerpts(pg_conn, entity_name: str, top_k: int = 4) -> str:
+def fetch_relevant_excerpts(entity_name: str, top_k: int = 4) -> str:
     """
     Core semantic extraction: Uses PostgreSQL pgvector <-> to find the most contextually relevant
     source texts for the entity to provide expansive journalistic depth for the LLM. 
@@ -186,6 +188,7 @@ def fetch_relevant_excerpts(pg_conn, entity_name: str, top_k: int = 4) -> str:
 
     embedding_literal = f"[{','.join(str(f) for f in entity_embedding)}]"
 
+    pg_conn = psycopg2.connect(DATABASE_URL)
     with pg_conn.cursor() as cur:
         cur.execute("""
             SELECT ra.title, LEFT(ra.raw_text, 40000) AS excerpt
@@ -201,6 +204,7 @@ def fetch_relevant_excerpts(pg_conn, entity_name: str, top_k: int = 4) -> str:
             title, text = row
             if text:
                 excerpts.append(f"--- Context Source (Full/Chunked Text): {title} ---\n{text.strip()}")
+        pg_conn.close()
         return "\n\n".join(excerpts)
 
 
@@ -322,11 +326,11 @@ def validate_refs(raw_text: str, valid_uuids: set) -> tuple[str, list[str]]:
 
 # --- Main Orchestration ---
 
-def process_entity(entity: dict, pg_conn, neo4j_session):
+def process_entity(entity: dict, neo4j_session):
     name = entity['name']
     log.info(f"  Processing entity: '{name}'")
 
-    claims = fetch_entity_claims(pg_conn, name)
+    claims = fetch_entity_claims(name)
     if len(claims) < MIN_CLAIMS:
         log.info(f"    Skipping '{name}' — only {len(claims)} claim(s)")
         mark_article_attempt(neo4j_session, name, succeeded=False)
@@ -362,7 +366,7 @@ def process_entity(entity: dict, pg_conn, neo4j_session):
             continue
             
         # Semantic Extraction
-        article_excerpts = fetch_relevant_excerpts(pg_conn, name)
+        article_excerpts = fetch_relevant_excerpts(name)
             
         # Generation Mode
         log.info(f"    -> [GENERATING] '{sec_name}' using {len(sec_claims)} claims...")
@@ -423,18 +427,19 @@ def process_entity(entity: dict, pg_conn, neo4j_session):
     
     log.info(f"  → Stored Enterprise JSON for '{name}' ({len(updated_json)-1} sections generated/retained).")
     
-    with pg_conn.cursor() as cur:
-        if total_used_uuids:
+    if total_used_uuids:
+        pg_conn = psycopg2.connect(DATABASE_URL)
+        with pg_conn.cursor() as cur:
             int_uuids = [int(u) for u in total_used_uuids]
             cur.execute("UPDATE extracted_claims SET article_incorporated = TRUE WHERE id = ANY(%s)", (int_uuids,))
+        pg_conn.commit()
+        pg_conn.close()
 
 
 def run_article_daemon():
     log.info("Starting Enterprise Multi-Pass Living Article Worker")
     try:
         neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        pg_conn = psycopg2.connect(DATABASE_URL)
-        pg_conn.autocommit = True
     except Exception as e:
         log.error(f"Failed to connect to databases: {e}")
         raise
@@ -453,16 +458,13 @@ def run_article_daemon():
                 with neo4j_driver.session() as session:
                     for entity in stale_entities:
                         try:
-                            process_entity(entity, pg_conn, session)
+                            process_entity(entity, session)
                             time.sleep(1)
                         except Exception as e:
                             log.error(f"  Failed processing '{entity.get('name')}': {e}")
         except Exception as e:
             log.error(f"Cycle error: {e}")
-            try:
-                pg_conn = psycopg2.connect(DATABASE_URL)
-                pg_conn.autocommit = True
-            except: pass
+            pass
             
         time.sleep(CYCLE_SLEEP)
 

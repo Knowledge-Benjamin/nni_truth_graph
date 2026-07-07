@@ -1,4 +1,4 @@
-﻿"""
+"""
 ai_engine/orchestrator/harvester.py
 ─────────────────────────────────────────────────────────────────────────────
 Harvester: After the pipeline processes URLs tagged with an investigation_id,
@@ -51,8 +51,81 @@ def run_harvester(
 ) -> dict:
     """
     Reads pipeline-completed claims for this investigation, scores novelty,
-    and inserts new leads. Returns a summary dict.
+    and inserts new leads. Also mines the existing Neo4j graph for neighbor
+    entities of already-explored leads, seeding them without waiting on pipeline.
+    Returns a summary dict.
     """
+
+    # ── Phase 0: Graph-based lead expansion (fast, no LLM needed) ───────────
+    # For every EXPLORED lead, pull its Neo4j neighbors and insert them as
+    # PENDING leads. This uses existing internal knowledge immediately.
+    graph_inserted = 0
+    if neo4j_driver:
+        try:
+            with pg_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT entity_name FROM investigation_leads
+                    WHERE investigation_id = %s AND status = 'EXPLORED'
+                    ORDER BY priority DESC LIMIT 30
+                    """,
+                    (investigation_id,)
+                )
+                explored_leads = [r["entity_name"] for r in cur.fetchall()]
+
+                cur.execute(
+                    "SELECT entity_name FROM investigation_leads WHERE investigation_id = %s",
+                    (investigation_id,)
+                )
+                known_entities = {r["entity_name"] for r in cur.fetchall()}
+
+            for entity_name in explored_leads:
+                try:
+                    with neo4j_driver.session() as session:
+                        result = session.run(
+                            """
+                            MATCH (e:Entity)
+                            WHERE toLower(e.name) = toLower($name)
+                               OR toLower(e.name) CONTAINS toLower($name)
+                            WITH e LIMIT 1
+                            MATCH (e)-[r]-(neighbor:Entity)
+                            WHERE neighbor.name IS NOT NULL
+                            WITH neighbor, type(r) AS rel_type,
+                                 coalesce(neighbor.mention_count, 0) AS pop
+                            ORDER BY pop DESC
+                            RETURN neighbor.name AS name, rel_type, pop
+                            LIMIT 50
+                            """,
+                            {"name": entity_name}
+                        )
+                        neighbors = list(result)
+
+                    with pg_conn.cursor() as cur:
+                        for rec in neighbors:
+                            neighbor_name = rec["name"]
+                            if not neighbor_name or neighbor_name in known_entities:
+                                continue
+                            pop = rec["pop"] or 0
+                            priority = min(92, 35 + min(57, int(pop / 5)))
+                            cur.execute(
+                                """
+                                INSERT INTO investigation_leads
+                                    (investigation_id, entity_name, lead_type, priority, status, context)
+                                VALUES (%s, %s, 'GENERAL', %s, 'PENDING', %s)
+                                ON CONFLICT (investigation_id, entity_name) DO NOTHING
+                                """,
+                                (investigation_id, neighbor_name, priority, f"Discovered in graph as a neighbor of {entity_name} with relationship: {rec['rel_type']}")
+                            )
+                            known_entities.add(neighbor_name)
+                            graph_inserted += 1
+                    pg_conn.commit()
+                except Exception as ne:
+                    print(f"[Harvester] Neo4j neighbor fetch for '{entity_name}' failed: {ne}")
+
+            if graph_inserted > 0:
+                print(f"[Harvester] Graph expansion: +{graph_inserted} leads from Neo4j neighbors.")
+        except Exception as ge:
+            print(f"[Harvester] Graph expansion failed (non-fatal): {ge}")
 
     # ── Pull completed claims for this investigation ─────────────────────────
     # Claims are linked via raw_urls.metadata->>'investigation_id'
@@ -150,11 +223,11 @@ def run_harvester(
             cur.execute(
                 """
                 INSERT INTO investigation_leads
-                    (investigation_id, entity_name, lead_type, priority, status)
-                VALUES (%s, %s, %s, %s, 'PENDING')
+                    (investigation_id, entity_name, lead_type, priority, status, context)
+                VALUES (%s, %s, %s, %s, 'PENDING', %s)
                 ON CONFLICT (investigation_id, entity_name) DO NOTHING
                 """,
-                (investigation_id, lead.entity_name, lead.lead_type, lead.priority)
+                (investigation_id, lead.entity_name, lead.lead_type, lead.priority, lead.relevance_reason)
             )
             inserted += 1
 

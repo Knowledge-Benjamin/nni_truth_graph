@@ -51,6 +51,8 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
         return True, "GOAL_ACHIEVED"
 
     # ── Condition 2: Exhaustion ──────────────────────────────────────────────
+    # Only fire if: 0 pending/claimed leads AND a meaningful number of leads
+    # were actually explored AND no pipeline work is still in-flight.
     with pg_conn.cursor() as cur:
         cur.execute(
             """
@@ -61,8 +63,39 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
         )
         pending_count = cur.fetchone()[0]
 
-    if pending_count == 0 and inv["leads_explored"] > 0:
+        # Check for in-flight pipeline work tagged to this investigation
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM raw_urls ru
+            WHERE (ru.metadata->>'investigation_id')::int = %s
+              AND ru.status IN ('PENDING_SCRAPE', 'SCRAPING')
+            """,
+            (investigation_id,)
+        )
+        in_flight_urls = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM raw_articles ra
+            JOIN raw_urls ru ON ra.url_id = ru.id
+            WHERE (ru.metadata->>'investigation_id')::int = %s
+              AND ra.status IN ('PENDING_CLASSIFICATION', 'PENDING_EXTRACTION', 'PROCESSING_EXTRACTION')
+            """,
+            (investigation_id,)
+        )
+        in_flight_articles = cur.fetchone()[0]
+
+    in_flight_total = in_flight_urls + in_flight_articles
+    MIN_LEADS_FOR_EXHAUSTION = 10  # Must explore at least 10 leads before exhaustion can fire
+
+    if (pending_count == 0
+            and inv["leads_explored"] >= MIN_LEADS_FOR_EXHAUSTION
+            and in_flight_total == 0):
         return True, "EXHAUSTION"
+
+    # If 0 pending but pipeline still working, just log and continue
+    if pending_count == 0 and in_flight_total > 0:
+        print(f"[Terminator] #{investigation_id}: 0 pending leads but {in_flight_total} items still in pipeline — holding.")
 
     # ── Condition 3: Diminishing Returns ────────────────────────────────────
     # We track this in findings as a list of recent harvest novel counts

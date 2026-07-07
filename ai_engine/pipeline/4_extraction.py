@@ -282,12 +282,10 @@ def extraction_worker(worker_id):
                 extraction_failed_permanently = False
                 retryable_failure = False
 
-                # Open save connection early so we can persist claims per-chunk
-                save_conn = psycopg2.connect(DATABASE_URL)
-                save_conn.autocommit = False
+                # We no longer hold save_conn open across the inference loop.
                 inserted_count = 0
                 duplicate_count = 0
-                with save_conn.cursor() as cursor:
+                if True:
                     for chunk_idx, chunk_text in enumerate(chunks):
                         if len(chunks) > 1:
                             print(f"      -> Processing chunk {chunk_idx+1}/{len(chunks)}...")
@@ -316,6 +314,9 @@ def extraction_worker(worker_id):
                                 parsed_json = load_extraction_json(raw_text)
                                 if "claims" in parsed_json:
                                     claim_list = ClaimExtractionList(claims=parsed_json["claims"])
+                                    save_conn = psycopg2.connect(DATABASE_URL)
+                                    save_conn.autocommit = False
+                                    cursor = save_conn.cursor()
                                     # Log parsed claims before any DB commit for debugging
                                     try:
                                         claims_serializable = [c.dict() if hasattr(c, 'dict') else c for c in claim_list.claims]
@@ -471,10 +472,16 @@ def extraction_worker(worker_id):
                                             except Exception:
                                                 pass
 
-                                    # Commit after successful chunk
-                                    save_conn.commit()
+                                        # Commit after successful chunk
+                                        save_conn.commit()
+                                        cursor.close()
+                                        save_conn.close()
                                 chunk_succeeded = True
                             except Exception as e:
+                                try:
+                                    save_conn.close()
+                                except:
+                                    pass
                                 print(f"      [LLM/JSON ERROR Chunk {chunk_idx+1} Attempt {chunk_attempt}] {type(e).__name__}: {str(e)[:200]}...")
                                 err_str = str(e).lower()
                                 is_rate_limit = '429' in err_str or 'rate limit' in err_str or 'cooling' in err_str or 'too many requests' in err_str
@@ -495,11 +502,8 @@ def extraction_worker(worker_id):
                         if retryable_failure or extraction_failed_permanently:
                             break
 
-                # Close save_conn
-                try:
-                    save_conn.close()
-                except Exception:
-                    pass
+                # (save_conn is now closed per-chunk)
+                pass
                 # Update article status based on outcome
                 try:
                     upd_conn = psycopg2.connect(DATABASE_URL)

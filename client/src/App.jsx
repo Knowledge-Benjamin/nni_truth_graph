@@ -17,6 +17,7 @@ import DeveloperDashboard from './pages/DeveloperDashboard';
 import ApiDocs from './pages/ApiDocs';
 import MediaPortal from './pages/MediaPortal';
 import Investigations from './pages/Investigations';
+import CalibrationPage from './pages/CalibrationPage';
 
 function App() {
     const formatSocialCount = (count) => {
@@ -40,6 +41,7 @@ function App() {
     else if (location.pathname.startsWith('/developer')) activeTab = 'developer';
     else if (location.pathname.startsWith('/docs')) activeTab = 'docs';
     else if (location.pathname.startsWith('/verify')) activeTab = 'verify';
+    else if (location.pathname.startsWith('/calibration')) activeTab = 'calibration';
 
     const [stats, setStats] = useState(null);
     const [user, setUser] = useState(null);
@@ -71,6 +73,7 @@ function App() {
         { id: 'explore',       icon: <Search size={16} />,     label: 'Graph Explorer',   path: '/',               show: true },
         { id: 'verify',        icon: <Camera size={16} />,     label: 'Media Portal',     path: '/verify',         show: true },
         { id: 'docs',          icon: <BookOpen size={16} />,   label: 'API Docs',         path: '/docs',           show: true },
+        { id: 'calibration',   icon: <Settings size={16} />,   label: 'Calibration',      path: '/calibration',    show: true },
         { id: 'contradictions',icon: <GitMerge size={16} />,   label: 'Controversies',    path: '/contradictions', show: user?.role === 'admin', badge: stats?.graph?.open_controversies },
         { id: 'review',        icon: <ShieldAlert size={16} />,label: 'Human Review',     path: '/review',         show: user?.role === 'admin', badge: stats?.pipeline?.human_review_pending, danger: stats?.pipeline?.human_review_pending > 0 },
         { id: 'investigations',icon: <Search size={16} />,     label: 'Investigations',   path: '/investigations', show: user?.role === 'admin' },
@@ -279,6 +282,7 @@ function App() {
                     <Route path="/developer" element={<ProtectedRoute><DeveloperDashboard /></ProtectedRoute>} />
                     <Route path="/docs" element={<ApiDocs />} />
                     <Route path="/verify" element={<MediaPortal />} />
+                    <Route path="/calibration" element={<CalibrationPage />} />
                 </Routes>
             </main>
         </div>

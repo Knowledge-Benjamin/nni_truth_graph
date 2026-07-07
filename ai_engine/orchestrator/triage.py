@@ -1,4 +1,4 @@
-﻿"""
+"""
 ai_engine/orchestrator/triage.py
 ─────────────────────────────────────────────────────────────────────────────
 Intake & Triage -- Classifies a raw investigation target into:
@@ -63,7 +63,7 @@ class TriageResult(BaseModel):
         default_factory=list,
         description=(
             "If the target decomposes into multiple known entities, list them here. "
-            "Each entry: {entity_name: str, lead_type: str, priority: int (0-100)}."
+            "Each entry: {entity_name: str, lead_type: str, priority: int (0-100), context: str (rationale for relevance)}."
         )
     )
     rationale: str = Field(description="1-2 sentences explaining the triage decisions made.")
@@ -125,17 +125,28 @@ def triage_target(target: str, neo4j_driver=None) -> "TriageResult":
     pre_type = _pre_classify_target_type(target)
 
     graph_context = ""
+    graph_seed_leads: list[dict] = []
     if neo4j_driver and not pre_type:
         try:
             with neo4j_driver.session() as session:
+                # Fix: was toLower() missing $name — now correctly passes parameter
                 result = session.run(
                     """
                     MATCH (e:Entity)
-                    WHERE toLower(e.name) = toLower()
+                    WHERE toLower(e.name) = toLower($name)
+                       OR toLower(e.name) CONTAINS toLower($name)
+                    WITH e LIMIT 1
                     OPTIONAL MATCH (e)-[r]-(related:Entity)
+                    WHERE related.name IS NOT NULL
+                    WITH e, related, type(r) AS rel_type,
+                         coalesce(related.mention_count, 0) AS popularity
+                    ORDER BY popularity DESC
                     RETURN e.name AS name, e.mention_count AS mentions,
-                           collect(DISTINCT {rel: type(r), other: related.name})[..10] AS relations
-                    LIMIT 1
+                           collect(DISTINCT {
+                               rel: rel_type,
+                               other: related.name,
+                               pop: coalesce(related.mention_count, 0)
+                           })[..150] AS relations
                     """,
                     {"name": target}
                 )
@@ -144,12 +155,39 @@ def triage_target(target: str, neo4j_driver=None) -> "TriageResult":
                     name     = record["name"]
                     mentions = record["mentions"] or 0
                     rels     = record["relations"] or []
+
+                    # Build graph context hint for the LLM
                     graph_context = (
-                        f"\n\nIMPORTANT -- this target already exists in our knowledge graph:\n"
-                        f"  Entity: {name} ({mentions} mentions)\n"
-                        f"  Known relations: {json.dumps(rels[:8], indent=2)}\n"
-                        f"Focus your seed queries on what is NOT yet known."
+                        f"\n\nIMPORTANT — target already in knowledge graph: "
+                        f"{name} ({mentions} mentions). "
+                        f"Known relations sample: "
+                        + ", ".join(f"{r['rel']}→{r['other']}" for r in rels[:10] if r.get('other'))
+                        + "\nFocus queries on what is NOT yet in the graph."
                     )
+
+                    # Seed ALL graph neighbors directly as leads — no LLM gatekeeping
+                    for rel in rels:
+                        other = rel.get("other")
+                        if not other or not other.strip():
+                            continue
+                        pop = rel.get("pop", 0) or 0
+                        # Priority: higher mention count → higher priority (cap 95)
+                        priority = min(95, 40 + min(55, int(pop / 5)))
+                        lead_type = "PERSON" if any(
+                            kw in (rel.get("rel") or "").upper()
+                            for kw in ("BORN", "FOUNDED_BY", "CEO", "DIRECTOR", "APPOINTED", "HIRED")
+                        ) else "ORGANISATION" if any(
+                            kw in (rel.get("rel") or "").upper()
+                            for kw in ("OWNS", "CONTROLS", "FUNDS", "PARTNER", "SUBSIDIARY", "IS_PART_OF")
+                        ) else "GENERAL"
+                        graph_seed_leads.append({
+                            "entity_name": other.strip(),
+                            "lead_type":   lead_type,
+                            "priority":    priority,
+                            "context":     f"Discovered in knowledge graph as a direct neighbor of {name} with relationship: {rel.get('rel')}",
+                        })
+
+                    print(f"[Triage] Graph seed: found {len(graph_seed_leads)} neighbors for '{name}'")
         except Exception as e:
             print(f"[Triage] Neo4j context lookup failed (non-fatal): {e}")
 
@@ -182,10 +220,16 @@ def triage_target(target: str, neo4j_driver=None) -> "TriageResult":
         response_model=TriageResult,
         temperature=0.2,
     )
+    # Attach graph neighbors so persist_triage can insert them
+    result._graph_seed_leads = graph_seed_leads  # type: ignore[attr-defined]
     return result
 
 
 def persist_triage(investigation_id: int, triage: "TriageResult", pg_conn) -> None:
+    # Merge LLM seed_leads + graph-sourced leads
+    graph_leads: list[dict] = getattr(triage, '_graph_seed_leads', [])
+    all_leads = list(triage.seed_leads) + graph_leads
+
     with pg_conn.cursor() as cur:
         cur.execute(
             """
@@ -206,12 +250,13 @@ def persist_triage(investigation_id: int, triage: "TriageResult", pg_conn) -> No
                 investigation_id,
             )
         )
-        for lead in triage.seed_leads:
+        inserted_leads = 0
+        for lead in all_leads:
             cur.execute(
                 """
                 INSERT INTO investigation_leads
-                    (investigation_id, entity_name, lead_type, priority, status)
-                VALUES (%s, %s, %s, %s, 'PENDING')
+                    (investigation_id, entity_name, lead_type, priority, status, context)
+                VALUES (%s, %s, %s, %s, 'PENDING', %s)
                 ON CONFLICT (investigation_id, entity_name) DO NOTHING
                 """,
                 (
@@ -219,11 +264,15 @@ def persist_triage(investigation_id: int, triage: "TriageResult", pg_conn) -> No
                     lead.get("entity_name", ""),
                     lead.get("lead_type", "GENERAL"),
                     lead.get("priority", 50),
+                    lead.get("context", "Seed lead identified during triage."),
                 )
             )
+            inserted_leads += 1
     pg_conn.commit()
     print(
         f"[Triage] Investigation #{investigation_id}: "
         f"goal={triage.goal_type}, target_type={triage.target_type}, "
-        f"queries={len(triage.initial_queries)}, seed_leads={len(triage.seed_leads)}"
+        f"queries={len(triage.initial_queries)}, "
+        f"llm_leads={len(triage.seed_leads)}, graph_leads={len(graph_leads)}, "
+        f"total_leads_inserted={inserted_leads}"
     )

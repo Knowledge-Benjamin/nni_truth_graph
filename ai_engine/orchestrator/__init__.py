@@ -222,15 +222,11 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
 
             # ── Step 2b: Incrementally update the living investigation report ─────
             try:
-                report_conn = psycopg2.connect(DATABASE_URL)
-                report_conn.autocommit = False
                 run_report_tick(
                     investigation_id     = inv_id,
                     investigation_target = target,
-                    pg_conn              = report_conn,
                     inv_meta             = dict(inv),
                 )
-                report_conn.close()
             except Exception as e:
                 print(f"[Orchestrator] Report writer failed for #{inv_id} (non-fatal): {e}")
 
@@ -251,31 +247,32 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
 
             threads = []
             _goal_type = inv["goal_type"] or "PROFILING"
+            
+            # Extract investigation context from the report/findings
+            report_obj = findings.get("report") or {}
+            executive_summary = report_obj.get("ch1_sitrep", {}).get("content", findings.get("last_harvest_summary", ""))
+            knowledge_gaps = report_obj.get("ch_gaps", {}).get("content", "")
+
             for _ in range(max_agents):
-                # Each thread gets its own independent DB connection to avoid
-                # cursor conflicts between concurrent FOR UPDATE SKIP LOCKED calls.
-                # IMPORTANT: pass loop variables as default args to freeze their
-                # values — Python closures capture by reference, not by value.
+                # IMPORTANT: pass loop variables as default args to freeze their values
                 def agent_thread(
                     _inv_id=inv_id,
                     _target=target,
                     _goal_type=_goal_type,
-                    _src_id=searxng_source_id
+                    _src_id=searxng_source_id,
+                    _exec_summary=executive_summary,
+                    _gaps=knowledge_gaps
                 ):
                     try:
-                        agent_conn = psycopg2.connect(DATABASE_URL)
-                        agent_conn.autocommit = False
-                        try:
-                            run_lead_agent(
-                                investigation_id     = _inv_id,
-                                investigation_target = _target,
-                                goal_type            = _goal_type,
-                                searxng_url          = SEARXNG_URL,
-                                pg_conn              = agent_conn,
-                                searxng_source_id    = _src_id,
-                            )
-                        finally:
-                            agent_conn.close()
+                        run_lead_agent(
+                            investigation_id     = _inv_id,
+                            investigation_target = _target,
+                            goal_type            = _goal_type,
+                            searxng_url          = SEARXNG_URL,
+                            searxng_source_id    = _src_id,
+                            executive_summary    = _exec_summary,
+                            knowledge_gaps       = _gaps
+                        )
                     except Exception as e:
                         print(f"[Orchestrator] Agent thread error: {e}")
 

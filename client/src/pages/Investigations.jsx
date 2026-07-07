@@ -1,13 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
     Activity, Play, Pause, Trash2, Search, Crosshair, Target, Clock, AlertTriangle, 
-    ChevronRight, CheckCircle2, ChevronDown, List, FolderSearch, Plus, X 
+    ChevronRight, CheckCircle2, ChevronDown, List, FolderSearch, Plus, X, BookOpen, Network
 } from 'lucide-react';
 import { api } from '../api';
+import ArticleRenderer from '../components/ArticleRenderer';
+import CytoscapeComponent from 'react-cytoscapejs';
+import cytoscape from 'cytoscape';
+import fcose from 'cytoscape-fcose';
 
-function Investigations() {
-    const [investigations, setInvestigations] = useState([]);
-    const [loading, setLoading] = useState(true);
+cytoscape.use(fcose);
+
+export const CY_STYLE = [
+    { selector: 'node[type="Entity"]', style: { width: 60, height: 60, shape: 'ellipse', 'background-color': '#3b82f6', 'border-width': 2, 'border-color': '#93c5fd', label: 'data(label)', color: '#ffffff', 'font-size': 12, 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 50 } },
+    { selector: 'node[type="Claim"]', style: { width: 100, height: 30, shape: 'round-rectangle', 'background-color': '#10b981', label: 'data(label)', color: '#ffffff', 'font-size': 10, 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 90 } },
+    { selector: 'node[type="Evidence"]', style: { width: 20, height: 20, shape: 'diamond', 'background-color': '#a78bfa' } },
+    { selector: 'edge', style: { width: 1.5, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier' } },
+    { selector: 'node:selected', style: { 'border-width': 4, 'border-color': '#ffffff' } }
+];
     const [error, setError] = useState(null);
     const [showNewModal, setShowNewModal] = useState(false);
     
@@ -16,6 +26,12 @@ function Investigations() {
     const [selectedInvestigationLoading, setSelectedInvestigationLoading] = useState(false);
     const [leads, setLeads] = useState([]);
     const [leadsLoading, setLeadsLoading] = useState(false);
+
+    // Tabs
+    const [activeTab, setActiveTab] = useState('overview'); // overview | report | graph
+    const [graphElements, setGraphElements] = useState([]);
+    const [graphLoading, setGraphLoading] = useState(false);
+    const cyRef = useRef(null);
 
     // New investigation form state
     const [target, setTarget] = useState('');
@@ -62,11 +78,30 @@ function Investigations() {
         if (selectedInvId) {
             fetchLeads(selectedInvId);
             fetchInvestigation(selectedInvId);
+            setActiveTab('overview');
         } else {
             setLeads([]);
             setSelectedInvestigation(null);
         }
     }, [selectedInvId]);
+
+    useEffect(() => {
+        if (activeTab === 'graph' && selectedInvestigation?.target) {
+            fetchGraph(selectedInvestigation.target);
+        }
+    }, [activeTab, selectedInvestigation?.target]);
+
+    const fetchGraph = async (targetEntity) => {
+        setGraphLoading(true);
+        try {
+            const res = await api.search(targetEntity, 'entity');
+            setGraphElements(res.elements || []);
+        } catch (err) {
+            console.error('Graph fetch error', err);
+        } finally {
+            setGraphLoading(false);
+        }
+    };
 
     const fetchLeads = async (id) => {
         setLeadsLoading(true);
@@ -348,7 +383,32 @@ function Investigations() {
                                 {selectedInvestigation?.status === 'COMPLETED' && renderCompletedReport()}
                             </div>
                         </div>
-                        <div style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: '12px', padding: '16px', minHeight: 0 }}>
+                        {/* TAB BAR */}
+                        <div style={{ display: 'flex', borderBottom: '1px solid #1e293b', background: '#0f172a', padding: '0 16px' }}>
+                            <button
+                                onClick={() => setActiveTab('overview')}
+                                style={{ padding: '12px 16px', background: 'transparent', border: 'none', color: activeTab === 'overview' ? '#3b82f6' : '#94a3b8', borderBottom: activeTab === 'overview' ? '2px solid #3b82f6' : '2px solid transparent', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                <List size={16} /> Overview & Leads
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('report')}
+                                style={{ padding: '12px 16px', background: 'transparent', border: 'none', color: activeTab === 'report' ? '#3b82f6' : '#94a3b8', borderBottom: activeTab === 'report' ? '2px solid #3b82f6' : '2px solid transparent', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                <BookOpen size={16} /> Live Report
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('graph')}
+                                style={{ padding: '12px 16px', background: 'transparent', border: 'none', color: activeTab === 'graph' ? '#3b82f6' : '#94a3b8', borderBottom: activeTab === 'graph' ? '2px solid #3b82f6' : '2px solid transparent', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                <Network size={16} /> Network Graph
+                            </button>
+                        </div>
+                        
+                        {/* TAB CONTENT */}
+                        <div style={{ background: '#111827', padding: '16px', minHeight: 0, flex: 1, overflowY: 'auto' }}>
+                            {activeTab === 'overview' && (
+                                <>
                             {leadsLoading ? (
                                 <div style={{ color: '#94a3b8' }}>Loading leads...</div>
                             ) : leads.length === 0 ? (
@@ -385,6 +445,41 @@ function Investigations() {
                                             ))}
                                         </tbody>
                                     </table>
+                                </div>
+                            )}
+                                </>
+                            )}
+                            {activeTab === 'report' && (
+                                <div style={{ background: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+                                    {selectedInvestigation?.report ? (
+                                        <ArticleRenderer 
+                                            articleObj={{ 
+                                                article: selectedInvestigation.report, 
+                                                references: selectedInvestigation.report._references || [] 
+                                            }} 
+                                        />
+                                    ) : (
+                                        <div style={{ color: '#64748b', textAlign: 'center', padding: '40px' }}>
+                                            Report is still generating or no claims have been committed yet.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {activeTab === 'graph' && (
+                                <div style={{ height: '100%', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', position: 'relative' }}>
+                                    {graphLoading ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94a3b8' }}>Loading Graph...</div>
+                                    ) : graphElements.length === 0 ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>No graph data found for {selectedInvestigation?.target}</div>
+                                    ) : (
+                                        <CytoscapeComponent
+                                            elements={CytoscapeComponent.normalizeElements(graphElements)}
+                                            style={{ width: '100%', height: '100%' }}
+                                            stylesheet={CY_STYLE}
+                                            layout={{ name: 'fcose', animate: false, nodeRepulsion: 4500 }}
+                                            cy={(cy) => { cyRef.current = cy; }}
+                                        />
+                                    )}
                                 </div>
                             )}
                         </div>

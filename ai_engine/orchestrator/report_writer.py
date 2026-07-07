@@ -150,7 +150,8 @@ def _claim_line(c: dict) -> str:
     if c.get('spatial_anchor'):  line += f" (where: {c['spatial_anchor']})"
     if c.get('quote_context'):   line += f'\n   > "{str(c["quote_context"])[:200]}"'
     src = c.get('original_source') or c.get('source_name') or 'Unknown'
-    line += f"\n   Source: {src} | Score: {round(float(c.get('epistemic_score') or 0.5), 2)}"
+    url = c.get('original_url') or c.get('source_url') or 'N/A'
+    line += f"\n   Source: {src} | URL: {url} | Score: {round(float(c.get('epistemic_score') or 0.5), 2)}"
     return line
 
 
@@ -178,8 +179,9 @@ def _generate_chapter(
         "STRICT RULES:",
         "1. Write in formal investigative report prose. Authoritative, precise, third-person.",
         "2. Every factual statement MUST end with [REF:<id>] citing the fact ID from the evidence below.",
-        "3. Use markdown: ## for section headers, **bold** for key names, *italic* for contested facts.",
-        "4. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
+        "3. You MUST include a '## References' section at the very end of the chapter mapping every [REF:<id>] used to its Source Name and URL.",
+        "4. Use markdown: ## for section headers, **bold** for key names.",
+        "5. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
         "5. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
         "6. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
     ]
@@ -459,7 +461,6 @@ def _export_markdown(investigation_id: int, target: str, report: dict, status: s
 def run_report_tick(
     investigation_id: int,
     investigation_target: str,
-    pg_conn,
     inv_meta: dict = {},
 ) -> None:
     """
@@ -468,17 +469,24 @@ def run_report_tick(
     Only regenerates chapters where new claims have arrived (hash diff).
     """
     print(f"  [ReportWriter] Tick for investigation #{investigation_id}: '{investigation_target[:60]}'")
-
-    # Load data
-    claims  = _fetch_investigation_claims(pg_conn, investigation_id)
-    leads   = _fetch_investigation_leads(pg_conn, investigation_id)
-    sources = _fetch_investigation_sources(pg_conn, investigation_id)
+    
+    import psycopg2
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    
+    # Open connection to load data
+    load_conn = psycopg2.connect(DATABASE_URL)
+    try:
+        claims  = _fetch_investigation_claims(load_conn, investigation_id)
+        leads   = _fetch_investigation_leads(load_conn, investigation_id)
+        sources = _fetch_investigation_sources(load_conn, investigation_id)
+        existing_report, existing_hashes = _load_existing_report(load_conn, investigation_id)
+    finally:
+        load_conn.close()
 
     if not claims:
         print(f"  [ReportWriter] No claims yet for #{investigation_id} — skipping.")
         return
 
-    existing_report, existing_hashes = _load_existing_report(pg_conn, investigation_id)
     updated_report = dict(existing_report)
     updated_hashes = dict(existing_hashes)
     all_refs: list = list(existing_report.get('_references', []))
@@ -599,6 +607,14 @@ def run_report_tick(
     updated_report['_references'] = sorted(all_refs,
                                             key=lambda x: x.get('corroboration_count', 0),
                                             reverse=True)
-    _save_report(pg_conn, investigation_id, updated_report, updated_hashes)
+                                            
+    save_conn = psycopg2.connect(DATABASE_URL)
+    save_conn.autocommit = False
+    try:
+        _save_report(save_conn, investigation_id, updated_report, updated_hashes)
+        save_conn.commit()
+    finally:
+        save_conn.close()
+
     print(f"  [ReportWriter] Saved report update for #{investigation_id} "
           f"({len(updated_report)-1} chapters, {len(claims)} claims).")

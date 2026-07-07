@@ -442,8 +442,38 @@ def _has_active_investigations() -> bool:
         return False
 
 
+def _ensure_schema() -> None:
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        print("[Startup] Running auto-migrations...")
+        
+        # Ensure investigation_leads has context column
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 
+                    FROM information_schema.columns 
+                    WHERE table_name='investigation_leads' AND column_name='context'
+                ) THEN
+                    ALTER TABLE investigation_leads ADD COLUMN context TEXT;
+                    RAISE NOTICE 'Added context column to investigation_leads';
+                END IF;
+            END
+            $$;
+        """)
+        
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[Startup] Failed to run schema auto-migrations: {e}")
+
 def main():
     print("=== AI Engine Pipeline Orchestrator (Smart Adaptive Dispatcher) ===")
+    
+    _ensure_schema()
 
     def signal_handler(sig, frame):
         print("\n[Orchestrator] Stopping. Note: kill Celery workers separately if needed.")
