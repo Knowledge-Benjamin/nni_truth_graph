@@ -18,6 +18,10 @@ export const CY_STYLE = [
     { selector: 'edge', style: { width: 1.5, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier' } },
     { selector: 'node:selected', style: { 'border-width': 4, 'border-color': '#ffffff' } }
 ];
+
+function Investigations() {
+    const [investigations, setInvestigations] = useState([]);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showNewModal, setShowNewModal] = useState(false);
     
