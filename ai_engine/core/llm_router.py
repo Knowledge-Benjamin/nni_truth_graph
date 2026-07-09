@@ -280,6 +280,24 @@ class _GenAIRawShim:
 
 import json as _json
 import requests as _requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import httpx
+
+def _make_resilient_session() -> _requests.Session:
+    """Build a requests Session that auto-retries on connection/SSL errors."""
+    session = _requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 class _OllamaCompletionsShim:
     """
@@ -290,6 +308,7 @@ class _OllamaCompletionsShim:
 
     def __init__(self, base_url: str):
         self._base_url = base_url.rstrip("/")
+        self._session = _make_resilient_session()
         # Detect native Ollama vs vLLM/OpenAI-compat endpoint.
         # Native Ollama endpoints are identified by the OLLAMA_NATIVE env var or
         # by the legacy HF Space host. Everything else (ngrok, Cloud Run, etc.)
@@ -323,7 +342,7 @@ class _OllamaCompletionsShim:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                resp = _requests.post(url, json=payload, stream=True, timeout=600)
+                resp = self._session.post(url, json=payload, stream=True, timeout=600, verify=False)
                 resp.raise_for_status()
                 break
             except _requests.exceptions.HTTPError as e:
@@ -383,10 +402,11 @@ class _OllamaCompletionsShim:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                resp = _requests.post(
+                resp = self._session.post(
                     url, json=payload, headers=headers,
                     stream=True,
-                    timeout=(15, 300),  # (connect_timeout, read_timeout per chunk)
+                    timeout=(15, 300),  # (connect_timeout, read_token-chunk timeout)
+                    verify=False,       # bypass ngrok/tunnel SSL cert issues
                 )
                 resp.raise_for_status()
 
@@ -453,11 +473,15 @@ class RoutedClient:
             # Instructor wraps the raw client via a compatibility path;
             # for JSON structured outputs we wrap a dummy OpenAI client pointed
             # at the same Ollama server which exposes /v1/chat/completions too.
+            # Also pass a custom httpx client with SSL verification disabled so that
+            # the OpenAI SDK (which uses httpx internally) doesn't choke on the ngrok
+            # tunnel's SSL chain when used via instructor for structured outputs.
             openai_compat = OpenAI(
                 base_url=f"{p_config['base_url']}/v1",
                 api_key="ollama",  # Ollama accepts any non-empty key string
                 timeout=300.0,
-                max_retries=0
+                max_retries=0,
+                http_client=httpx.Client(verify=False),
             )
             self.client = instructor.from_openai(openai_compat, mode=instructor.Mode.JSON)  # type: ignore[assignment]
         elif provider_name == "GOOGLE_AI_STUDIO":
