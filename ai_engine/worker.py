@@ -50,33 +50,37 @@ PRESSURE_QUERIES = {
         SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'
     """,
     "2_scrape.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
+        SELECT COUNT(*), SUM(CASE WHEN (metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
     """,
     "2a_video_scrape.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND domain IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
+        SELECT COUNT(*), SUM(CASE WHEN (metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND domain IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
     """,
     "3_classification.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles ra JOIN raw_urls ru ON ra.url_id = ru.id WHERE ra.status = 'PENDING_CLASSIFICATION'
     """,
     "4_extraction.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles WHERE status = 'PENDING_EXTRACTION'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles ra JOIN raw_urls ru ON ra.url_id = ru.id WHERE ra.status = 'PENDING_EXTRACTION'
     """,
     "5_resolution.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
-        WHERE pipeline_stage = 'STAGE_4_RESOLUTION' AND status = 'PROCESSING'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
+        JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
+        WHERE ec.pipeline_stage = 'STAGE_4_RESOLUTION' AND ec.status = 'PROCESSING'
     """,
     "6_deduplication.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
-        WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
+        JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
+        WHERE ec.pipeline_stage = 'STAGE_6_DEDUP' AND ec.status = 'PROCESSING'
     """,
     "7_cross_reference.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
-        WHERE pipeline_stage = 'STAGE_7_CROSS_REF' AND status = 'PROCESSING'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
+        JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
+        WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF' AND ec.status = 'PROCESSING'
     """,
     "8_graph_mutation.py": """
-        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
-        WHERE pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-          AND status IN ('AUTO_APPROVE', 'PROCESSING')
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
+        JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
+        WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+          AND ec.status IN ('AUTO_APPROVE', 'PROCESSING')
     """,
 }
 
@@ -343,17 +347,16 @@ class StageScheduler:
             self._actions[script] = f"{depth:4d}  {pressure_bar(depth):16s}  {action}"
             update_stuck(script, depth, True)
 
-        # ── Stage 1 — Ingest (dispatch when scrape backlog exists or there are active investigations) ─
-        s2_pres = pressures.get("2_scrape.py", (0, 0))[1 if strict_lock else 0]
-        if s2_pres <= OVERFLOW_THRESHOLD or strict_lock:
-            to_dispatch.append("1_ingest.py")
-            if strict_lock and s2_pres > OVERFLOW_THRESHOLD:
-                note = " (override for active inv)"
-            else:
-                note = ""
-            self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]{note} "
+        # ── Stage 1 — Ingest ─
+        if strict_lock:
+            self._actions["1_ingest.py"] = f"  --  {'':16s}  [LOCKED]"
         else:
-            self._actions["1_ingest.py"] = f"  --  {'':16s}  [IDLE]"
+            s2_pres = pressures.get("2_scrape.py", (0, 0))[0]
+            if s2_pres <= OVERFLOW_THRESHOLD and refire_ok("1_ingest.py"):
+                do_dispatch("1_ingest.py")
+                self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]"
+            else:
+                self._actions["1_ingest.py"] = f"  --  {'':16s}  [IDLE]"
 
         # ── Stage 9 — Evolution (dispatch only when there is pending evolution work) ─
         if pressures.get("9_truth_evolution.py", (0, 0))[0] > 0 and not strict_lock:

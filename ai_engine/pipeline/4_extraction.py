@@ -437,9 +437,9 @@ def extraction_worker(worker_id):
                                             article_id, subject, predicate, object_entity,
                                             temporal_anchor, spatial_anchor, is_verifiable, quote_context,
                                             extraction_confidence, epistemic_score, status, pipeline_stage,
-                                            model_version, prompt_version, ai_metadata
+                                            model_version, prompt_version, ai_metadata, investigation_id
                                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PROCESSING',
-                                                  'STAGE_4_RESOLUTION', %s, %s, %s)
+                                                  'STAGE_4_RESOLUTION', %s, %s, %s, %s)
                                         ON CONFLICT (article_id, subject, predicate, object_entity) DO NOTHING
                                         RETURNING id
                                     """, (
@@ -447,7 +447,8 @@ def extraction_worker(worker_id):
                                         str(claim.temporal_anchor or "")[:255],
                                         str(claim.spatial_anchor or "")[:255], bool(claim.is_verifiable), str(claim.quote_context or ""),
                                         float(claim.extraction_confidence or 0.5), preliminary_score,
-                                        'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata
+                                        'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata,
+                                        meta_dict.get("investigation_id")
                                     ))
                                     ins_row = cursor.fetchone()
                                     if ins_row:
