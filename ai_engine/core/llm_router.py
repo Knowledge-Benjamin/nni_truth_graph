@@ -24,6 +24,8 @@ import instructor
 from dotenv import load_dotenv
 from google.auth import default as google_default
 from google.auth.transport.requests import AuthorizedSession
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Ensure the ai_engine .env is loaded at import time for any script that imports this module first.
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
