@@ -981,8 +981,13 @@ class MultiProviderRouter:
                 err_type = str(type(e)).lower()
                 reason = f"error: {type(e).__name__} {str(e)[:200]}"
 
-                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and any(x in err_str for x in ["timeout", "timed out", "connection", "temporarily unavailable", "retry", "failed_attempts", "validation", "json", "parse"]):
-                    print(f"[LLM Router] Local provider fallback issue from {client_wrapper.provider}; returning safe fallback instead of disabling provider: {e}")
+                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and any(x in err_str for x in ["timeout", "timed out", "connection", "temporarily unavailable", "retry", "failed_attempts", "ssl", "eof"]):
+                    print(f"[LLM Router] Local provider connection issue from {client_wrapper.provider}; cooling down and falling back to cloud providers: {str(e)[:120]}")
+                    client_wrapper.cooldown_until = time.time() + 30
+                    exceptions.append(e)
+                    continue
+                elif any(x in err_str for x in ["validation", "json", "parse"]):
+                    print(f"[LLM Router] Local provider JSON/parse issue from {client_wrapper.provider}; returning safe fallback: {str(e)[:120]}")
                     client_wrapper.cooldown_until = time.time() + 5
                     if "response_model" in kwargs and kwargs.get("response_model") is not None:
                         try:

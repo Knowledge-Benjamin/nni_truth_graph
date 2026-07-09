@@ -329,6 +329,11 @@ def extraction_worker(worker_id):
                                     )
                                     raw_text = groq_pool.extract_text_from_response(response_obj)
                                     if raw_text is None:
+                                        if isinstance(response_obj, dict):
+                                            # All providers exhausted / returned safe empty fallback — skip chunk, don't waste retries
+                                            print(f"      [SKIP] Chunk {chunk_idx+1}: all LLM providers unavailable, skipping chunk.")
+                                            chunk_succeeded = True  # treat as graceful skip so we move on
+                                            break
                                         raise ValueError(f"Unable to extract text from provider response: {type(response_obj)}")
 
                                     parsed_json = load_extraction_json(raw_text)
