@@ -240,176 +240,182 @@ def scraper_worker(worker_id):
             video_whitelist = ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
             
             # We need actual transactions for locking
-            while items_processed < 50:
-                try:
-                    with conn.cursor() as cursor:
-                        # Fetch exactly 1 URL, locking it — includes retryable FAILEDs
-                        cursor.execute("""
-                            SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
-                            FROM raw_urls
-                            WHERE status IN ('PENDING_SCRAPE')
-                            ORDER BY CASE WHEN metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, id ASC
-                            LIMIT 1
-                            FOR UPDATE SKIP LOCKED;
-                        """)
+            for __phase, (__limit, __filter_clause) in enumerate([
+                (100, "AND metadata->>'investigation_id' IS NOT NULL"),
+                (50, "AND metadata->>'investigation_id' IS NULL")
+            ]):
+                items_processed = 0
+                while items_processed < __limit:
+                    try:
+                        with conn.cursor() as cursor:
+                            # Fetch exactly 1 URL, locking it — includes retryable FAILEDs
+                            cursor.execute(f"""
+                                SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
+                                FROM raw_urls
+                                WHERE status IN ('PENDING_SCRAPE')
+                                {__filter_clause}
+                                        ORDER BY id ASC
+                                LIMIT 1
+                                FOR UPDATE SKIP LOCKED;
+                            """)
                         
-                        row = cursor.fetchone()
-                        if not row:
-                            conn.rollback()
-                            break # Queue is empty, exit thread naturally
-                            
-                        url_id, url, initial_metadata, retry_count = row
-
-                        # Skip video-platform URLs — Stage 2A handles these via yt-dlp
-                        url_domain = urlparse(url).netloc.lstrip("www.")
-                        if any(url_domain == v or url_domain.endswith("." + v) for v in video_whitelist):
-                            cursor.execute("UPDATE raw_urls SET status = 'PENDING_VIDEO' WHERE id = %s", (url_id,))
-                            conn.commit()
-                            print(f"  [W-{worker_id}] Video URL routed to Stage 2A: {url}")
-                            continue
-
-                        print(f"  [W-{worker_id}] Processing (attempt {retry_count+1}): {url}")
-                        
-                        # 2. Scrape it using the Playwright page
-                        result = fetch_and_extract(url, page)
-                        raw_text, scraped_meta = result[0], result[1]
-                        discovered_links = result[2] if len(result) > 2 else []
-                        raw_html = result[3] if len(result) > 3 else None
-                        
-                        if raw_text and len(raw_text.strip()) > 100:
-                            # 3. Successful scrape
-                            s_meta = scraped_meta if isinstance(scraped_meta, dict) else (vars(scraped_meta) if hasattr(scraped_meta, '__dict__') else {})
-                            title = s_meta.get('title') or (initial_metadata or {}).get('title') or 'Unknown Title'
-                            author = s_meta.get('author') or (initial_metadata or {}).get('author') or 'Unknown Author'
-                            
-                            pub_date = None
-                            if s_meta.get('date'):
-                                try:
-                                    pub_date = datetime.strptime(s_meta['date'], '%Y-%m-%d')
-                                except ValueError:
-                                    pass
-                                    
-                            # ── Forensic Auditability ─────────────────────────────
-                            # Hash the raw HTML bytes (byte-identical page content);
-                            # fall back to extracted text if HTML was not captured.
-                            hashable_content = raw_html or raw_text or ""
-                            sha256 = _compute_sha256(hashable_content)
-                            snapshot_path = _save_snapshot(url, hashable_content, sha256)
-
-                            cursor.execute("""
-                                INSERT INTO raw_articles
-                                    (url_id, title, author, publish_date, raw_text,
-                                     status, content_sha256, snapshot_path)
-                                VALUES (%s, %s, %s, %s, %s, 'PENDING_CLASSIFICATION', %s, %s)
-                                RETURNING id;
-                            """, (url_id, title, author, pub_date, raw_text, sha256, snapshot_path))
-
-                            row_art = cursor.fetchone()
-                            article_id = row_art[0] if row_art else None
-                            if article_id is None:
+                            row = cursor.fetchone()
+                            if not row:
                                 conn.rollback()
+                                break # Queue is empty, exit thread naturally
+                            
+                            url_id, url, initial_metadata, retry_count = row
+
+                            # Skip video-platform URLs — Stage 2A handles these via yt-dlp
+                            url_domain = urlparse(url).netloc.lstrip("www.")
+                            if any(url_domain == v or url_domain.endswith("." + v) for v in video_whitelist):
+                                cursor.execute("UPDATE raw_urls SET status = 'PENDING_VIDEO' WHERE id = %s", (url_id,))
+                                conn.commit()
+                                print(f"  [W-{worker_id}] Video URL routed to Stage 2A: {url}")
                                 continue
 
-                            # Asynchronously ping archive.org — never blocks the scraper
-                            t = threading.Thread(
-                                target=_ping_archive_org,
-                                args=(url, url_id, DATABASE_URL),
-                                daemon=True
-                            )
-                            t.start()
-                            print(f"      -> [FORENSIC] SHA-256: {sha256[:16]}... | Snapshot: {snapshot_path or 'skipped'}")
-                            
-                            image_url = s_meta.get('image')
-                            if image_url:
-                                try:
-                                    import requests
-                                    # Forward to Vision Server for SigLIP embedding, pHash, and Deepfake score
-                                    VISION_URL = os.getenv("VISION_INFERENCE_URL", "http://localhost:7860")
-                                    resp = requests.post(f"{VISION_URL}/embed_media", json={"image_urls": [image_url]}, timeout=10)
-                                    if resp.status_code == 200:
-                                        data = resp.json()
-                                        embed = data["embeddings"][0]
-                                        phash = data.get("phashes", [None])[0]
-                                        synth_prob = data.get("synthetic_prob", [0.0])[0]
-                                        cursor.execute("""
-                                            INSERT INTO media_provenance (raw_article_id, media_url, phash, clip_embedding, synthetic_probability)
-                                            VALUES (%s, %s, %s, %s::vector, %s)
-                                        """, (article_id, image_url, phash, embed, float(synth_prob)))
-                                        print(f"      -> [VISION W-{worker_id}] Linked Hero Image via SigLIP Vector (Deepfake Prob: {synth_prob:.2f}).")
-                                    else:
-                                        # Store url silently if server offline
-                                        cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
-                                except Exception as e:
-                                    # Non-fatal if vision server isn't up
-                                    cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
-                                    print(f"      -> [VISION WARNING] Saved {image_url} but skipped SigLIP: {e}")
-                            
-                            # --- CRAWLER INJECTION (4-Layer Heuristic) ---
-                            current_domain = urlparse(url).netloc.lstrip('www.')
-                            queued_links = 0
-                            for d_url in discovered_links:
-                                d_domain = urlparse(d_url).netloc.lstrip('www.')
-                                if not d_domain or d_domain == current_domain: continue # Self-loops
-                                
-                                # Ad & Spam Drop
-                                if any(x in d_url.lower() for x in ['utm_', 'affiliate', 'login', 'subscribe', 'privacy', 'signup', '/settings', 'cookie']):
-                                    continue
-                                    
-                                target_source_id = None
-                                if d_domain in video_whitelist:
-                                    # Fallback source ID if it's a raw video (it'll be handled natively)
-                                    target_source_id = approved_domains_map.get(d_domain, 1) 
-                                elif d_domain in approved_domains_map:
-                                    target_source_id = approved_domains_map[d_domain]
-                                    
-                                if target_source_id is not None:
-                                    try:
-                                        cursor.execute("""
-                                            INSERT INTO raw_urls (source_id, url, metadata, status)
-                                            VALUES (%s, %s, %s, 'PENDING_SCRAPE')
-                                            ON CONFLICT (url) DO NOTHING
-                                        """, (target_source_id, d_url, Json({"origin": "recursive_crawler", "source_article": url})))
-                                        queued_links += cursor.rowcount
-                                    except Exception: pass
-
-                            cursor.execute("UPDATE raw_urls SET status = 'SCRAPED' WHERE id = %s", (url_id,))
-                            print(f"      -> [SUCCESS W-{worker_id}] Extracted {len(raw_text)} chars. Crawled {queued_links} authoritative links.")
-                        elif scraped_meta == "paywall" or any(
-                            urlparse(url).netloc.lstrip('www.') == p or
-                            urlparse(url).netloc.lstrip('www.').endswith('.' + p)
-                            for p in PAYWALL_DOMAINS
-                        ):
-                            cursor.execute("UPDATE raw_urls SET status = 'FAILED_PAYWALL' WHERE id = %s", (url_id,))
-                            print(f"      -> [PAYWALL W-{worker_id}] Marked as FAILED_PAYWALL, will not retry.")
-                        elif scraped_meta == "dead_end":
-                            cursor.execute("UPDATE raw_urls SET status = 'FAILED_NO_ACCESS' WHERE id = %s", (url_id,))
-                            print(f"      -> [DEAD-END W-{worker_id}] Marked as FAILED_NO_ACCESS, will not retry.")
-                        else:
-                            # Retry logic: increment retry_count; give up after MAX_SCRAPE_RETRIES
-                            new_retry = retry_count + 1
-                            if new_retry >= MAX_SCRAPE_RETRIES:
-                                cursor.execute(
-                                    "UPDATE raw_urls SET status = 'FAILED' WHERE id = %s",
-                                    (url_id,)
-                                )
-                                print(f"      -> [EXHAUSTED W-{worker_id}] {new_retry} attempts, permanently FAILED.")
-                            else:
-                                import json as _json
-                                meta_update = dict(initial_metadata or {})
-                                meta_update['retry_count'] = new_retry
-                                cursor.execute(
-                                    "UPDATE raw_urls SET status = 'PENDING_SCRAPE', metadata = %s WHERE id = %s",
-                                    (_json.dumps(meta_update), url_id)
-                                )
-                                print(f"      -> [RETRY W-{worker_id}] Queued for retry #{new_retry}.")
+                            print(f"  [W-{worker_id}] Processing (attempt {retry_count+1}): {url}")
                         
-                    conn.commit()
-                    items_processed += 1
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"  [ERROR W-{worker_id} Loop] {e}")
-                    conn.rollback()
-                    time.sleep(2)
+                            # 2. Scrape it using the Playwright page
+                            result = fetch_and_extract(url, page)
+                            raw_text, scraped_meta = result[0], result[1]
+                            discovered_links = result[2] if len(result) > 2 else []
+                            raw_html = result[3] if len(result) > 3 else None
+                        
+                            if raw_text and len(raw_text.strip()) > 100:
+                                # 3. Successful scrape
+                                s_meta = scraped_meta if isinstance(scraped_meta, dict) else (vars(scraped_meta) if hasattr(scraped_meta, '__dict__') else {})
+                                title = s_meta.get('title') or (initial_metadata or {}).get('title') or 'Unknown Title'
+                                author = s_meta.get('author') or (initial_metadata or {}).get('author') or 'Unknown Author'
+                            
+                                pub_date = None
+                                if s_meta.get('date'):
+                                    try:
+                                        pub_date = datetime.strptime(s_meta['date'], '%Y-%m-%d')
+                                    except ValueError:
+                                        pass
+                                    
+                                # ── Forensic Auditability ─────────────────────────────
+                                # Hash the raw HTML bytes (byte-identical page content);
+                                # fall back to extracted text if HTML was not captured.
+                                hashable_content = raw_html or raw_text or ""
+                                sha256 = _compute_sha256(hashable_content)
+                                snapshot_path = _save_snapshot(url, hashable_content, sha256)
+
+                                cursor.execute(f"""
+                                    INSERT INTO raw_articles
+                                        (url_id, title, author, publish_date, raw_text,
+                                         status, content_sha256, snapshot_path)
+                                    VALUES (%s, %s, %s, %s, %s, 'PENDING_CLASSIFICATION', %s, %s)
+                                    RETURNING id;
+                                """, (url_id, title, author, pub_date, raw_text, sha256, snapshot_path))
+
+                                row_art = cursor.fetchone()
+                                article_id = row_art[0] if row_art else None
+                                if article_id is None:
+                                    conn.rollback()
+                                    continue
+
+                                # Asynchronously ping archive.org — never blocks the scraper
+                                t = threading.Thread(
+                                    target=_ping_archive_org,
+                                    args=(url, url_id, DATABASE_URL),
+                                    daemon=True
+                                )
+                                t.start()
+                                print(f"      -> [FORENSIC] SHA-256: {sha256[:16]}... | Snapshot: {snapshot_path or 'skipped'}")
+                            
+                                image_url = s_meta.get('image')
+                                if image_url:
+                                    try:
+                                        import requests
+                                        # Forward to Vision Server for SigLIP embedding, pHash, and Deepfake score
+                                        VISION_URL = os.getenv("VISION_INFERENCE_URL", "http://localhost:7860")
+                                        resp = requests.post(f"{VISION_URL}/embed_media", json={"image_urls": [image_url]}, timeout=10)
+                                        if resp.status_code == 200:
+                                            data = resp.json()
+                                            embed = data["embeddings"][0]
+                                            phash = data.get("phashes", [None])[0]
+                                            synth_prob = data.get("synthetic_prob", [0.0])[0]
+                                            cursor.execute(f"""
+                                                INSERT INTO media_provenance (raw_article_id, media_url, phash, clip_embedding, synthetic_probability)
+                                                VALUES (%s, %s, %s, %s::vector, %s)
+                                            """, (article_id, image_url, phash, embed, float(synth_prob)))
+                                            print(f"      -> [VISION W-{worker_id}] Linked Hero Image via SigLIP Vector (Deepfake Prob: {synth_prob:.2f}).")
+                                        else:
+                                            # Store url silently if server offline
+                                            cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
+                                    except Exception as e:
+                                        # Non-fatal if vision server isn't up
+                                        cursor.execute("INSERT INTO media_provenance (raw_article_id, media_url) VALUES (%s, %s)", (article_id, image_url))
+                                        print(f"      -> [VISION WARNING] Saved {image_url} but skipped SigLIP: {e}")
+                            
+                                # --- CRAWLER INJECTION (4-Layer Heuristic) ---
+                                current_domain = urlparse(url).netloc.lstrip('www.')
+                                queued_links = 0
+                                for d_url in discovered_links:
+                                    d_domain = urlparse(d_url).netloc.lstrip('www.')
+                                    if not d_domain or d_domain == current_domain: continue # Self-loops
+                                
+                                    # Ad & Spam Drop
+                                    if any(x in d_url.lower() for x in ['utm_', 'affiliate', 'login', 'subscribe', 'privacy', 'signup', '/settings', 'cookie']):
+                                        continue
+                                    
+                                    target_source_id = None
+                                    if d_domain in video_whitelist:
+                                        # Fallback source ID if it's a raw video (it'll be handled natively)
+                                        target_source_id = approved_domains_map.get(d_domain, 1) 
+                                    elif d_domain in approved_domains_map:
+                                        target_source_id = approved_domains_map[d_domain]
+                                    
+                                    if target_source_id is not None:
+                                        try:
+                                            cursor.execute(f"""
+                                                INSERT INTO raw_urls (source_id, url, metadata, status)
+                                                VALUES (%s, %s, %s, 'PENDING_SCRAPE')
+                                                ON CONFLICT (url) DO NOTHING
+                                            """, (target_source_id, d_url, Json({"origin": "recursive_crawler", "source_article": url})))
+                                            queued_links += cursor.rowcount
+                                        except Exception: pass
+
+                                cursor.execute("UPDATE raw_urls SET status = 'SCRAPED' WHERE id = %s", (url_id,))
+                                print(f"      -> [SUCCESS W-{worker_id}] Extracted {len(raw_text)} chars. Crawled {queued_links} authoritative links.")
+                            elif scraped_meta == "paywall" or any(
+                                urlparse(url).netloc.lstrip('www.') == p or
+                                urlparse(url).netloc.lstrip('www.').endswith('.' + p)
+                                for p in PAYWALL_DOMAINS
+                            ):
+                                cursor.execute("UPDATE raw_urls SET status = 'FAILED_PAYWALL' WHERE id = %s", (url_id,))
+                                print(f"      -> [PAYWALL W-{worker_id}] Marked as FAILED_PAYWALL, will not retry.")
+                            elif scraped_meta == "dead_end":
+                                cursor.execute("UPDATE raw_urls SET status = 'FAILED_NO_ACCESS' WHERE id = %s", (url_id,))
+                                print(f"      -> [DEAD-END W-{worker_id}] Marked as FAILED_NO_ACCESS, will not retry.")
+                            else:
+                                # Retry logic: increment retry_count; give up after MAX_SCRAPE_RETRIES
+                                new_retry = retry_count + 1
+                                if new_retry >= MAX_SCRAPE_RETRIES:
+                                    cursor.execute(
+                                        "UPDATE raw_urls SET status = 'FAILED' WHERE id = %s",
+                                        (url_id,)
+                                    )
+                                    print(f"      -> [EXHAUSTED W-{worker_id}] {new_retry} attempts, permanently FAILED.")
+                                else:
+                                    import json as _json
+                                    meta_update = dict(initial_metadata or {})
+                                    meta_update['retry_count'] = new_retry
+                                    cursor.execute(
+                                        "UPDATE raw_urls SET status = 'PENDING_SCRAPE', metadata = %s WHERE id = %s",
+                                        (_json.dumps(meta_update), url_id)
+                                    )
+                                    print(f"      -> [RETRY W-{worker_id}] Queued for retry #{new_retry}.")
+                        
+                        conn.commit()
+                        items_processed += 1
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"  [ERROR W-{worker_id} Loop] {e}")
+                        conn.rollback()
+                        time.sleep(2)
         
         conn.close()
     except Exception as fatal_e:

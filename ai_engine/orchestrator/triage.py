@@ -121,8 +121,44 @@ def _pre_classify_target_type(target: str) -> Optional[str]:
 
 # ── Main triage function ─────────────────────────────────────────────────────
 
-def triage_target(target: str, neo4j_driver=None) -> "TriageResult":
+def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult":
     pre_type = _pre_classify_target_type(target)
+
+    postgres_context = ""
+    if pg_conn:
+        try:
+            with pg_conn.cursor() as cur:
+                # 1. Sweep investigations
+                cur.execute("""
+                    SELECT id, target, findings->>'last_harvest_summary' AS summary
+                    FROM investigations
+                    WHERE target ILIKE %s OR findings->>'last_harvest_summary' ILIKE %s
+                    ORDER BY created_at DESC
+                    LIMIT 3
+                """, (f"%{target}%", f"%{target}%"))
+                past_invs = cur.fetchall()
+                if past_invs:
+                    postgres_context += "\n\nPAST INVESTIGATIONS MENTIONING TARGET:\n"
+                    for pid, ptarget, psumm in past_invs:
+                        if psumm:
+                            postgres_context += f"- Inv #{pid} (Target: {ptarget}): {psumm[:200]}...\n"
+                        else:
+                            postgres_context += f"- Inv #{pid} (Target: {ptarget})\n"
+                
+                # 2. Sweep raw articles
+                cur.execute("""
+                    SELECT id, title
+                    FROM raw_articles
+                    WHERE title ILIKE %s
+                    LIMIT 5
+                """, (f"%{target}%",))
+                past_arts = cur.fetchall()
+                if past_arts:
+                    postgres_context += "\nEXISTING INTERNAL ARTICLES MENTIONING TARGET:\n"
+                    for aid, atitle in past_arts:
+                        postgres_context += f"- #{aid}: {atitle}\n"
+        except Exception as e:
+            print(f"[Triage] Postgres context lookup failed (non-fatal): {e}")
 
     graph_context = ""
     graph_seed_leads: list[dict] = []
@@ -205,6 +241,7 @@ def triage_target(target: str, neo4j_driver=None) -> "TriageResult":
         f"New investigation target submitted:\n\n"
         f"  TARGET: {target}\n"
         f"{type_hint}"
+        f"{postgres_context}"
         f"{graph_context}\n\n"
         "Perform triage. Generate the goal_type, target_type, canonical form, "
         "initial SearXNG queries, any seed leads you can derive from the target itself, "

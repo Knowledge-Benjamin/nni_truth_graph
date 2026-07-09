@@ -19,12 +19,15 @@ import time
 import random
 import threading
 from typing import Any
+import requests
 import instructor
 from dotenv import load_dotenv
+from google.auth import default as google_default
+from google.auth.transport.requests import AuthorizedSession
 
 # Ensure the ai_engine .env is loaded at import time for any script that imports this module first.
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-load_dotenv(dotenv_path=env_path, override=True)
+load_dotenv(dotenv_path=env_path, override=False)
 
 # Controls whether the engine routes to self-hosted local inference or to cloud API providers.
 # Set EXECUTION_MODE=cloud to use cloud provider API keys, or EXECUTION_MODE=local to use local Ollama.
@@ -53,9 +56,9 @@ PROVIDERS = {
         "base_url": OLLAMA_BASE_URL,  # Resolved at module load from OLLAMA_BASE_URL env var
         "weight": 100,
         "env_keys": ["OLLAMA_SENTINEL"],  # Sentinel — not a real key; shim bypasses auth
-        "model_light":  "gemma2:9b",
-        "model_heavy":  "gemma2:9b",
-        "model_vision": "gemma2:9b"
+        "model_light":  "gemma-4-e4b",
+        "model_heavy":  "gemma-4-e4b",
+        "model_vision": "gemma-4-e4b"
     },
     # ── Disabled Cloud Providers ───────────────────────────────────────────────
     # All cloud providers are weight-zeroed. Routing is exclusively self-hosted.
@@ -63,6 +66,14 @@ PROVIDERS = {
         "base_url": None,
         "weight": 0,  # Disabled: self-hosted Ollama is exclusive
         "env_keys": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+        "model_light":  "gemini-2.5-flash",
+        "model_heavy":  "gemini-2.5-pro",
+        "model_vision": "gemini-2.5-flash"
+    },
+    "VERTEX_AI": {
+        "base_url": None,
+        "weight": 0,
+        "env_keys": ["VERTEX_AI_API_KEY"],
         "model_light":  "gemini-2.5-flash",
         "model_heavy":  "gemini-2.5-pro",
         "model_vision": "gemini-2.5-flash"
@@ -129,6 +140,74 @@ def _load_all_keys_for_provider(env_key_list: list[str]) -> list[str]:
     return results
 
 
+def _is_placeholder_vertex_key(value: str | None) -> bool:
+    """Return True when the Vertex API key is still a placeholder value."""
+    if value is None:
+        return True
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return True
+    placeholders = {
+        "replace_with_your_vertex_api_key",
+        "your_vertex_api_key",
+        "changeme",
+        "placeholder",
+        "replace_me",
+        "todo",
+    }
+    return cleaned in placeholders or cleaned.startswith("replace_with_")
+
+
+def _vertex_ai_is_enabled() -> bool:
+    """Return True when Vertex AI mode is explicitly enabled."""
+    enabled_value = os.getenv("VERTEX_AI_ENABLED", "false").strip().lower()
+    return enabled_value in {"1", "true", "yes", "on"}
+
+
+def _vertex_ai_is_configured() -> bool:
+    """Return True when Vertex AI has enough config to initialize a client."""
+    if not _vertex_ai_is_enabled():
+        return False
+    api_key = os.getenv("VERTEX_AI_API_KEY", "").strip()
+    project = os.getenv("VERTEX_AI_PROJECT", "").strip()
+    location = os.getenv("VERTEX_AI_LOCATION", "").strip()
+    return bool(project and location and api_key and not _is_placeholder_vertex_key(api_key))
+
+
+def discover_vertex_model_names() -> list[str]:
+    """Query Vertex AI for available model IDs for the configured project and region."""
+    project = os.getenv("VERTEX_AI_PROJECT", "").strip()
+    location = os.getenv("VERTEX_AI_LOCATION", "").strip()
+    if not project or not location:
+        return []
+
+    try:
+        credentials, _ = google_default()
+        if credentials is None:
+            return []
+        session = AuthorizedSession(credentials)
+        url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models"
+        response = session.get(url, timeout=30)
+        if response.status_code >= 400:
+            return []
+    except Exception:
+        return []
+
+    try:
+        payload = response.json()
+    except Exception:
+        return []
+
+    models = payload.get("models", []) if isinstance(payload, dict) else []
+    names: list[str] = []
+    for model in models:
+        if isinstance(model, dict):
+            name = model.get("name") or model.get("model") or model.get("displayName")
+            if isinstance(name, str) and name:
+                names.append(name.split("/")[-1])
+    return sorted(set(names))
+
+
 # ── Google GenAI Native Shim ─────────────────────────────────────────────────
 # The OpenAI-compat wrapper (/v1beta/openai/) returns 500 for Gemma models.
 # These lightweight shims wrap genai.Client to expose the same interface that
@@ -176,6 +255,8 @@ class _GenAICompletionsShim:
             cfg["temperature"] = kwargs["temperature"]
         if "max_tokens" in kwargs:
             cfg["max_output_tokens"] = kwargs["max_tokens"]
+        if kwargs.get("response_format", {}).get("type") == "json_object":
+            cfg["response_mime_type"] = "application/json"
         config = _gt.GenerateContentConfig(**cfg) if cfg else None
         resp = self._client.models.generate_content(
             model=model, contents=contents, config=config
@@ -201,23 +282,35 @@ import json as _json
 import requests as _requests
 
 class _OllamaCompletionsShim:
-    """Translates OpenAI-style .create() kwargs into Ollama /api/chat calls."""
+    """
+    Translates OpenAI-style .create() kwargs into either:
+      - Ollama /api/chat  (when OLLAMA_NATIVE=true or base_url contains .hf.space)
+      - vLLM/OpenAI /v1/chat/completions  (default — used for ngrok/Colab vLLM endpoints)
+    """
 
     def __init__(self, base_url: str):
         self._base_url = base_url.rstrip("/")
+        # Detect native Ollama vs vLLM/OpenAI-compat endpoint.
+        # Native Ollama endpoints are identified by the OLLAMA_NATIVE env var or
+        # by the legacy HF Space host. Everything else (ngrok, Cloud Run, etc.)
+        # is treated as an OpenAI-compatible vLLM server.
+        _native_flag = os.getenv("OLLAMA_NATIVE", "").strip().lower() == "true"
+        _hf_host = ".hf.space" in self._base_url
+        self._use_ollama_native = _native_flag or _hf_host
 
     def create(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
-        """
-        Calls POST {base_url}/api/chat with the Ollama message format.
-        Collects streamed response tokens and returns a unified _GenAIResponseShim
-        so downstream code (choices[0].message.content) works unchanged.
-        """
+        if self._use_ollama_native:
+            return self._create_ollama(model=model, messages=messages, **kwargs)
+        else:
+            return self._create_openai_compat(model=model, messages=messages, **kwargs)
+
+    def _create_ollama(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
+        """Ollama /api/chat — for the HF Space Gemma 2 backend."""
         payload: dict = {
             "model": model,
-            "messages": messages,  # Ollama /api/chat accepts the same role/content format
+            "messages": messages,
             "stream": True,
         }
-        # Map OpenAI generation kwargs to Ollama options where applicable
         options: dict = {}
         if "temperature" in kwargs:
             options["temperature"] = kwargs["temperature"]
@@ -234,37 +327,66 @@ class _OllamaCompletionsShim:
                 resp.raise_for_status()
                 break
             except _requests.exceptions.HTTPError as e:
-                last_error = RuntimeError(f"[OllamaShim] HTTP {getattr(resp, 'status_code', 'unknown')} from {url}: {e}")
+                last_error = RuntimeError(f"[OllamaShim] HTTP {getattr(resp, 'status_code', '?')} from {url}: {e}")
                 if attempt == 2:
                     raise last_error from e
-            except _requests.exceptions.Timeout as e:
-                last_error = RuntimeError(f"[OllamaShim] Timeout from {url}: {e}")
-                if attempt == 2:
-                    raise last_error from e
-            except _requests.exceptions.RequestException as e:
+            except (_requests.exceptions.Timeout, _requests.exceptions.RequestException) as e:
                 last_error = RuntimeError(f"[OllamaShim] Connection error to {url}: {e}")
                 if attempt == 2:
                     raise last_error from e
             time.sleep(2)
 
-        resp = resp  # type: ignore[assignment]
-        # Collect streamed NDJSON tokens into a full response string
         full_text = []
-        for raw_line in resp.iter_lines():
+        for raw_line in resp.iter_lines():  # type: ignore[union-attr]
             if not raw_line:
                 continue
             try:
                 chunk = _json.loads(raw_line)
             except _json.JSONDecodeError:
                 continue
-            # Ollama /api/chat streaming format: {"message": {"content": "..."}}
             content_piece = chunk.get("message", {}).get("content", "")
             if content_piece:
                 full_text.append(content_piece)
             if chunk.get("done", False):
                 break
-
         return _GenAIResponseShim("".join(full_text))
+
+    def _create_openai_compat(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
+        """
+        vLLM / any OpenAI-compatible server — POST /v1/chat/completions.
+        Uses non-streaming for simplicity; vLLM handles 4k tokens well within timeout.
+        """
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+        }
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            payload["max_tokens"] = kwargs["max_tokens"]
+        # Force JSON output mode if requested
+        if kwargs.get("response_format", {}).get("type") == "json_object":
+            payload["response_format"] = {"type": "json_object"}
+
+        url = f"{self._base_url}/v1/chat/completions"
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer notneeded"}
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = _requests.post(url, json=payload, headers=headers, timeout=600)
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                return _GenAIResponseShim(content)
+            except (_requests.exceptions.Timeout, _requests.exceptions.RequestException) as e:
+                last_error = RuntimeError(f"[vLLMShim] Connection error to {url}: {e}")
+            except (KeyError, IndexError, _json.JSONDecodeError) as e:
+                last_error = RuntimeError(f"[vLLMShim] Malformed response from {url}: {e} | body={getattr(resp, 'text', '')[:200]}")
+            if attempt < 2:
+                time.sleep(2)
+        raise last_error  # type: ignore[misc]
 
 
 class _OllamaRawShim:
@@ -311,6 +433,15 @@ class RoutedClient:
             # The existing router expects .raw_client.chat.completions.create to exist
             # for non-structured completion paths, so wrap the native GenAI client
             # in the OpenAI-compatible shim regardless of mode.
+            self.raw_client = _GenAIRawShim(genai_client)  # type: ignore
+            self.client = instructor.from_genai(genai_client, mode=instructor.Mode.GENAI_STRUCTURED_OUTPUTS)  # type: ignore[assignment]
+        elif provider_name == "VERTEX_AI":
+            from google import genai as _genai  # lazy import
+            init_kwargs: dict[str, Any] = {
+                "vertexai": True,
+                "api_key": api_key,
+            }
+            genai_client = _genai.Client(**init_kwargs)
             self.raw_client = _GenAIRawShim(genai_client)  # type: ignore
             self.client = instructor.from_genai(genai_client, mode=instructor.Mode.GENAI_STRUCTURED_OUTPUTS)  # type: ignore[assignment]
         elif provider_name == "GROQ":
@@ -416,6 +547,70 @@ class MultiProviderRouter:
         else:
             updated.append({"role": "user", "content": schema_hint})
         return updated
+
+    def _infer_safe_default_for_field(self, field_info: Any) -> Any:
+        """Produce a safe default for a Pydantic field when provider output is malformed."""
+        if field_info is None:
+            return None
+
+        default = getattr(field_info, "default", None)
+        if default is not None:
+            return default
+
+        default_factory = getattr(field_info, "default_factory", None)
+        if default_factory is not None:
+            try:
+                return default_factory()
+            except Exception:
+                pass
+
+        annotation = getattr(field_info, "annotation", None)
+        annotation_name = getattr(annotation, "__name__", "") if annotation is not None else ""
+        annotation_str = str(annotation)
+
+        if annotation_name == "list" or annotation_str.startswith("typing.List") or annotation_str.startswith("list["):
+            return []
+        if annotation_name in {"str", "String"} or annotation_str.startswith("typing.Optional") and "str" in annotation_str:
+            return ""
+        if annotation_name == "bool":
+            return False
+        if annotation_name in {"int", "float"}:
+            return 0
+        return None
+
+    def _build_safe_model_instance(self, response_model: Any, parsed: Any | None = None) -> Any:
+        """Return a valid model instance with safe defaults rather than a plain dict."""
+        if hasattr(response_model, "model_validate"):
+            try:
+                if isinstance(parsed, dict):
+                    return response_model.model_validate(parsed)
+                if parsed is None:
+                    return response_model.model_validate({})
+            except Exception:
+                pass
+
+        if isinstance(response_model, type):
+            fields = getattr(response_model, 'model_fields', None) or getattr(response_model, '__fields__', None) or {}
+            defaults: dict[str, Any] = {}
+            if isinstance(parsed, dict):
+                for fname in fields:
+                    if fname in parsed and parsed[fname] is not None:
+                        defaults[fname] = parsed[fname]
+                    else:
+                        defaults[fname] = self._infer_safe_default_for_field(fields[fname])
+            else:
+                for fname, finfo in fields.items():
+                    defaults[fname] = self._infer_safe_default_for_field(finfo)
+
+            try:
+                return response_model(**defaults)
+            except Exception:
+                try:
+                    return response_model()
+                except Exception:
+                    return {}
+
+        return parsed if parsed is not None else {}
 
     def _run_structured_fallback(self, client_wrapper: RoutedClient, call_kwargs: dict, response_model: Any) -> Any:
         """Fallback for providers that reject instructor/structured-output schemas."""
@@ -590,36 +785,7 @@ class MultiProviderRouter:
             return parsed
         except Exception as e:
             print(f"[LLM Router] Structured parsing to {getattr(response_model, '__name__', str(response_model))} failed: {e}")
-            # Build a safe default instance from the model schema. If the model
-            # output is malformed (e.g. a list instead of an object), coerce it
-            # to the expected field types rather than returning a plain dict.
-            try:
-                defaults = {}
-                fields = getattr(response_model, '__fields__', {})
-                for fname, finfo in fields.items():
-                    default_value = None
-                    if isinstance(parsed, dict) and fname in parsed:
-                        value = parsed[fname]
-                        if isinstance(value, list) and finfo.annotation is not list:
-                            default_value = [] if getattr(finfo, 'default_factory', None) is not None else []
-                        else:
-                            default_value = value
-                    else:
-                        if finfo.default is not None:
-                            default_value = finfo.default
-                        elif hasattr(finfo, 'default_factory') and finfo.default_factory is not None:
-                            try:
-                                default_value = finfo.default_factory()
-                            except Exception:
-                                default_value = None
-                        elif getattr(finfo.annotation, '__name__', None) == 'list':
-                            default_value = []
-                        else:
-                            default_value = None
-                    defaults[fname] = default_value
-                return response_model(**defaults)
-            except Exception:
-                return response_model()
+            return self._build_safe_model_instance(response_model, parsed)
 
     def _bootstrap(self):
         """
@@ -657,6 +823,15 @@ class MultiProviderRouter:
             elif EXECUTION_MODE == "cloud":
                 if p_name == "SELF_HOSTED_OLLAMA":
                     effective_config["weight"] = 0
+                elif _vertex_ai_is_configured():
+                    if p_name == "VERTEX_AI":
+                        effective_config["weight"] = 100
+                    else:
+                        effective_config["weight"] = 0
+                elif p_name == "VERTEX_AI":
+                    effective_config["weight"] = 0
+                elif p_name == "GOOGLE_AI_STUDIO":
+                    effective_config["weight"] = 100
                 elif effective_config.get("weight", 0) == 0:
                     effective_config["weight"] = 100
 
@@ -750,7 +925,7 @@ class MultiProviderRouter:
                 # don't hit Instructor's strict `response_model` requirement.
                 if "response_model" in call_kwargs and call_kwargs["response_model"] is not None:
                     response_model = call_kwargs["response_model"]
-                    if client_wrapper.provider in {"GOOGLE_AI_STUDIO", "SELF_HOSTED_OLLAMA"}:
+                    if client_wrapper.provider in {"GOOGLE_AI_STUDIO", "VERTEX_AI", "SELF_HOSTED_OLLAMA"}:
                         # The local Ollama path and Gemini fallback both work better with a
                         # plain-text JSON response that we parse locally instead of the
                         # instructor wrapper, which is prone to timeouts and schema issues.
@@ -761,7 +936,7 @@ class MultiProviderRouter:
                         # "Models.generate_content() got an unexpected keyword argument 'temperature'".
                         # Avoid passing `temperature` into the instructor-wrapped client to
                         # prevent that error. Keep `max_retries` behavior intact.
-                        if "temperature" in call_kwargs and client_wrapper.provider == "GOOGLE_AI_STUDIO":
+                        if "temperature" in call_kwargs and client_wrapper.provider in {"GOOGLE_AI_STUDIO", "VERTEX_AI"}:
                             call_kwargs.pop("temperature")
 
                         if "max_retries" not in call_kwargs and client_wrapper.provider != "SELF_HOSTED_OLLAMA":
@@ -812,25 +987,7 @@ class MultiProviderRouter:
                     if "response_model" in kwargs and kwargs.get("response_model") is not None:
                         try:
                             response_model = kwargs["response_model"]
-                            if hasattr(response_model, "model_fields"):
-                                defaults = {}
-                                for name, field in response_model.model_fields.items():
-                                    if getattr(field, "default", None) is not None:
-                                        defaults[name] = field.default
-                                    elif getattr(field, "default_factory", None) is not None:
-                                        try:
-                                            defaults[name] = field.default_factory()
-                                        except Exception:
-                                            defaults[name] = None
-                                    else:
-                                        defaults[name] = None
-                                try:
-                                    return response_model(**defaults)
-                                except Exception:
-                                    # Fall back to a no-arg constructor to ensure we
-                                    # return a model instance rather than a plain dict.
-                                    return response_model()
-                            return response_model()
+                            return self._build_safe_model_instance(response_model, {})
                         except Exception:
                             try:
                                 return response_model()

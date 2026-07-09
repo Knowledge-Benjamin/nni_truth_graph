@@ -84,8 +84,21 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
             (investigation_id,)
         )
         in_flight_articles = cur.fetchone()[0]
+        
+        # Check claims that are extracted but not yet committed/resolved
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM extracted_claims ec
+            JOIN raw_articles ra ON ec.article_id = ra.id
+            JOIN raw_urls ru ON ra.url_id = ru.id
+            WHERE (ru.metadata->>'investigation_id')::int = %s
+              AND ec.status IN ('PROCESSING', 'AUTO_APPROVE')
+            """,
+            (investigation_id,)
+        )
+        in_flight_claims = cur.fetchone()[0]
 
-    in_flight_total = in_flight_urls + in_flight_articles
+    in_flight_total = in_flight_urls + in_flight_articles + in_flight_claims
     MIN_LEADS_FOR_EXHAUSTION = 10  # Must explore at least 10 leads before exhaustion can fire
 
     if (pending_count == 0
@@ -101,10 +114,13 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
     # We track this in findings as a list of recent harvest novel counts
     dry_harvests = findings.get("dry_harvests", 0)
     last_novel   = findings.get("last_harvest_novel_count", 999)
-    if last_novel < DIMINISHING_THRESHOLD:
+    
+    if last_novel >= DIMINISHING_THRESHOLD:
+        dry_harvests = 0
+    elif in_flight_total == 0:
         dry_harvests += 1
     else:
-        dry_harvests = 0
+        print(f"[Terminator] #{investigation_id}: Pipeline active ({in_flight_total} items). Pausing dry harvest clock.")
 
     if dry_harvests >= DIMINISHING_WINDOW:
         return True, "DIMINISHING_RETURNS"

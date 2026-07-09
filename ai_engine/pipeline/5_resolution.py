@@ -396,216 +396,221 @@ Reply with exactly one word: DUPLICATE, CONTRADICTS, CORROBORATES, or EVOLVES.
 
 def resolution_worker(worker_id: int):
     try:
-        items_processed = 0
+        for __phase, (__limit, __filter_clause) in enumerate([
+            (100, "AND ru.metadata->>'investigation_id' IS NOT NULL"),
+            (20, "AND ru.metadata->>'investigation_id' IS NULL")
+        ]):
+            items_processed = 0
 
-        while items_processed < 20:
-            try:
-                claim_id = None
-                subject = None
-                predicate = None
-                obj = None
-                temporal = None
-                spatial = None
-                extr_conf = None
-                epist_score = None
-                pub_date = None
-                art_title = None
-                ingest_url = None
-                src_trust = None
-                ai_metadata = None
-
-                with psycopg2.connect(DATABASE_URL) as claim_conn:
-                    with claim_conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                                   ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
-                                   ra.publish_date, ra.title, ru.url, s.epistemic_trust_score, ec.ai_metadata
-                            FROM extracted_claims ec
-                            JOIN raw_articles ra ON ec.article_id = ra.id
-                            JOIN raw_urls ru     ON ra.url_id = ru.id
-                            JOIN sources s       ON ru.source_id = s.id
-                            WHERE ec.status = 'PROCESSING'
-                              AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
-                            ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
-                            LIMIT 1
-                            FOR UPDATE OF ec SKIP LOCKED;
-                        """)
-                        row = cur.fetchone()
-                        if not row:
-                            claim_conn.rollback()
-                            break
-
-                        (claim_id, subject, predicate, obj, temporal, spatial,
-                         extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust, ai_metadata) = row
-                        cur.execute(
-                            "UPDATE extracted_claims SET pipeline_stage = 'STAGE_5_RESOLUTION_IN_PROGRESS' WHERE id = %s",
-                            (claim_id,),
-                        )
-                        claim_conn.commit()
-
-                if claim_id is None or subject is None or predicate is None or obj is None:
-                    break
-
-                print(f"  [W-{worker_id}] Resolving: [{predicate}] {subject[:30]} → {obj[:30]}")
-
-                # ── Build search fingerprint ──────────────────────────────
-                spo_text     = f"{subject} {predicate.replace('_',' ')} {obj}"
-                claim_embed  = embed_text(spo_text)
-
-                # ── A. Internet Provenance Hunt ───────────────────────────
-                pub_date_str = pub_date.strftime("%Y-%m-%d") if pub_date else None
+            while items_processed < __limit:
                 try:
-                    search_results = searxng_search(spo_text, date_before=pub_date_str)
-                except Exception as e:
-                    print(f"  [SEARXNG SKIP] Search exhausted retries ({type(e).__name__}). Continuing without internet sources.")
-                    search_results = []
+                    claim_id = None
+                    subject = None
+                    predicate = None
+                    obj = None
+                    temporal = None
+                    spatial = None
+                    extr_conf = None
+                    epist_score = None
+                    pub_date = None
+                    art_title = None
+                    ingest_url = None
+                    src_trust = None
+                    ai_metadata = None
 
-                original_url   = None
-                original_date  = pub_date
-                original_name  = "Unknown"
-                is_our_url_original = True  # assume ours is original until proven otherwise
+                    with psycopg2.connect(DATABASE_URL) as claim_conn:
+                        with claim_conn.cursor() as cur:
+                            cur.execute(f"""
+                                SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                                       ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
+                                       ra.publish_date, ra.title, ru.url, s.epistemic_trust_score, ec.ai_metadata
+                                FROM extracted_claims ec
+                                JOIN raw_articles ra ON ec.article_id = ra.id
+                                JOIN raw_urls ru     ON ra.url_id = ru.id
+                                JOIN sources s       ON ru.source_id = s.id
+                                WHERE ec.status = 'PROCESSING'
+                                  AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
+                                {__filter_clause}
+                                    ORDER BY ec.id ASC
+                                LIMIT 1
+                                FOR UPDATE OF ec SKIP LOCKED;
+                            """)
+                            row = cur.fetchone()
+                            if not row:
+                                claim_conn.rollback()
+                                break
 
-                for result in search_results[:5]:  # type: ignore[index]
-                    candidate_url  = result.get("url", "")
-                    candidate_date_str = result.get("publishedDate", "")
-                    candidate_source   = result.get("engine") or result.get("title") or "Unknown Source"
+                            (claim_id, subject, predicate, obj, temporal, spatial,
+                             extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust, ai_metadata) = row
+                            cur.execute(
+                                "UPDATE extracted_claims SET pipeline_stage = 'STAGE_5_RESOLUTION_IN_PROGRESS' WHERE id = %s",
+                                (claim_id,),
+                            )
+                            claim_conn.commit()
 
-                    # Parse Date - SearXNG formats vary depending on engine
-                    candidate_date = None
-                    if candidate_date_str:
-                        import re
-                        rel = re.match(r'(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago', candidate_date_str, re.I)
-                        if rel:
-                            n, unit = int(rel.group(1)), rel.group(2).lower()
-                            deltas = {
-                                'second': timedelta(seconds=n), 'minute': timedelta(minutes=n),
-                                'hour': timedelta(hours=n), 'day': timedelta(days=n),
-                                'week': timedelta(weeks=n), 'month': timedelta(days=n*30),
-                                'year': timedelta(days=n*365)
-                            }
-                            candidate_date = (datetime.now(timezone.utc) - deltas.get(unit, timedelta(0)))
-                        else:
-                            for fmt in ("%b %d, %Y", "%Y-%m-%d", "%B %d, %Y", "%d %b %Y"):
-                                try:
-                                    candidate_date = datetime.strptime(candidate_date_str, fmt).replace(tzinfo=timezone.utc)
-                                    break
-                                except ValueError:
-                                    continue
+                    if claim_id is None or subject is None or predicate is None or obj is None:
+                        break
 
-                    # Try Wayback Machine and Common Crawl (Dual Archive Validation)
-                    wayback_date = None
-                    cc_date = None
+                    print(f"  [W-{worker_id}] Resolving: [{predicate}] {subject[:30]} → {obj[:30]}")
+
+                    # ── Build search fingerprint ──────────────────────────────
+                    spo_text     = f"{subject} {predicate.replace('_',' ')} {obj}"
+                    claim_embed  = embed_text(spo_text)
+
+                    # ── A. Internet Provenance Hunt ───────────────────────────
+                    pub_date_str = pub_date.strftime("%Y-%m-%d") if pub_date else None
                     try:
-                        wayback_date = wayback_first_seen(candidate_url)
-                    except Exception:
-                        pass
+                        search_results = searxng_search(spo_text, date_before=pub_date_str)
+                    except Exception as e:
+                        print(f"  [SEARXNG SKIP] Search exhausted retries ({type(e).__name__}). Continuing without internet sources.")
+                        search_results = []
 
-                    try:
-                        cc_date = common_crawl_first_seen(candidate_url)
-                    except Exception:
-                        pass
+                    original_url   = None
+                    original_date  = pub_date
+                    original_name  = "Unknown"
+                    is_our_url_original = True  # assume ours is original until proven otherwise
 
-                    # Take the absolute earliest verified date we have found
-                    valid_dates = [d for d in [wayback_date, cc_date, candidate_date] if d is not None]
-                    earliest = min(valid_dates) if valid_dates else None
+                    for result in search_results[:5]:  # type: ignore[index]
+                        candidate_url  = result.get("url", "")
+                        candidate_date_str = result.get("publishedDate", "")
+                        candidate_source   = result.get("engine") or result.get("title") or "Unknown Source"
 
-                    # Normalize pub_date timezone for comparison
-                    local_pub = pub_date
-                    if local_pub and local_pub.tzinfo is None:
-                        local_pub = local_pub.replace(tzinfo=timezone.utc)
+                        # Parse Date - SearXNG formats vary depending on engine
+                        candidate_date = None
+                        if candidate_date_str:
+                            import re
+                            rel = re.match(r'(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago', candidate_date_str, re.I)
+                            if rel:
+                                n, unit = int(rel.group(1)), rel.group(2).lower()
+                                deltas = {
+                                    'second': timedelta(seconds=n), 'minute': timedelta(minutes=n),
+                                    'hour': timedelta(hours=n), 'day': timedelta(days=n),
+                                    'week': timedelta(weeks=n), 'month': timedelta(days=n*30),
+                                    'year': timedelta(days=n*365)
+                                }
+                                candidate_date = (datetime.now(timezone.utc) - deltas.get(unit, timedelta(0)))
+                            else:
+                                for fmt in ("%b %d, %Y", "%Y-%m-%d", "%B %d, %Y", "%d %b %Y"):
+                                    try:
+                                        candidate_date = datetime.strptime(candidate_date_str, fmt).replace(tzinfo=timezone.utc)
+                                        break
+                                    except ValueError:
+                                        continue
 
-                    if earliest:
-                        if local_pub is None:
-                            if original_url is None:
+                        # Try Wayback Machine and Common Crawl (Dual Archive Validation)
+                        wayback_date = None
+                        cc_date = None
+                        try:
+                            wayback_date = wayback_first_seen(candidate_url)
+                        except Exception:
+                            pass
+
+                        try:
+                            cc_date = common_crawl_first_seen(candidate_url)
+                        except Exception:
+                            pass
+
+                        # Take the absolute earliest verified date we have found
+                        valid_dates = [d for d in [wayback_date, cc_date, candidate_date] if d is not None]
+                        earliest = min(valid_dates) if valid_dates else None
+
+                        # Normalize pub_date timezone for comparison
+                        local_pub = pub_date
+                        if local_pub and local_pub.tzinfo is None:
+                            local_pub = local_pub.replace(tzinfo=timezone.utc)
+
+                        if earliest:
+                            if local_pub is None:
+                                if original_url is None:
+                                    original_url  = candidate_url
+                                    original_date = earliest
+                                    original_name = candidate_source
+                            elif earliest < local_pub:
+                                is_our_url_original = False
                                 original_url  = candidate_url
                                 original_date = earliest
                                 original_name = candidate_source
-                        elif earliest < local_pub:
-                            is_our_url_original = False
-                            original_url  = candidate_url
-                            original_date = earliest
-                            original_name = candidate_source
 
-                # ── B. Neo4j Cross-Reference ──────────────────────────────
-                neo4j_result = {"stance": "ORIGINAL", "matched_claim_id": None,
-                                "similarity": 0.0, "contradiction_weights": []}
-                if claim_embed:
-                    neo4j_result = neo4j_cross_reference(subject, predicate, obj, list(claim_embed))  # type: ignore[arg-type]
+                    # ── B. Neo4j Cross-Reference ──────────────────────────────
+                    neo4j_result = {"stance": "ORIGINAL", "matched_claim_id": None,
+                                    "similarity": 0.0, "contradiction_weights": []}
+                    if claim_embed:
+                        neo4j_result = neo4j_cross_reference(subject, predicate, obj, list(claim_embed))  # type: ignore[arg-type]
 
-                final_stance = neo4j_result["stance"]
+                    final_stance = neo4j_result["stance"]
 
-                if not is_our_url_original and final_stance == "ORIGINAL":
-                    final_stance = "CORROBORATES"
+                    if not is_our_url_original and final_stance == "ORIGINAL":
+                        final_stance = "CORROBORATES"
 
-                # ── C. Re-score with new intelligence ────────────────
-                days_old = (datetime.now(timezone.utc) - original_date).days if original_date else 0
-                support_count = 1 if final_stance == "CORROBORATES" else 0
+                    # ── C. Re-score with new intelligence ────────────────
+                    days_old = (datetime.now(timezone.utc) - original_date).days if original_date else 0
+                    support_count = 1 if final_stance == "CORROBORATES" else 0
 
-                try:
-                    ai_data = json.loads(ai_metadata) if ai_metadata else {}
-                except Exception:
-                    ai_data = {}
-                media_synth_prob = ai_data.get("synthetic_probability")
+                    try:
+                        ai_data = json.loads(ai_metadata) if ai_metadata else {}
+                    except Exception:
+                        ai_data = {}
+                    media_synth_prob = ai_data.get("synthetic_probability")
 
-                new_score = _scorer.calculate_epistemic_score(
-                    extraction_confidence=extr_conf,
-                    source_tier=1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3),
-                    support_count=support_count,
-                    contradiction_weights=neo4j_result.get("contradiction_weights", []), # type: ignore
-                    days_since_extracted=days_old,
-                    historical_source_reliability=src_trust,
-                    media_synthetic_prob=media_synth_prob
-                )
+                    new_score = _scorer.calculate_epistemic_score(
+                        extraction_confidence=extr_conf,
+                        source_tier=1 if src_trust >= 0.80 else (2 if src_trust >= 0.50 else 3),
+                        support_count=support_count,
+                        contradiction_weights=neo4j_result.get("contradiction_weights", []), # type: ignore
+                        days_since_extracted=days_old,
+                        historical_source_reliability=src_trust,
+                        media_synthetic_prob=media_synth_prob
+                    )
 
-                routing = _scorer.determine_routing(new_score)
+                    routing = _scorer.determine_routing(new_score)
 
-                # ── D. Persist results ───────────────────────────────────
-                with psycopg2.connect(DATABASE_URL) as write_conn:
-                    with write_conn.cursor() as cur:
-                        cur.execute("""
-                            UPDATE extracted_claims
-                            SET epistemic_score  = %s,
-                                status           = %s,
-                                pipeline_stage   = 'STAGE_6_DEDUP'
-                            WHERE id = %s
-                        """, (new_score, routing if routing != "AUTO_APPROVE" else "PROCESSING", claim_id))
+                    # ── D. Persist results ───────────────────────────────────
+                    with psycopg2.connect(DATABASE_URL) as write_conn:
+                        with write_conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE extracted_claims
+                                SET epistemic_score  = %s,
+                                    status           = %s,
+                                    pipeline_stage   = 'STAGE_6_DEDUP'
+                                WHERE id = %s
+                            """, (new_score, routing if routing != "AUTO_APPROVE" else "PROCESSING", claim_id))
 
-                        cur.execute("""
-                            INSERT INTO claim_provenance
-                                (claim_id, internet_original_url, internet_original_source,
-                                 internet_original_date, is_our_source_original,
-                                 neo4j_stance, neo4j_matched_claim_id, neo4j_similarity)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (claim_id) DO UPDATE SET
-                                internet_original_url = EXCLUDED.internet_original_url,
-                                neo4j_stance = EXCLUDED.neo4j_stance;
-                        """, (
-                            claim_id, original_url, original_name,
-                            original_date, is_our_url_original,
-                            final_stance,
-                            neo4j_result["matched_claim_id"],
-                            neo4j_result["similarity"]
-                        ))
-                    write_conn.commit()
+                            cur.execute("""
+                                INSERT INTO claim_provenance
+                                    (claim_id, internet_original_url, internet_original_source,
+                                     internet_original_date, is_our_source_original,
+                                     neo4j_stance, neo4j_matched_claim_id, neo4j_similarity)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (claim_id) DO UPDATE SET
+                                    internet_original_url = EXCLUDED.internet_original_url,
+                                    neo4j_stance = EXCLUDED.neo4j_stance;
+                            """, (
+                                claim_id, original_url, original_name,
+                                original_date, is_our_url_original,
+                                final_stance,
+                                neo4j_result["matched_claim_id"],
+                                neo4j_result["similarity"]
+                            ))
+                        write_conn.commit()
 
-                print(f"      -> [W-{worker_id}] Stance: {final_stance} | Score: {new_score:.2f} | Route: {routing}")
+                    print(f"      -> [W-{worker_id}] Stance: {final_stance} | Score: {new_score:.2f} | Route: {routing}")
 
-                # ── E. Fire new ingestion if original is not ours ────────
-                if not is_our_url_original and original_url and original_url != ingest_url:
-                    with psycopg2.connect(DATABASE_URL) as ingest_conn:
-                        fire_new_ingestion(ingest_conn, original_url, original_name)
+                    # ── E. Fire new ingestion if original is not ours ────────
+                    if not is_our_url_original and original_url and original_url != ingest_url:
+                        with psycopg2.connect(DATABASE_URL) as ingest_conn:
+                            fire_new_ingestion(ingest_conn, original_url, original_name)
 
-                items_processed += 1
-                time.sleep(1.5)  # Respect Serper rate limits
+                    items_processed += 1
+                    time.sleep(1.5)  # Respect Serper rate limits
 
-            except Exception as loop_err:
-                print(f"  [ERROR W-{worker_id} Loop] {loop_err}. Rolling back to keep in queue.")
-                try:
-                    with psycopg2.connect(DATABASE_URL) as rollback_conn:
-                        rollback_conn.rollback()
-                except Exception:
-                    pass
-                time.sleep(10)
+                except Exception as loop_err:
+                    print(f"  [ERROR W-{worker_id} Loop] {loop_err}. Rolling back to keep in queue.")
+                    try:
+                        with psycopg2.connect(DATABASE_URL) as rollback_conn:
+                            rollback_conn.rollback()
+                    except Exception:
+                        pass
+                    time.sleep(10)
     except Exception as fatal_e:
         print(f"[FATAL W-{worker_id}] {fatal_e}")
 

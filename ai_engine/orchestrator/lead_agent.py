@@ -285,7 +285,7 @@ Prefer queries that surface NEW information not already captured in the existing
 Use advanced search operators (site:, "exact phrase", AND/OR) if helpful.
 """
     try:
-        plan: LeadQueryPlan = llm_pool.chat_completions_create(
+        plan = llm_pool.chat_completions_create(
             model="TIER_HEAVY",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -294,7 +294,14 @@ Use advanced search operators (site:, "exact phrase", AND/OR) if helpful.
             response_model=LeadQueryPlan,
             temperature=0.3,
         )
-        queries = plan.queries
+        if isinstance(plan, dict):
+            queries = plan.get("queries") or []
+        elif hasattr(plan, "queries"):
+            queries = getattr(plan, "queries") or []
+        else:
+            queries = []
+        if not queries:
+            queries = [f'"{entity}"']
     except Exception as e:
         print(f"[LeadAgent] LLM query generation failed: {e}")
         queries = [f'"{entity}"']

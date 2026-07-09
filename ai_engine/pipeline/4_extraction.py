@@ -129,8 +129,21 @@ def load_extraction_json(raw_text: Optional[str]):
         raw_text_python = re.sub(r"\bnull\b", "None", raw_text)
         raw_text_python = re.sub(r"\btrue\b", "True", raw_text_python)
         raw_text_python = re.sub(r"\bfalse\b", "False", raw_text_python)
+        
+        # Aggressively try to close the array and object if they were left open
+        if raw_text_python.count('[') > raw_text_python.count(']'):
+            raw_text_python += ']'
+        if raw_text_python.count('{') > raw_text_python.count('}'):
+            raw_text_python += '}'
+            
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] JSON fallback repaired string:\n{raw_text_python}")
-        return ast.literal_eval(raw_text_python)
+        try:
+            return ast.literal_eval(raw_text_python)
+        except SyntaxError:
+            # Last ditch effort to close it correctly assuming structure: {"claims": [ ... ]}
+            if raw_text_python.strip().endswith("}") and '"claims": [' in raw_text_python:
+                raw_text_python = raw_text_python + "]}"
+            return ast.literal_eval(raw_text_python)
 
 
 def verify_cross_modal(claim_text: str, article_id: int, cursor) -> tuple[float | None, float | None]:
@@ -166,373 +179,342 @@ def verify_cross_modal(claim_text: str, article_id: int, cursor) -> tuple[float 
 
 def extraction_worker(worker_id):
     try:
-        items_processed = 0
+        for __phase, (__limit, __filter_clause) in enumerate([
+            (100, "AND ru.metadata->>'investigation_id' IS NOT NULL"),
+            (20, "AND ru.metadata->>'investigation_id' IS NULL")
+        ]):
+            items_processed = 0
         
-        while items_processed < 20:
-            try:
-                # 1. Fetch Job and Immediately Close Connection
-                conn = psycopg2.connect(DATABASE_URL)
-                with conn.cursor() as cursor:
-                    # Mark as PROCESSING_EXTRACTION to prevent other workers from grabbing it,
-                    # while releasing the FOR UPDATE lock immediately upon commit.
-                    cursor.execute("""
-                        WITH selected AS (
-                            SELECT a.id FROM raw_articles a
-                            JOIN raw_urls ru ON a.url_id = ru.id
-                            WHERE a.status = 'PENDING_EXTRACTION'
-                            ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, a.id ASC
-                            LIMIT 1 FOR UPDATE OF a SKIP LOCKED
-                        ),
-                        updated AS (
-                            UPDATE raw_articles SET status = 'PROCESSING_EXTRACTION'
-                            WHERE id = (SELECT id FROM selected)
-                            RETURNING id, title, author, publish_date, raw_text, url_id
-                        )
-                        SELECT u.id, u.title, u.author, u.publish_date, u.raw_text, s.epistemic_trust_score, urls.metadata
-                        FROM updated u
-                        JOIN raw_urls urls ON u.url_id = urls.id
-                        JOIN sources s ON urls.source_id = s.id;
-                    """)
-                    
-                    row = cursor.fetchone()
-                
-                if not row:
-                    conn.rollback()
-                    conn.close()
-                    break 
-                
-                conn.commit()
-                conn.close()
-                    
-                article_id, title, author, pub_date, raw_text, trust_score, raw_metadata = row
-                print(f"  [W-{worker_id}] Extracting Claims from: {title[:50]}...")
-
-                # Pass pub_date as the context
-                date_context = str(pub_date) if pub_date else "Unknown"
-                
-                # Determine source tier based on epistemic_trust_score
-                source_tier = 3
-                if trust_score and trust_score >= 0.80:
-                    source_tier = 1
-                elif trust_score and trust_score >= 0.50:
-                    source_tier = 2
-                    
-                trust_val = trust_score if trust_score is not None else 0.40
-
-                # Use very small chunks so the model naturally finishes generation quickly, avoiding the 5-min timeout limit.
-                CHUNK_SIZE = 800
-                OVERLAP = 100
-                
-                text_to_process = raw_text or ""
-                
-                # --- NEW: VLM SCENE EXTRACTION ---
-                visual_scene_desc = ""
-                meta_dict = raw_metadata if isinstance(raw_metadata, dict) else (json.loads(raw_metadata) if hasattr(raw_metadata, 'strip') else {})
-                keyframes = meta_dict.get('video_keyframes', [])
-                if keyframes:
-                    print(f"      -> [VISION CORE] Video keyframes detected! Asking VLM to narrate the visual scene...")
-                    try:
-                        vlm_content = [{"type": "text", "text": "You are a forensic analyst. Describe exactly what is happening in this sequence of video frames chronologically. Mention identities, events, and any text visible on screen. Keep it highly descriptive but concise."}]
-                        for kf in keyframes[:4]: # Max 4 to prevent payload bloat
-                            vlm_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kf}"}})  # type: ignore[arg-type]
-                            
-                        vlm_resp = groq_pool.chat_completions_create(
-                            model='TIER_VISION', # Abstract tier routing
-                            messages=[{"role": "user", "content": vlm_content}],
-                            max_retries=2,
-                            temperature=0.1
-                        )
-                        # Raw text responses don't use Pydantic models so we pluck the text directly
-                        visual_scene_desc = vlm_resp.choices[0].message.content
-                        print(f"      -> [VLM SUCCESS] Scene Narration: {visual_scene_desc[:60]}...")
-                        text_to_process += f"\n\n[VISUAL FORENSIC NARRATIVE]\n{visual_scene_desc}"
-                    except Exception as vlm_e:
-                        print(f"      -> [VLM FAILED] Could not extract visual narrative: {vlm_e}")
-                        
-                # Smart Chunking based on sentences to avoid cutting mid-sentence
-                TARGET_CHUNK_SIZE = 500
-                chunks = []
-                
-                if text_to_process.startswith("[SUMMARY]"):
-                    chunks.append(text_to_process)
-                else:
-                    sentences = text_to_process.split(". ")
-                    current_chunk = ""
-                    for sentence in sentences:
-                        sentence = sentence.strip()
-                        if not sentence:
-                            continue
-                        if not sentence.endswith("."):
-                            sentence += "."
-                        
-                        if len(current_chunk) + len(sentence) > TARGET_CHUNK_SIZE and current_chunk:
-                            chunks.append(current_chunk.strip())
-                            current_chunk = sentence + " "
-                        else:
-                            current_chunk += sentence + " "
-                    if current_chunk.strip():
-                        chunks.append(current_chunk.strip())
-                        
-                    # Safety cap on chunks
-                    chunks = chunks[:20]
-                
-                if not chunks:
-                    chunks = [""]
-
-                extraction_failed_permanently = False
-                retryable_failure = False
-
-                # We no longer hold save_conn open across the inference loop.
-                inserted_count = 0
-                duplicate_count = 0
-                if True:
-                    for chunk_idx, chunk_text in enumerate(chunks):
-                        if len(chunks) > 1:
-                            print(f"      -> Processing chunk {chunk_idx+1}/{len(chunks)}...")
-                        prompt = generate_extraction_prompt(title, author, date_context, chunk_text)
-
-                        CHUNK_RETRIES = 3
-                        chunk_attempt = 0
-                        chunk_succeeded = False
-
-                        while chunk_attempt < CHUNK_RETRIES and not chunk_succeeded:
-                            chunk_attempt += 1
-                            try:
-                                response_obj = groq_pool.chat_completions_create(
-                                    model='TIER_HEAVY',
-                                    messages=[
-                                        {"role": "system", "content": "You are a specialized Knowledge Graph extraction engine. You must output ONLY valid JSON without any markdown formatting or code blocks."},
-                                        {"role": "user", "content": prompt}
-                                    ],
-                                    temperature=0.1,
-                                    max_tokens=500,
-                                )
-                                raw_text = groq_pool.extract_text_from_response(response_obj)
-                                if raw_text is None:
-                                    raise ValueError(f"Unable to extract text from provider response: {type(response_obj)}")
-
-                                parsed_json = load_extraction_json(raw_text)
-                                if "claims" in parsed_json:
-                                    claim_list = ClaimExtractionList(claims=parsed_json["claims"])
-                                    save_conn = psycopg2.connect(DATABASE_URL)
-                                    save_conn.autocommit = False
-                                    cursor = save_conn.cursor()
-                                    # Log parsed claims before any DB commit for debugging
-                                    try:
-                                        claims_serializable = [c.dict() if hasattr(c, 'dict') else c for c in claim_list.claims]
-                                        claims_preview = json.dumps(claims_serializable, ensure_ascii=False)
-                                        # Truncate to avoid extremely long log lines
-                                        max_preview = int(os.getenv('CLAIM_PREVIEW_MAX', '4000'))
-                                        if len(claims_preview) > max_preview:
-                                            claims_preview = claims_preview[:max_preview] + '...'
-                                        print(f"      [CLAIMS BEFORE COMMIT] Article {article_id} Chunk {chunk_idx+1} Claims: {claims_preview}")
-                                    except Exception as _e:
-                                        print(f"      [CLAIMS LOG ERROR] Could not serialize claims: {_e}")
-                                    for claim in claim_list.claims:
-                                        clean_subj = str(claim.subject or "")[:70]
-                                        clean_pred = str(claim.predicate or "")[:70]
-                                        clean_obj = str(claim.object_entity or "")[:70]
-
-                                        if not clean_subj or not clean_pred or not clean_obj:
-                                            continue
-
-                                        claim_str = f"{clean_subj} {clean_pred} {clean_obj}"
-                                        cross_modal_sim, synth_prob = verify_cross_modal(claim_str, article_id, cursor)
-
-                                        adjusted_conf = float(claim.extraction_confidence or 0.5)
-                                        if cross_modal_sim is not None:
-                                            if cross_modal_sim < 0.15:
-                                                adjusted_conf *= 0.4
-                                                print(f"      -> [VISION CONTRADICTION] Cross-Modal Sim: {cross_modal_sim:.3f} | Conf dropped to {adjusted_conf:.2f}")
-                                            elif cross_modal_sim > 0.85:
-                                                adjusted_conf = min(1.0, adjusted_conf * 1.25)
-                                                print(f"      -> [VISION SUPREMACY] True Match Sim: {cross_modal_sim:.3f} | Conf boosted to {adjusted_conf:.2f}")
-
-                                        preliminary_score = scorer.calculate_epistemic_score(
-                                            extraction_confidence=adjusted_conf,
-                                            source_tier=source_tier,
-                                            support_count=0,
-                                            contradiction_weights=[],
-                                            days_since_extracted=0,
-                                            historical_source_reliability=trust_val,
-                                            media_synthetic_prob=synth_prob
-                                        )
-
-                                        ai_metadata = json.dumps({
-                                            "extraction_confidence": claim.extraction_confidence,
-                                            "adjusted_visual_confidence": adjusted_conf,
-                                            "cross_modal_similarity": cross_modal_sim,
-                                            "synthetic_probability": synth_prob,
-                                            "is_verifiable": claim.is_verifiable,
-                                            "epistemic_domain": getattr(claim, "epistemic_domain", "EMPIRICAL")
-                                        })
-
-                                        THREAT_KEYWORDS = ["explosion", "strike", "kidnapping", "breach", "fire", "attack", "casualty", "riot", "terror", "lockdown"]
-                                        is_threat = False
-                                        if any(kw in clean_pred.lower() for kw in THREAT_KEYWORDS) or any(kw in clean_obj.lower() for kw in THREAT_KEYWORDS):
-                                            is_threat = True
-
-                                        if is_threat:
-                                            cursor.execute("SELECT 1 FROM extracted_claims WHERE subject = %s AND predicate = %s AND object_entity = %s LIMIT 1", (clean_subj, clean_pred, clean_obj))
-                                            if not cursor.fetchone():
-                                                print(f"      [🚨 THREAT PRIORITY ALERT] Zero-Day Threat Detected: {clean_subj} {clean_pred} {clean_obj}")
-                                                webhook_url = os.getenv("THREAT_ALERT_WEBHOOK")
-                                                if webhook_url:
-                                                    try:
-                                                        import requests
-                                                        requests.post(webhook_url, json={
-                                                            "text": f"🚨 UNVERIFIED THREAT DETECTED: {clean_subj} {clean_pred} {clean_obj}\nSource trust: {trust_val}\nRequires immediate human review."
-                                                        }, timeout=3)
-                                                    except Exception as alert_e:
-                                                        print(f"      [Alert Error] {alert_e}")
-
-                                        # Attempt idempotent insert using unique index and ON CONFLICT
-                                        cursor.execute("SAVEPOINT claim_insert")
-                                        try:
-                                            cursor.execute("""
-                                                INSERT INTO extracted_claims (
-                                                    article_id, subject, predicate, object_entity,
-                                                    temporal_anchor, spatial_anchor, is_verifiable, quote_context,
-                                                    extraction_confidence, epistemic_score, status, pipeline_stage,
-                                                    model_version, prompt_version, ai_metadata
-                                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PROCESSING',
-                                                          'STAGE_4_RESOLUTION', %s, %s, %s)
-                                                ON CONFLICT (article_id, subject, predicate, object_entity) DO NOTHING
-                                                RETURNING id
-                                            """, (
-                                                article_id, clean_subj, clean_pred, clean_obj,
-                                                str(claim.temporal_anchor or "")[:255],
-                                                str(claim.spatial_anchor or "")[:255], bool(claim.is_verifiable), str(claim.quote_context or ""),
-                                                float(claim.extraction_confidence or 0.5), preliminary_score,
-                                                'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata
-                                            ))
-                                            ins_row = cursor.fetchone()
-                                            if ins_row:
-                                                inserted_count += 1
-                                                print(f"      [DB INSERT] Inserted claim id={ins_row[0]} for article {article_id}")
-                                            else:
-                                                duplicate_count += 1
-                                                print(f"      [DB SKIP] Duplicate/no-op insert for article {article_id}: {clean_subj} | {clean_pred} | {clean_obj}")
-                                        except Exception as db_e:
-                                            err_str = str(db_e)
-                                            constraint_name = None
-                                            pgcode = None
-                                            try:
-                                                constraint_name = db_e.diag.constraint_name
-                                            except Exception:
-                                                pass
-                                            try:
-                                                pgcode = db_e.pgcode
-                                            except Exception:
-                                                pass
-                                            cursor.execute("ROLLBACK TO SAVEPOINT claim_insert")
-                                            print(f"      [DB ERROR] Insert failed for article {article_id}: {err_str}")
-                                            if constraint_name:
-                                                print(f"      [DB ERROR] Constraint name: {constraint_name}")
-                                            if pgcode:
-                                                print(f"      [DB ERROR] SQLSTATE: {pgcode}")
-
-                                            if "no unique or exclusion constraint matching the on conflict specification" in err_str.lower():
-                                                print(f"      [DB ERROR] Missing unique/exclusion constraint for ON CONFLICT. Attempting to create idx_claim_unique.")
-                                                try:
-                                                    cursor.execute("DROP INDEX IF EXISTS idx_claim_unique;")
-                                                    cursor.execute("CREATE UNIQUE INDEX idx_claim_unique ON extracted_claims(article_id, subject, predicate, object_entity);")
-                                                    print("      [DB INFO] Created idx_claim_unique successfully.")
-                                                    cursor.execute("SAVEPOINT claim_insert")
-                                                    cursor.execute("""
-                                                        INSERT INTO extracted_claims (
-                                                            article_id, subject, predicate, object_entity,
-                                                            temporal_anchor, spatial_anchor, is_verifiable, quote_context,
-                                                            extraction_confidence, epistemic_score, status, pipeline_stage,
-                                                            model_version, prompt_version, ai_metadata
-                                                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PROCESSING',
-                                                                  'STAGE_4_RESOLUTION', %s, %s, %s)
-                                                        ON CONFLICT (article_id, subject, predicate, object_entity) DO NOTHING
-                                                        RETURNING id
-                                                    """, (
-                                                        article_id, clean_subj, clean_pred, clean_obj,
-                                                        str(claim.temporal_anchor or "")[:255],
-                                                        str(claim.spatial_anchor or "")[:255], bool(claim.is_verifiable), str(claim.quote_context or ""),
-                                                        float(claim.extraction_confidence or 0.5), preliminary_score,
-                                                        'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata
-                                                    ))
-                                                    ins_row = cursor.fetchone()
-                                                    if ins_row:
-                                                        inserted_count += 1
-                                                        print(f"      [DB INSERT] Inserted claim id={ins_row[0]} for article {article_id}")
-                                                    else:
-                                                        duplicate_count += 1
-                                                        print(f"      [DB SKIP] Duplicate/no-op insert for article {article_id}: {clean_subj} | {clean_pred} | {clean_obj}")
-                                                except Exception as retry_e:
-                                                    print(f"      [DB ERROR] Retry insert after index creation failed for article {article_id}: {retry_e}")
-                                            # otherwise continue silently to next claim
-                                        finally:
-                                            try:
-                                                cursor.execute("RELEASE SAVEPOINT claim_insert")
-                                            except Exception:
-                                                pass
-
-                                        # Commit after successful chunk
-                                        save_conn.commit()
-                                        cursor.close()
-                                        save_conn.close()
-                                chunk_succeeded = True
-                            except Exception as e:
-                                try:
-                                    save_conn.close()
-                                except:
-                                    pass
-                                print(f"      [LLM/JSON ERROR Chunk {chunk_idx+1} Attempt {chunk_attempt}] {type(e).__name__}: {str(e)[:200]}...")
-                                err_str = str(e).lower()
-                                is_rate_limit = '429' in err_str or 'rate limit' in err_str or 'cooling' in err_str or 'too many requests' in err_str
-                                is_incomplete_output = 'incompleteoutputexception' in err_str or 'max_tokens' in err_str or 'length limit' in err_str
-
-                                if is_rate_limit or is_incomplete_output:
-                                    retryable_failure = True
-                                    break
-                                # If we still have retries left, try again after brief backoff
-                                if chunk_attempt < CHUNK_RETRIES:
-                                    time.sleep(2)
-                                    continue
-                                else:
-                                    extraction_failed_permanently = True
-                                    print(f"      [CHUNK FAILED] Chunk {chunk_idx+1} failed after {CHUNK_RETRIES} attempts.")
-                                    break
-
-                        if retryable_failure or extraction_failed_permanently:
-                            break
-
-                # (save_conn is now closed per-chunk)
-                pass
-                # Update article status based on outcome
+            while items_processed < __limit:
                 try:
-                    upd_conn = psycopg2.connect(DATABASE_URL)
-                    with upd_conn.cursor() as ucur:
-                        if retryable_failure:
-                            print(f"      [RETRYABLE] Not incrementing attempts for {article_id}. Will retry later.")
-                            ucur.execute("UPDATE raw_articles SET status = 'PENDING_EXTRACTION' WHERE id = %s", (article_id,))
-                        elif extraction_failed_permanently:
-                            ucur.execute("""
-                                UPDATE raw_articles
-                                SET extraction_attempts = COALESCE(extraction_attempts, 0) + 1,
-                                    status = CASE WHEN COALESCE(extraction_attempts, 0) + 1 >= 3 THEN 'FAILED_EXTRACTION' ELSE 'PENDING_EXTRACTION' END
-                                WHERE id = %s
-                            """, (article_id,))
-                            print(f"      [FAILED] Article {article_id} marked as failed attempt.")
-                        else:
-                            ucur.execute("UPDATE raw_articles SET status = 'EXTRACTED' WHERE id = %s", (article_id,))
-                    upd_conn.commit()
-                    upd_conn.close()
+                    # 1. Fetch Job and Immediately Close Connection
+                    conn = psycopg2.connect(DATABASE_URL)
+                    with conn.cursor() as cursor:
+                        # Mark as PROCESSING_EXTRACTION to prevent other workers from grabbing it,
+                        # while releasing the FOR UPDATE lock immediately upon commit.
+                        cursor.execute(f"""
+                            WITH selected AS (
+                                SELECT a.id FROM raw_articles a
+                                JOIN raw_urls ru ON a.url_id = ru.id
+                                WHERE a.status = 'PENDING_EXTRACTION'
+                                {__filter_clause}
+                                    ORDER BY a.id ASC
+                                LIMIT 1 FOR UPDATE OF a SKIP LOCKED
+                            ),
+                            updated AS (
+                                UPDATE raw_articles SET status = 'PROCESSING_EXTRACTION'
+                                WHERE id = (SELECT id FROM selected)
+                                RETURNING id, title, author, publish_date, raw_text, url_id
+                            )
+                            SELECT u.id, u.title, u.author, u.publish_date, u.raw_text, s.epistemic_trust_score, urls.metadata
+                            FROM updated u
+                            JOIN raw_urls urls ON u.url_id = urls.id
+                            JOIN sources s ON urls.source_id = s.id;
+                        """)
+                    
+                        row = cursor.fetchone()
+                
+                    if not row:
+                        conn.rollback()
+                        conn.close()
+                        break 
+                
+                    conn.commit()
+                    conn.close()
+                    
+                    article_id, title, author, pub_date, raw_text, trust_score, raw_metadata = row
+                    print(f"  [W-{worker_id}] Extracting Claims from: {title[:50]}...")
+
+                    # Pass pub_date as the context
+                    date_context = str(pub_date) if pub_date else "Unknown"
+                
+                    # Determine source tier based on epistemic_trust_score
+                    source_tier = 3
+                    if trust_score and trust_score >= 0.80:
+                        source_tier = 1
+                    elif trust_score and trust_score >= 0.50:
+                        source_tier = 2
+                    
+                    trust_val = trust_score if trust_score is not None else 0.40
+
+                    # Use very small chunks so the model naturally finishes generation quickly, avoiding the 5-min timeout limit.
+                    CHUNK_SIZE = 800
+                    OVERLAP = 100
+                
+                    text_to_process = raw_text or ""
+                
+                    # --- NEW: VLM SCENE EXTRACTION ---
+                    visual_scene_desc = ""
+                    meta_dict = raw_metadata if isinstance(raw_metadata, dict) else (json.loads(raw_metadata) if hasattr(raw_metadata, 'strip') else {})
+                    keyframes = meta_dict.get('video_keyframes', [])
+                    if keyframes:
+                        print(f"      -> [VISION CORE] Video keyframes detected! Asking VLM to narrate the visual scene...")
+                        try:
+                            vlm_content = [{"type": "text", "text": "You are a forensic analyst. Describe exactly what is happening in this sequence of video frames chronologically. Mention identities, events, and any text visible on screen. Keep it highly descriptive but concise."}]
+                            for kf in keyframes[:4]: # Max 4 to prevent payload bloat
+                                vlm_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kf}"}})  # type: ignore[arg-type]
+                            
+                            vlm_resp = groq_pool.chat_completions_create(
+                                model='TIER_VISION', # Abstract tier routing
+                                messages=[{"role": "user", "content": vlm_content}],
+                                max_retries=2,
+                                temperature=0.1
+                            )
+                            # Raw text responses don't use Pydantic models so we pluck the text directly
+                            visual_scene_desc = vlm_resp.choices[0].message.content
+                            print(f"      -> [VLM SUCCESS] Scene Narration: {visual_scene_desc[:60]}...")
+                            text_to_process += f"\n\n[VISUAL FORENSIC NARRATIVE]\n{visual_scene_desc}"
+                        except Exception as vlm_e:
+                            print(f"      -> [VLM FAILED] Could not extract visual narrative: {vlm_e}")
+                        
+                    # Smart Chunking based on sentences to avoid cutting mid-sentence
+                    TARGET_CHUNK_SIZE = 500
+                    chunks = []
+                
+                    if text_to_process.startswith("[SUMMARY]"):
+                        chunks.append(text_to_process)
+                    else:
+                        sentences = text_to_process.split(". ")
+                        current_chunk = ""
+                        for sentence in sentences:
+                            sentence = sentence.strip()
+                            if not sentence:
+                                continue
+                            if not sentence.endswith("."):
+                                sentence += "."
+                        
+                            if len(current_chunk) + len(sentence) > TARGET_CHUNK_SIZE and current_chunk:
+                                chunks.append(current_chunk.strip())
+                                current_chunk = sentence + " "
+                            else:
+                                current_chunk += sentence + " "
+                        if current_chunk.strip():
+                            chunks.append(current_chunk.strip())
+                        
+                        # Safety cap on chunks
+                        chunks = chunks[:20]
+                
+                    if not chunks:
+                        chunks = [""]
+
+                    extraction_failed_permanently = False
+                    retryable_failure = False
+
+                    # We no longer hold save_conn open across the inference loop.
+                    inserted_count = 0
+                    duplicate_count = 0
+                    all_article_claims = []
+                    if True:
+                        for chunk_idx, chunk_text in enumerate(chunks):
+                            if len(chunks) > 1:
+                                print(f"      -> Processing chunk {chunk_idx+1}/{len(chunks)}...")
+                            prompt = generate_extraction_prompt(title, author, date_context, chunk_text)
+
+                            CHUNK_RETRIES = 3
+                            chunk_attempt = 0
+                            chunk_succeeded = False
+
+                            while chunk_attempt < CHUNK_RETRIES and not chunk_succeeded:
+                                chunk_attempt += 1
+                                try:
+                                    response_obj = groq_pool.chat_completions_create(
+                                        model='TIER_HEAVY',
+                                        messages=[
+                                            {"role": "system", "content": "You are a specialized Knowledge Graph extraction engine. You must output ONLY valid JSON without any markdown formatting or code blocks."},
+                                            {"role": "user", "content": prompt}
+                                        ],
+                                        temperature=0.1,
+                                        max_tokens=4000,
+                                        response_format={"type": "json_object"}
+                                    )
+                                    raw_text = groq_pool.extract_text_from_response(response_obj)
+                                    if raw_text is None:
+                                        raise ValueError(f"Unable to extract text from provider response: {type(response_obj)}")
+
+                                    parsed_json = load_extraction_json(raw_text)
+                                    if "claims" in parsed_json:
+                                        claim_list = ClaimExtractionList(claims=parsed_json["claims"])
+                                        # Store claims in memory to commit transactionally later
+                                        all_article_claims.extend([(chunk_idx, c) for c in claim_list.claims])
+                                    
+                                        try:
+                                            claims_serializable = [c.dict() if hasattr(c, 'dict') else c for c in claim_list.claims]
+                                            claims_preview = json.dumps(claims_serializable, ensure_ascii=False)
+                                            max_preview = int(os.getenv('CLAIM_PREVIEW_MAX', '4000'))
+                                            if len(claims_preview) > max_preview:
+                                                claims_preview = claims_preview[:max_preview] + '...'
+                                            print(f"      [CLAIMS PARSED] Article {article_id} Chunk {chunk_idx+1} Claims: {claims_preview}")
+                                        except Exception as _e:
+                                            pass
+                                    chunk_succeeded = True
+                                except Exception as e:
+                                    print(f"      [LLM/JSON ERROR Chunk {chunk_idx+1} Attempt {chunk_attempt}] {type(e).__name__}: {str(e)[:200]}...")
+                                    err_str = str(e).lower()
+                                    is_rate_limit = '429' in err_str or 'rate limit' in err_str or 'cooling' in err_str or 'too many requests' in err_str
+                                    is_incomplete_output = 'incompleteoutputexception' in err_str or 'max_tokens' in err_str or 'length limit' in err_str
+
+                                    if is_rate_limit or is_incomplete_output:
+                                        retryable_failure = True
+                                        break
+                                    # If we still have retries left, try again after brief backoff
+                                    if chunk_attempt < CHUNK_RETRIES:
+                                        time.sleep(2)
+                                        continue
+                                    else:
+                                        extraction_failed_permanently = True
+                                        print(f"      [CHUNK FAILED] Chunk {chunk_idx+1} failed after {CHUNK_RETRIES} attempts.")
+                                        break
+
+                            if retryable_failure or extraction_failed_permanently:
+                                break
+
+                    if not retryable_failure and not extraction_failed_permanently and all_article_claims:
+                        save_conn = None
+                        try:
+                            save_conn = psycopg2.connect(DATABASE_URL)
+                            save_conn.autocommit = False
+                            cursor = save_conn.cursor()
+                            for _chunk_idx, claim in all_article_claims:
+                                clean_subj = str(claim.subject or "")[:70]
+                                clean_pred = str(claim.predicate or "")[:70]
+                                clean_obj = str(claim.object_entity or "")[:70]
+
+                                if not clean_subj or not clean_pred or not clean_obj:
+                                    continue
+
+                                claim_str = f"{clean_subj} {clean_pred} {clean_obj}"
+                                cross_modal_sim, synth_prob = verify_cross_modal(claim_str, article_id, cursor)
+
+                                adjusted_conf = float(claim.extraction_confidence or 0.5)
+                                if cross_modal_sim is not None:
+                                    if cross_modal_sim < 0.15:
+                                        adjusted_conf *= 0.4
+                                        print(f"      -> [VISION CONTRADICTION] Cross-Modal Sim: {cross_modal_sim:.3f} | Conf dropped to {adjusted_conf:.2f}")
+                                    elif cross_modal_sim > 0.85:
+                                        adjusted_conf = min(1.0, adjusted_conf * 1.25)
+                                        print(f"      -> [VISION SUPREMACY] True Match Sim: {cross_modal_sim:.3f} | Conf boosted to {adjusted_conf:.2f}")
+
+                                preliminary_score = scorer.calculate_epistemic_score(
+                                    extraction_confidence=adjusted_conf,
+                                    source_tier=source_tier,
+                                    support_count=0,
+                                    contradiction_weights=[],
+                                    days_since_extracted=0,
+                                    historical_source_reliability=trust_val,
+                                    media_synthetic_prob=synth_prob
+                                )
+
+                                ai_metadata = json.dumps({
+                                    "extraction_confidence": claim.extraction_confidence,
+                                    "adjusted_visual_confidence": adjusted_conf,
+                                    "cross_modal_similarity": cross_modal_sim,
+                                    "synthetic_probability": synth_prob,
+                                    "is_verifiable": claim.is_verifiable,
+                                    "epistemic_domain": getattr(claim, "epistemic_domain", "EMPIRICAL")
+                                })
+
+                                THREAT_KEYWORDS = ["explosion", "strike", "kidnapping", "breach", "fire", "attack", "casualty", "riot", "terror", "lockdown"]
+                                is_threat = any(kw in clean_pred.lower() for kw in THREAT_KEYWORDS) or any(kw in clean_obj.lower() for kw in THREAT_KEYWORDS)
+
+                                if is_threat:
+                                    cursor.execute("SELECT 1 FROM extracted_claims WHERE subject = %s AND predicate = %s AND object_entity = %s LIMIT 1", (clean_subj, clean_pred, clean_obj))
+                                    if not cursor.fetchone():
+                                        print(f"      [🚨 THREAT PRIORITY ALERT] Zero-Day Threat Detected: {clean_subj} {clean_pred} {clean_obj}")
+                                        webhook_url = os.getenv("THREAT_ALERT_WEBHOOK")
+                                        if webhook_url:
+                                            try:
+                                                import requests
+                                                requests.post(webhook_url, json={
+                                                    "text": f"🚨 UNVERIFIED THREAT DETECTED: {clean_subj} {clean_pred} {clean_obj}\nSource trust: {trust_val}\nRequires immediate human review."
+                                                }, timeout=3)
+                                            except Exception as alert_e:
+                                                print(f"      [Alert Error] {alert_e}")
+
+                                cursor.execute("SAVEPOINT claim_insert")
+                                try:
+                                    cursor.execute(f"""
+                                        INSERT INTO extracted_claims (
+                                            article_id, subject, predicate, object_entity,
+                                            temporal_anchor, spatial_anchor, is_verifiable, quote_context,
+                                            extraction_confidence, epistemic_score, status, pipeline_stage,
+                                            model_version, prompt_version, ai_metadata
+                                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PROCESSING',
+                                                  'STAGE_4_RESOLUTION', %s, %s, %s)
+                                        ON CONFLICT (article_id, subject, predicate, object_entity) DO NOTHING
+                                        RETURNING id
+                                    """, (
+                                        article_id, clean_subj, clean_pred, clean_obj,
+                                        str(claim.temporal_anchor or "")[:255],
+                                        str(claim.spatial_anchor or "")[:255], bool(claim.is_verifiable), str(claim.quote_context or ""),
+                                        float(claim.extraction_confidence or 0.5), preliminary_score,
+                                        'gemma-4-heavy-tier/router', PROMPT_VERSION, ai_metadata
+                                    ))
+                                    ins_row = cursor.fetchone()
+                                    if ins_row:
+                                        inserted_count += 1
+                                    else:
+                                        duplicate_count += 1
+                                except Exception as db_e:
+                                    err_str_db = str(db_e)
+                                    cursor.execute("ROLLBACK TO SAVEPOINT claim_insert")
+                                    print(f"      [DB ERROR] Insert failed for article {article_id}: {err_str_db}")
+                                    if "no unique or exclusion constraint" in err_str_db.lower():
+                                        try:
+                                            cursor.execute("DROP INDEX IF EXISTS idx_claim_unique;")
+                                            cursor.execute("CREATE UNIQUE INDEX idx_claim_unique ON extracted_claims(article_id, subject, predicate, object_entity);")
+                                        except Exception:
+                                            pass
+                                finally:
+                                    try:
+                                        cursor.execute("RELEASE SAVEPOINT claim_insert")
+                                    except Exception:
+                                        pass
+
+                            # Single transactional commit for ALL chunks — atomic
+                            save_conn.commit()
+                            cursor.close()
+                            save_conn.close()
+                        except Exception as fatal_db_e:
+                            print(f"      [FATAL DB ERROR] Transaction failed for article {article_id}: {fatal_db_e}")
+                            extraction_failed_permanently = True
+                            if save_conn:
+                                try:
+                                    save_conn.rollback()
+                                    save_conn.close()
+                                except Exception:
+                                    pass
+
+                    # (save_conn is now closed per-chunk)
+                    pass
+                    # Update article status based on outcome
+                    try:
+                        upd_conn = psycopg2.connect(DATABASE_URL)
+                        with upd_conn.cursor() as ucur:
+                            if retryable_failure:
+                                print(f"      [RETRYABLE] Not incrementing attempts for {article_id}. Will retry later.")
+                                ucur.execute("UPDATE raw_articles SET status = 'PENDING_EXTRACTION' WHERE id = %s", (article_id,))
+                            elif extraction_failed_permanently:
+                                ucur.execute("""
+                                    UPDATE raw_articles
+                                    SET extraction_attempts = COALESCE(extraction_attempts, 0) + 1,
+                                        status = CASE WHEN COALESCE(extraction_attempts, 0) + 1 >= 3 THEN 'FAILED_EXTRACTION' ELSE 'PENDING_EXTRACTION' END
+                                    WHERE id = %s
+                                """, (article_id,))
+                                print(f"      [FAILED] Article {article_id} marked as failed attempt.")
+                            else:
+                                ucur.execute("UPDATE raw_articles SET status = 'EXTRACTED' WHERE id = %s", (article_id,))
+                        upd_conn.commit()
+                        upd_conn.close()
+                    except Exception as e:
+                        print(f"      [DB ERROR] Could not update article status: {e}")
+
+                    print(f"      -> [SUCCESS W-{worker_id}] Inserted {inserted_count} atomic claims for article {article_id}.")
+
+                    items_processed = items_processed + 1  # type: ignore
+                    time.sleep(2) # Reduced sleep thanks to Groq pool rotation
                 except Exception as e:
-                    print(f"      [DB ERROR] Could not update article status: {e}")
-
-                print(f"      -> [SUCCESS W-{worker_id}] Inserted {inserted_count} atomic claims for article {article_id}.")
-
-                items_processed = items_processed + 1  # type: ignore
-                time.sleep(2) # Reduced sleep thanks to Groq pool rotation
-            except Exception as e:
-                print(f"  [ERROR W-{worker_id} Loop] {e}")
-                time.sleep(2)
+                    print(f"  [ERROR W-{worker_id} Loop] {e}")
+                    time.sleep(2)
         
     except Exception as fatal_e:
         print(f"[FATAL W-{worker_id}] {fatal_e}")

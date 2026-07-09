@@ -192,7 +192,7 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
             if not findings.get("initial_queries"):
                 print(f"[Orchestrator] Investigation #{inv_id}: Running triage...")
                 try:
-                    triage = triage_target(target, neo4j_driver=neo4j_driver)
+                    triage = triage_target(target, neo4j_driver=neo4j_driver, pg_conn=pg_conn)
                     persist_triage(inv_id, triage, pg_conn)
                     if triage.initial_queries and SEARXNG_URL:
                         _inject_initial_queries(inv_id, triage.initial_queries, pg_conn, searxng_source_id)

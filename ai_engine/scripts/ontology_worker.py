@@ -5,6 +5,15 @@ import json
 import sys
 from typing import List
 from pydantic import BaseModel  # type: ignore
+
+# Make console logging safe on Windows terminals that use cp1252 instead of UTF-8.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, 'reconfigure'):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
 # Resolve up to the ai_engine directory so 'utils.groq_pool' becomes importable
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ai_engine_dir = os.path.dirname(current_dir)

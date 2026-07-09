@@ -1,159 +1,171 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-    CartesianGrid,
-    ReferenceLine,
-    ResponsiveContainer,
-    Scatter,
-    ScatterChart,
-    Tooltip,
-    XAxis,
-    YAxis,
-} from 'recharts';
+import React, { useState, useEffect } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../api';
+import { Activity, Info } from 'lucide-react';
 
-const bucketLabels = {
-    '0.0-0.2': '0.0–0.2',
-    '0.2-0.4': '0.2–0.4',
-    '0.4-0.6': '0.4–0.6',
-    '0.6-0.8': '0.6–0.8',
-    '0.8-1.0': '0.8–1.0',
-};
-
-function CalibrationPage() {
-    const [curve, setCurve] = useState([]);
+const CalibrationPage = () => {
+    const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
+    const [error, setError] = useState(null);
 
     useEffect(() => {
-        let cancelled = false;
-
-        const load = async () => {
-            try {
-                setLoading(true);
-                setError('');
-                const response = await api.getCalibrationCurve();
-                const data = Array.isArray(response) ? response : (response?.data ?? []);
-                if (!cancelled) {
-                    setCurve(data);
+        api.getCalibrationCurve()
+            .then(res => {
+                if (res.success && res.data) {
+                    const formattedData = res.data.map(d => ({
+                        ...d,
+                        name: d.bucket,
+                        'Predicted Score': d.predicted_prob,
+                        'Actual True %': d.actual_prob !== null ? d.actual_prob : null,
+                        'Ideal Calibration': d.predicted_prob
+                    }));
+                    setData(formattedData);
+                } else {
+                    setError('Invalid data format received');
                 }
-            } catch (err) {
-                if (!cancelled) {
-                    console.error('Calibration curve load failed', err);
-                    setError(err.message || 'Unable to load calibration data');
-                }
-            } finally {
-                if (!cancelled) {
-                    setLoading(false);
-                }
-            }
-        };
-
-        load();
-        return () => {
-            cancelled = true;
-        };
+            })
+            .catch(err => {
+                console.error(err);
+                setError(err.message);
+            })
+            .finally(() => {
+                setLoading(false);
+            });
     }, []);
 
-    const chartData = useMemo(() => 
-        (curve || [])
-            .filter((item) => item?.actual_prob !== null && item?.actual_prob !== undefined)
-            .map((item) => ({
-                ...item,
-                predicted: Number(item.predicted_prob ?? 0),
-                actual: Number(item.actual_prob ?? 0),
-                label: bucketLabels[item.bucket] || item.bucket,
-            })),
-        [curve]
-    );
+    if (loading) {
+        return (
+            <div style={{ padding: 40, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Activity className="animate-spin" /> Loading calibration data...
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div style={{ padding: 40, color: '#ef4444' }}>
+                Error loading calibration data: {error}
+            </div>
+        );
+    }
+
+    const CustomTooltip = ({ active, payload, label }) => {
+        if (active && payload && payload.length) {
+            const data = payload[0].payload;
+            return (
+                <div style={{ backgroundColor: '#1e293b', border: '1px solid #334155', padding: 12, borderRadius: 8 }}>
+                    <p style={{ margin: '0 0 8px 0', fontWeight: 'bold', color: '#f8fafc' }}>Bucket: {label}</p>
+                    <p style={{ margin: '4px 0', color: '#94a3b8' }}>Total Claims: {data.total_count}</p>
+                    <p style={{ margin: '4px 0', color: '#4ade80' }}>True Claims: {data.true_count}</p>
+                    <p style={{ margin: '4px 0', color: '#f87171' }}>False Claims: {data.false_count}</p>
+                    <hr style={{ borderColor: '#334155', margin: '8px 0' }} />
+                    <p style={{ margin: '4px 0', color: '#38bdf8' }}>Predicted: {(data.predicted_prob * 100).toFixed(1)}%</p>
+                    {data.actual_prob !== null ? (
+                        <p style={{ margin: '4px 0', color: '#a78bfa' }}>Actual: {(data.actual_prob * 100).toFixed(1)}%</p>
+                    ) : (
+                        <p style={{ margin: '4px 0', color: '#64748b' }}>Actual: N/A (No data)</p>
+                    )}
+                </div>
+            );
+        }
+        return null;
+    };
 
     return (
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 20px 48px' }}>
-            <div style={{ marginBottom: 24 }}>
-                <h2 style={{ margin: 0, fontSize: 28, color: '#f8fafc' }}>Epistemic Score Calibration</h2>
-                <p style={{ margin: '8px 0 0', color: '#94a3b8', maxWidth: 760, lineHeight: 1.6 }}>
-                    This public view shows how often claims in each epistemic score bucket turn out to be true in practice.
-                    The curve is a proof-point for buyers that the weighting formula is empirically aligned with observed outcomes.
+        <div style={{ padding: 40, maxWidth: 1000, margin: '0 auto', color: '#f8fafc' }}>
+            <div style={{ marginBottom: 40 }}>
+                <h1 style={{ fontSize: 28, fontWeight: 'bold', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <Activity size={28} color="#3b82f6" />
+                    Epistemic Score Calibration
+                </h1>
+                <p style={{ color: '#94a3b8', fontSize: 16, lineHeight: 1.6, marginBottom: 24 }}>
+                    This visualization empirically demonstrates the accuracy of the Truth Graph's epistemic scoring formula 
+                    (using weights α = 0.4 for prior authority, β = 0.6 for corroborating evidence). 
+                    It compares the <strong>Predicted Score</strong> against the <strong>Actual True Probability</strong> of claims falling into each bucket.
                 </p>
-            </div>
 
-            <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: 24 }}>
-                <div style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 16, padding: 16 }}>
-                    <div style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#38bdf8', marginBottom: 8 }}>Why α = 0.4?</div>
-                    <div style={{ color: '#e2e8f0', lineHeight: 1.6 }}>
-                        The chart lets enterprise buyers see whether the scored confidence reliably tracks the actual rate of truth.
-                        A curve that stays near the diagonal means the formula is well calibrated rather than simply overconfident.
-                    </div>
-                </div>
-                <div style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 16, padding: 16 }}>
-                    <div style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#22c55e', marginBottom: 8 }}>Interpretation</div>
-                    <div style={{ color: '#e2e8f0', lineHeight: 1.6 }}>
-                        If the curve sits above the diagonal, the model is underestimating truth frequency. If it sits below, it is overstating confidence.
+                <div style={{ backgroundColor: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', padding: 16, borderRadius: 8, display: 'flex', gap: 12 }}>
+                    <Info size={20} color="#60a5fa" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ fontSize: 14, color: '#bfdbfe', lineHeight: 1.5 }}>
+                        <strong>Why does this matter?</strong> A perfectly calibrated system follows the diagonal line (Actual = Predicted). 
+                        If the actual curve falls significantly below the ideal line, the model is overconfident. 
+                        If it's above, it's underconfident. This proves to enterprise buyers that our epistemic score correlates with ground truth verifiability.
                     </div>
                 </div>
             </div>
 
-            <div style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 20, padding: 20 }}>
-                {loading ? (
-                    <div style={{ color: '#e2e8f0', padding: '40px 0', textAlign: 'center' }}>Loading calibration data…</div>
-                ) : error ? (
-                    <div style={{ color: '#fda4af', padding: '40px 0', textAlign: 'center' }}>{error}</div>
-                ) : chartData.length === 0 ? (
-                    <div style={{ color: '#e2e8f0', padding: '40px 0', textAlign: 'center' }}>No calibration data is available yet.</div>
-                ) : (
-                    <>
-                        <div style={{ height: 380 }}>
-                            <ResponsiveContainer width="100%" height="100%">
-                                <ScatterChart margin={{ top: 16, right: 24, left: 8, bottom: 24 }}>
-                                    <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
-                                    <XAxis
-                                        type="number"
-                                        dataKey="predicted"
-                                        name="Predicted Epistemic Score"
-                                        domain={[0, 1]}
-                                        tickFormatter={(value) => value.toFixed(1)}
-                                        label={{ value: 'Predicted Epistemic Score', position: 'insideBottom', offset: -8, fill: '#cbd5e1' }}
-                                        tick={{ fill: '#cbd5e1' }}
-                                    />
-                                    <YAxis
-                                        type="number"
-                                        dataKey="actual"
-                                        name="Actual True Probability"
-                                        domain={[0, 1]}
-                                        tickFormatter={(value) => value.toFixed(1)}
-                                        label={{ value: 'Actual True Probability', angle: -90, position: 'insideLeft', fill: '#cbd5e1' }}
-                                        tick={{ fill: '#cbd5e1' }}
-                                    />
-                                    <Tooltip
-                                        cursor={{ strokeDasharray: '3 3' }}
-                                        formatter={(value) => `${Number(value * 100).toFixed(0)}%`}
-                                        labelFormatter={(label) => `Bucket: ${label}`}
-                                    />
-                                    <ReferenceLine
-                                        segment={[{ x: 0, y: 0 }, { x: 1, y: 1 }]}
-                                        stroke="#38bdf8"
-                                        strokeDasharray="5 5"
-                                        label={{ value: 'Ideal calibration', position: 'insideTopRight', fill: '#38bdf8' }}
-                                    />
-                                    <Scatter data={chartData} fill="#22c55e" />
-                                </ScatterChart>
-                            </ResponsiveContainer>
-                        </div>
+            <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: '32px 32px 16px 16px' }}>
+                <ResponsiveContainer width="100%" height={400}>
+                    <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis 
+                            dataKey="name" 
+                            stroke="#64748b" 
+                            label={{ value: 'Epistemic Score Bucket', position: 'insideBottom', offset: -15, fill: '#94a3b8' }} 
+                        />
+                        <YAxis 
+                            stroke="#64748b" 
+                            domain={[0, 1]} 
+                            tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                            label={{ value: 'Actual True Probability', angle: -90, position: 'insideLeft', offset: -5, fill: '#94a3b8' }} 
+                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Legend verticalAlign="top" height={36} />
+                        
+                        <Line 
+                            type="monotone" 
+                            dataKey="Ideal Calibration" 
+                            stroke="#64748b" 
+                            strokeDasharray="5 5" 
+                            dot={false} 
+                            name="Ideal Calibration (y=x)" 
+                        />
+                        <Line 
+                            type="monotone" 
+                            dataKey="Actual True %" 
+                            stroke="#a78bfa" 
+                            strokeWidth={3}
+                            activeDot={{ r: 8 }} 
+                            connectNulls
+                            name="Empirical True Probability" 
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
 
-                        <div style={{ marginTop: 16, display: 'grid', gap: 10 }}>
-                            {chartData.map((item) => (
-                                <div key={item.bucket} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', color: '#e2e8f0' }}>
-                                    <span style={{ fontWeight: 600 }}>{item.label}</span>
-                                    <span style={{ color: '#94a3b8' }}>
-                                        {item.total_count} claims • {item.actual_prob !== null ? `${(item.actual_prob * 100).toFixed(1)}%` : 'n/a'} true
-                                    </span>
-                                </div>
+            <div style={{ marginTop: 40 }}>
+                <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16, color: '#e2e8f0' }}>Raw Bucket Data</h3>
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                        <thead>
+                            <tr style={{ borderBottom: '1px solid #1e293b', color: '#94a3b8', textAlign: 'left' }}>
+                                <th style={{ padding: '12px 8px' }}>Bucket</th>
+                                <th style={{ padding: '12px 8px' }}>Predicted Mean</th>
+                                <th style={{ padding: '12px 8px' }}>Actual True %</th>
+                                <th style={{ padding: '12px 8px' }}>True Claims</th>
+                                <th style={{ padding: '12px 8px' }}>False Claims</th>
+                                <th style={{ padding: '12px 8px' }}>Total Samples</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.map((row, i) => (
+                                <tr key={i} style={{ borderBottom: '1px solid #1e293b' }}>
+                                    <td style={{ padding: '12px 8px', color: '#f8fafc' }}>{row.bucket}</td>
+                                    <td style={{ padding: '12px 8px', color: '#38bdf8' }}>{(row['Predicted Score'] * 100).toFixed(1)}%</td>
+                                    <td style={{ padding: '12px 8px', color: '#a78bfa', fontWeight: 'bold' }}>
+                                        {row['Actual True %'] !== null ? `${(row['Actual True %'] * 100).toFixed(1)}%` : 'N/A'}
+                                    </td>
+                                    <td style={{ padding: '12px 8px', color: '#4ade80' }}>{row.true_count}</td>
+                                    <td style={{ padding: '12px 8px', color: '#f87171' }}>{row.false_count}</td>
+                                    <td style={{ padding: '12px 8px', color: '#94a3b8' }}>{row.total_count}</td>
+                                </tr>
                             ))}
-                        </div>
-                    </>
-                )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );
-}
+};
 
 export default CalibrationPage;
