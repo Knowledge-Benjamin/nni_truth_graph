@@ -513,15 +513,20 @@ def main():
 
             # 3. Dispatch to Celery (skip orchestrator — runs in-process)
             dispatched = []
+            
+            # ALWAYS run the orchestrator FIRST if it needs to run, so it can inject investigation leads
+            # before we spin up pipeline workers. This prevents workers from picking up background
+            # tasks if an investigation just started.
+            if "orchestrator" in to_dispatch:
+                scheduler._orchestrator_running = True
+                try:
+                    _run_osint_orchestrator()
+                finally:
+                    scheduler._orchestrator_running = False
+                dispatched.append("orchestrator")
+                to_dispatch.remove("orchestrator")
+                
             for script in to_dispatch:
-                if script == "orchestrator":
-                    scheduler._orchestrator_running = True
-                    try:
-                        _run_osint_orchestrator()
-                    finally:
-                        scheduler._orchestrator_running = False
-                    dispatched.append(script)
-                    continue
                 try:
                     task = launch_pipeline_stage.delay(script)
                     scheduler._active_tasks.setdefault(script, []).append(task.id)
