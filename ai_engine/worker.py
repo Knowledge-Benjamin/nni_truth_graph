@@ -50,31 +50,31 @@ PRESSURE_QUERIES = {
         SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'
     """,
     "2_scrape.py": """
-        SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE'
     """,
     "2a_video_scrape.py": """
-        SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND domain IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND domain IN ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
     """,
     "3_classification.py": """
-        SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION'
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION'
     """,
     "4_extraction.py": """
-        SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_EXTRACTION'
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles WHERE status = 'PENDING_EXTRACTION'
     """,
     "5_resolution.py": """
-        SELECT COUNT(*) FROM extracted_claims
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
         WHERE pipeline_stage = 'STAGE_4_RESOLUTION' AND status = 'PROCESSING'
     """,
     "6_deduplication.py": """
-        SELECT COUNT(*) FROM extracted_claims
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
         WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING'
     """,
     "7_cross_reference.py": """
-        SELECT COUNT(*) FROM extracted_claims
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
         WHERE pipeline_stage = 'STAGE_7_CROSS_REF' AND status = 'PROCESSING'
     """,
     "8_graph_mutation.py": """
-        SELECT COUNT(*) FROM extracted_claims
+        SELECT COUNT(*), SUM(CASE WHEN investigation_id IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims
         WHERE pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
           AND status IN ('AUTO_APPROVE', 'PROCESSING')
     """,
@@ -109,9 +109,14 @@ def get_pressure_map() -> dict:
         for script, query in PRESSURE_QUERIES.items():
             try:
                 cur.execute(query)
-                pressures[script] = cur.fetchone()[0]
+                row = cur.fetchone()
+                if len(row) >= 2:
+                    # total, inv
+                    pressures[script] = (row[0] or 0, row[1] or 0)
+                else:
+                    pressures[script] = (row[0] or 0, 0)
             except Exception:
-                pressures[script] = 0
+                pressures[script] = (0, 0)
         cur.close()
         conn.close()
     except Exception as e:
@@ -214,14 +219,19 @@ class StageScheduler:
         to_dispatch = []
         self._actions = {}   # label → action string for dashboard
 
+        # ── Global Investigation Check ───────────────────────────────────────
+        active_inv = pressures.get("active_investigations", (0, 0))[0]
+        strict_lock = active_inv > 0
+
         # ── Downstream pressure lookup ───────────────────────────────────────
         def downstream_pressure(script):
             found_idx = PIPELINE_ORDER.index(script)
-            # Use explicit index iteration to bypass Pyre list slicing inference bug
             for i in range(found_idx + 1, len(PIPELINE_ORDER)):
                 nxt = PIPELINE_ORDER[i]
                 if nxt in pressures:
-                    return pressures[nxt]
+                    if strict_lock:
+                        return pressures[nxt][1] # Only care about downstream inv_pressure
+                    return pressures[nxt][0]
             return 0
 
         # ── Stuck-stage detector ─────────────────────────────────────────────
@@ -259,18 +269,24 @@ class StageScheduler:
             to_dispatch.append(script)
             self._last_fired[script] = self._tick
 
-        # Hand-roll index iteration to bypass Pyre list slicing inference bug mapping loop vars to Object
-        for i in range(1, 8):
+        for i in range(1, 9):
             script = PIPELINE_ORDER[i]
-            depth     = pressures.get(script, 0)
+            tot_depth, inv_depth = pressures.get(script, (0, 0))
+            
+            # Strict Lock: If an investigation is active, pretend background items do not exist
+            depth = inv_depth if strict_lock else tot_depth
+            
             down_pres = downstream_pressure(script)
             stuck_tag = " ⚠STUCK" if script in self._stuck_stages else ""
 
             # Determine base schedule
             if depth == 0:
                 self._cooldown[script] = IDLE_COOLDOWN
-                self._actions[script] = f"   0  {'':16s}  [IDLE]     "
-                update_stuck(script, depth, False) # No dispatch, so no progress expected
+                if tot_depth > 0 and strict_lock:
+                    self._actions[script] = f"   0  {'':16s}  [LOCKED (bg:{tot_depth})] "
+                else:
+                    self._actions[script] = f"   0  {'':16s}  [IDLE]     "
+                update_stuck(script, depth, False)
                 continue
 
             if depth < LOW_THRESHOLD:
@@ -328,12 +344,11 @@ class StageScheduler:
             update_stuck(script, depth, True)
 
         # ── Stage 1 — Ingest (dispatch when scrape backlog exists or there are active investigations) ─
-        s2_pres = pressures.get("2_scrape.py", 0)
-        active_inv = pressures.get("active_investigations", 0)
-        if s2_pres <= OVERFLOW_THRESHOLD or active_inv > 0:
+        s2_pres = pressures.get("2_scrape.py", (0, 0))[1 if strict_lock else 0]
+        if s2_pres <= OVERFLOW_THRESHOLD or strict_lock:
             to_dispatch.append("1_ingest.py")
-            if active_inv > 0 and s2_pres > OVERFLOW_THRESHOLD:
-                note = " (override for active investigation)"
+            if strict_lock and s2_pres > OVERFLOW_THRESHOLD:
+                note = " (override for active inv)"
             else:
                 note = ""
             self._actions["1_ingest.py"] = f"  --  {'':16s}  [DISPATCH]{note} "
@@ -341,22 +356,21 @@ class StageScheduler:
             self._actions["1_ingest.py"] = f"  --  {'':16s}  [IDLE]"
 
         # ── Stage 9 — Evolution (dispatch only when there is pending evolution work) ─
-        if pressures.get("9_truth_evolution.py", 0) > 0:
+        if pressures.get("9_truth_evolution.py", (0, 0))[0] > 0 and not strict_lock:
             to_dispatch.append("9_truth_evolution.py")
             self._actions["9_truth_evolution.py"] = f"  --  {'':16s}  [DISPATCH] "
         else:
             self._actions["9_truth_evolution.py"] = f"  --  {'':16s}  [IDLE]"
 
         # ── Stage 10 — Revalidation (dispatch only when there is pending revalidation work) ─
-        if pressures.get("10_revalidation.py", 0) > 0:
+        if pressures.get("10_revalidation.py", (0, 0))[0] > 0 and not strict_lock:
             to_dispatch.append("10_revalidation.py")
             self._actions["10_revalidation.py"] = f"  --  {'':16s}  [DISPATCH] "
         else:
             self._actions["10_revalidation.py"] = f"  --  {'':16s}  [IDLE]"
 
         # ── Stage 11 — OSINT Orchestrator (run whenever active investigations exist and no run is in flight) ─────────
-        active_inv = pressures.get("active_investigations", 0)
-        if active_inv > 0 and not self._orchestrator_running:
+        if strict_lock and not self._orchestrator_running:
             to_dispatch.append("orchestrator")
             self._actions["orchestrator"] = f"  --  {'':16s}  [DISPATCH] "
         else:
@@ -390,7 +404,8 @@ class StageScheduler:
             ("7_cross_reference.py","8_graph_mutation.py","S7→S8"),
         ]
         for up, down, lbl in pairs:
-            down_p = pressures.get(down, 0)
+            down_tot, down_inv = pressures.get(down, (0, 0))
+            down_p = down_inv if (pressures.get("active_investigations", (0, 0))[0] > 0) else down_tot
             state  = "OVERFLOW" if down_p > OVERFLOW_THRESHOLD else ("HIGH" if down_p > HIGH_THRESHOLD else "OK")
             bp_parts.append(f"{lbl}:{state}")
         bp_line = "  ".join(bp_parts)

@@ -298,6 +298,8 @@ def generate_section(entity_name: str, section_name: str, claims: list[dict], ex
             response_model=SectionGeneration,
             temperature=0.4
         )
+        if isinstance(resp, dict):
+            return resp.get("paragraph", "")
         return resp.paragraph
     except Exception as e:
         log.error(f"  [LLM Error in '{section_name}'] {e}")
