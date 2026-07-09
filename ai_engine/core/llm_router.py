@@ -354,39 +354,72 @@ class _OllamaCompletionsShim:
     def _create_openai_compat(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
         """
         vLLM / any OpenAI-compatible server — POST /v1/chat/completions.
-        Uses non-streaming for simplicity; vLLM handles 4k tokens well within timeout.
+
+        Uses SERVER-SENT EVENTS streaming (stream=True) so that tokens arrive
+        incrementally and the TCP connection is kept alive. This prevents ngrok
+        (and other reverse proxies) from dropping the connection with an
+        SSL EOF / read timeout when the model takes a long time to generate.
         """
         payload: dict = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": True,   # ← streaming prevents ngrok idle-connection kills
         }
         if "temperature" in kwargs:
             payload["temperature"] = kwargs["temperature"]
         if "max_tokens" in kwargs:
             payload["max_tokens"] = kwargs["max_tokens"]
-        # Force JSON output mode if requested
+        # Force JSON output mode if requested (vLLM supports this with streaming)
         if kwargs.get("response_format", {}).get("type") == "json_object":
             payload["response_format"] = {"type": "json_object"}
 
         url = f"{self._base_url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json", "Authorization": "Bearer notneeded"}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer notneeded",
+            "Accept": "text/event-stream",
+        }
 
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                resp = _requests.post(url, json=payload, headers=headers, timeout=600)
+                resp = _requests.post(
+                    url, json=payload, headers=headers,
+                    stream=True,
+                    timeout=(15, 300),  # (connect_timeout, read_timeout per chunk)
+                )
                 resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return _GenAIResponseShim(content)
+
+                # Parse SSE stream — each line is: "data: {...}" or "data: [DONE]"
+                content_parts: list[str] = []
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    if isinstance(raw_line, bytes):
+                        raw_line = raw_line.decode("utf-8")
+                    if raw_line.startswith("data:"):
+                        chunk_str = raw_line[5:].strip()
+                        if chunk_str == "[DONE]":
+                            break
+                        try:
+                            chunk_data = _json.loads(chunk_str)
+                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                            piece = delta.get("content", "")
+                            if piece:
+                                content_parts.append(piece)
+                        except _json.JSONDecodeError:
+                            continue
+
+                return _GenAIResponseShim("".join(content_parts))
+
             except (_requests.exceptions.Timeout, _requests.exceptions.RequestException) as e:
                 last_error = RuntimeError(f"[vLLMShim] Connection error to {url}: {e}")
             except (KeyError, IndexError, _json.JSONDecodeError) as e:
-                last_error = RuntimeError(f"[vLLMShim] Malformed response from {url}: {e} | body={getattr(resp, 'text', '')[:200]}")
+                last_error = RuntimeError(f"[vLLMShim] Malformed response from {url}: {e}")
             if attempt < 2:
                 time.sleep(2)
         raise last_error  # type: ignore[misc]
+
 
 
 class _OllamaRawShim:
