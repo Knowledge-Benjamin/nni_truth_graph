@@ -69,19 +69,39 @@ def process_video():
     
     client = Groq(api_key=GROQ_API_KEY)
     
-    while items_processed < 50:
-        try:
-            with conn.cursor() as cursor:
-                # 1. Fetch exactly 1 Video URL, locking it
-                cursor.execute("""
-                    SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
-                    FROM raw_urls 
-                    WHERE status IN ('PENDING_SCRAPE')
-                      AND domain IN %s
-                    ORDER BY CASE WHEN metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, id ASC
-                    LIMIT 1 
-                    FOR UPDATE SKIP LOCKED;
-                """, (VIDEO_DOMAINS,))
+    # ── Two-phase queue: investigation items first, background second ──
+    phases = [
+        (100, "AND metadata->>'investigation_id' IS NOT NULL"),
+    ]
+    try:
+        with psycopg2.connect(DATABASE_URL) as _inv_check:
+            with _inv_check.cursor() as _inv_cur:
+                _inv_cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+                _active_inv = _inv_cur.fetchone()[0]
+    except Exception:
+        _active_inv = 0
+        
+    if _active_inv == 0:
+        phases.append((50, "AND metadata->>'investigation_id' IS NULL"))
+    else:
+        print(f"  [W-{worker_id} VIDEO] Active investigation detected — skipping background video phase.")
+        
+    for __phase, (__limit, __filter_clause) in enumerate(phases):
+        items_processed = 0
+        while items_processed < __limit:
+            try:
+                with conn.cursor() as cursor:
+                    # 1. Fetch exactly 1 Video URL, locking it
+                    cursor.execute(f"""
+                        SELECT id, url, metadata, COALESCE((metadata->>'retry_count')::int, 0)
+                        FROM raw_urls 
+                        WHERE status IN ('PENDING_VIDEO')
+                          AND domain IN %s
+                          {__filter_clause}
+                        ORDER BY id ASC
+                        LIMIT 1 
+                        FOR UPDATE SKIP LOCKED;
+                    """, (VIDEO_DOMAINS,))
                 
                 row = cursor.fetchone()
                 if not row:
@@ -228,7 +248,7 @@ def process_video():
                     if new_retry >= 3:
                          cursor.execute("UPDATE raw_urls SET status = 'FAILED_NETWORK' WHERE id = %s", (url_id,))
                     else:
-                         cursor.execute("UPDATE raw_urls SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{retry_count}', %s), status = 'PENDING_SCRAPE' WHERE id = %s", (Json(new_retry), url_id))
+                         cursor.execute("UPDATE raw_urls SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{retry_count}', %s), status = 'PENDING_VIDEO' WHERE id = %s", (Json(new_retry), url_id))
                          
         except psycopg2.Error as db_e:
             print(f"[W-{worker_id}] DB Error: {db_e}")

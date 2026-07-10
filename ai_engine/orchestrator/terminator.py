@@ -68,7 +68,7 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
             """
             SELECT COUNT(*) FROM raw_urls ru
             WHERE (ru.metadata->>'investigation_id')::int = %s
-              AND ru.status IN ('PENDING_SCRAPE', 'SCRAPING')
+              AND ru.status IN ('PENDING_SCRAPE', 'SCRAPING', 'PENDING_VIDEO')
             """,
             (investigation_id,)
         )
@@ -79,7 +79,7 @@ def check_termination(investigation_id: int, pg_conn) -> tuple[bool, str]:
             SELECT COUNT(*) FROM raw_articles ra
             JOIN raw_urls ru ON ra.url_id = ru.id
             WHERE (ru.metadata->>'investigation_id')::int = %s
-              AND ra.status IN ('PENDING_CLASSIFICATION', 'PENDING_EXTRACTION', 'PROCESSING_EXTRACTION')
+              AND ra.status IN ('PENDING_CLASSIFICATION', 'PROCESSING_CLASSIFICATION', 'PENDING_EXTRACTION', 'PROCESSING_EXTRACTION')
             """,
             (investigation_id,)
         )
