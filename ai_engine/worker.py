@@ -297,7 +297,12 @@ class StageScheduler:
             self._last_fired[script] = self._tick
 
 
-        for i in range(1, 9):
+        # During an active investigation, iterate exit-closest stages first (S8→S2).
+        # This ensures near-finished items drain out the back of the pipeline before
+        # new upstream work is dispatched, letting the Terminator close sooner.
+        stage_range = range(8, 0, -1) if strict_lock else range(1, 9)
+
+        for i in stage_range:
             script = PIPELINE_ORDER[i]
             tot_depth, inv_depth = pressures.get(script, (0, 0))
             
