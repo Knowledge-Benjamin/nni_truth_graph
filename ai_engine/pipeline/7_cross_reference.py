@@ -128,7 +128,7 @@ def cross_ref_worker(worker_id: int):
                                 JOIN raw_urls ru     ON ra.url_id = ru.id
                                 JOIN sources s       ON ru.source_id = s.id
                                 WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF'
-                                  AND ec.status IN ('PROCESSING', 'AUTO_APPROVE')
+                                  AND ec.status = 'PROCESSING'
                                 {__filter_clause}
                                     ORDER BY ec.id ASC
                                 LIMIT 1
@@ -276,7 +276,7 @@ def process_cross_ref_queue():
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) FROM extracted_claims
-            WHERE pipeline_stage = 'STAGE_7_CROSS_REF' AND status IN ('PROCESSING', 'AUTO_APPROVE');
+            WHERE pipeline_stage = 'STAGE_7_CROSS_REF' AND status = 'PROCESSING';
         """)
         row = cur.fetchone()
         pending = row[0] if row else 0
