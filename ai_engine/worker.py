@@ -196,21 +196,44 @@ class StageScheduler:
         }
         self._last_fired: dict[str, int] = {s: -999 for s in PIPELINE_ORDER}  # tick of last dispatch
         self._actions: dict[str, str] = {}
-        self._active_tasks: dict[str, list[str]] = {s: [] for s in PIPELINE_ORDER}
+        # active_tasks: script -> list of (task_id, dispatched_wall_time)
+        self._active_tasks: dict[str, list[tuple]] = {s: [] for s in PIPELINE_ORDER}
+        # Max wall-clock seconds a task is allowed to be in STARTED/PENDING before
+        # we consider it stale and allow re-dispatch (prevents permanent lock on hung workers)
+        self._TASK_TIMEOUT = {
+            "1_ingest.py":          300,
+            "2_scrape.py":          120,
+            "2a_video_scrape.py":   600,
+            "3_classification.py":  180,
+            "4_extraction.py":      900,   # LLM heavy — 15 min max
+            "5_resolution.py":      600,
+            "6_deduplication.py":   180,
+            "7_cross_reference.py": 300,
+            "8_graph_mutation.py":  120,
+            "9_truth_evolution.py": 600,
+            "10_revalidation.py":   600,
+        }
 
     def _prune_completed_tasks(self) -> None:
-        for script, task_ids in list(self._active_tasks.items()):
-            if not task_ids:
+        now = time.time()
+        for script, entries in list(self._active_tasks.items()):
+            if not entries:
                 continue
+            timeout = self._TASK_TIMEOUT.get(script, 300)
             remaining = []
-            for task_id in task_ids:
+            for task_id, dispatched_at in entries:
                 try:
                     result = AsyncResult(task_id, app=app)
                     if result.state in {"SUCCESS", "FAILURE", "REVOKED", "RETRY"}:
-                        continue
+                        continue  # terminal — drop
+                    if result.state in {"PENDING", "STARTED"} and (now - dispatched_at) > timeout:
+                        # Task has been running too long — consider it stale/hung
+                        print(f"  [Scheduler] Evicting stale {script} task {task_id[:8]}… "
+                              f"(state={result.state}, age={int(now-dispatched_at)}s > {timeout}s timeout)")
+                        continue  # drop so re-dispatch can happen
                 except Exception:
-                    continue
-                remaining.append(task_id)
+                    pass  # if Celery backend is unreachable, keep the entry
+                remaining.append((task_id, dispatched_at))
             self._active_tasks[script] = remaining
 
     def tick(self, pressures: dict) -> list[str]:
@@ -272,6 +295,7 @@ class StageScheduler:
         def do_dispatch(script):
             to_dispatch.append(script)
             self._last_fired[script] = self._tick
+
 
         for i in range(1, 9):
             script = PIPELINE_ORDER[i]
@@ -547,7 +571,7 @@ def main():
             for script in to_dispatch:
                 try:
                     task = launch_pipeline_stage.delay(script)
-                    scheduler._active_tasks.setdefault(script, []).append(task.id)
+                    scheduler._active_tasks.setdefault(script, []).append((task.id, time.time()))
                     dispatched.append(script)
                     time.sleep(0.3)
                 except Exception as e:
