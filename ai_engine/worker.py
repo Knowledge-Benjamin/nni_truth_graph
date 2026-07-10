@@ -82,6 +82,12 @@ PRESSURE_QUERIES = {
         WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
           AND ec.status IN ('AUTO_APPROVE', 'PROCESSING')
     """,
+    "human_review_held": """
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
+        JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
+        WHERE ec.pipeline_stage = 'STAGE_HELD_FOR_REVIEW'
+          AND ec.status IN ('HUMAN_REVIEW', 'AUTO_REJECT')
+    """,
 }
 
 # Ordered pipeline stages for back-pressure traversal

@@ -579,15 +579,29 @@ def resolution_worker(worker_id: int):
                     routing = _scorer.determine_routing(new_score)
 
                     # ── D. Persist results ───────────────────────────────────
+                    # Routing decision:
+                    #   AUTO_APPROVE  → STAGE_6_DEDUP as PROCESSING (S7 does the definitive rescore)
+                    #   HUMAN_REVIEW  → STAGE_HELD_FOR_REVIEW (admin reviews via /api/human-review)
+                    #   AUTO_REJECT   → STAGE_HELD_FOR_REVIEW (terminal, never touches graph)
+                    # HUMAN_REVIEW/AUTO_REJECT must NOT enter STAGE_6_DEDUP — S6 only processes
+                    # PROCESSING items, so they would sit there permanently, invisible to the
+                    # terminator's in-flight count and never surfaced to the human-review queue.
+                    if routing in ("HUMAN_REVIEW", "AUTO_REJECT"):
+                        out_stage = "STAGE_HELD_FOR_REVIEW"
+                        out_status = routing          # preserve HUMAN_REVIEW / AUTO_REJECT
+                    else:
+                        out_stage = "STAGE_6_DEDUP"
+                        out_status = "PROCESSING"     # AUTO_APPROVE flattened; S7 rescores
+
                     with psycopg2.connect(DATABASE_URL) as write_conn:
                         with write_conn.cursor() as cur:
                             cur.execute("""
                                 UPDATE extracted_claims
                                 SET epistemic_score  = %s,
                                     status           = %s,
-                                    pipeline_stage   = 'STAGE_6_DEDUP'
+                                    pipeline_stage   = %s
                                 WHERE id = %s
-                            """, (new_score, routing if routing != "AUTO_APPROVE" else "PROCESSING", claim_id))
+                            """, (new_score, out_status, out_stage, claim_id))
 
                             cur.execute("""
                                 INSERT INTO claim_provenance
