@@ -81,10 +81,24 @@ Reply with exactly one word: SUPPORTS, CONTRADICTS, EVOLVES, or NOVEL."""
 
 def cross_ref_worker(worker_id: int):
     try:
-        for __phase, (__limit, __filter_clause) in enumerate([
+        # ── Two-phase queue: investigation items first, background second ──
+        # Phase 2 (background items) is skipped when an investigation is active
+        # so downstream investigation content is not starved by background work.
+        phases = [
             (100, "AND ru.metadata->>'investigation_id' IS NOT NULL"),
-            (50, "AND ru.metadata->>'investigation_id' IS NULL")
-        ]):
+        ]
+        try:
+            with psycopg2.connect(DATABASE_URL) as _inv_check:
+                with _inv_check.cursor() as _inv_cur:
+                    _inv_cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+                    _active_inv = _inv_cur.fetchone()[0]
+        except Exception:
+            _active_inv = 0
+            
+        if _active_inv == 0:
+            phases.append((50, "AND ru.metadata->>'investigation_id' IS NULL"))
+            
+        for __phase, (__limit, __filter_clause) in enumerate(phases):
             items_processed = 0
 
             while items_processed < __limit:
