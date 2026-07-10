@@ -239,11 +239,26 @@ def scraper_worker(worker_id):
                      
             video_whitelist = ('youtube.com', 'youtu.be', 'tiktok.com', 'x.com', 'twitter.com', 'vimeo.com', 'instagram.com')
             
-            # We need actual transactions for locking
-            for __phase, (__limit, __filter_clause) in enumerate([
+            # ── Two-phase queue: investigation items first, background second ──
+            # Phase 2 (background URLs) is skipped when an investigation is active
+            # so downstream investigation content is not starved by background work.
+            phases = [
                 (100, "AND metadata->>'investigation_id' IS NOT NULL"),
-                (50, "AND metadata->>'investigation_id' IS NULL")
-            ]):
+            ]
+            try:
+                with psycopg2.connect(DATABASE_URL) as _inv_check:
+                    with _inv_check.cursor() as _inv_cur:
+                        _inv_cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+                        _active_inv = _inv_cur.fetchone()[0]
+            except Exception:
+                _active_inv = 0
+            if _active_inv == 0:
+                phases.append((50, "AND metadata->>'investigation_id' IS NULL"))
+            else:
+                print(f"  [W-{worker_id}] Active investigation detected — skipping background URL phase.")
+
+            # We need actual transactions for locking
+            for __phase, (__limit, __filter_clause) in enumerate(phases):
                 items_processed = 0
                 while items_processed < __limit:
                     try:
