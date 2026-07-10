@@ -308,6 +308,8 @@ class StageScheduler:
         # new upstream work is dispatched, letting the Terminator close sooner.
         stage_range = range(8, 0, -1) if strict_lock else range(1, 9)
 
+        blocking_stage = None
+
         for i in stage_range:
             script = PIPELINE_ORDER[i]
             tot_depth, inv_depth = pressures.get(script, (0, 0))
@@ -317,6 +319,11 @@ class StageScheduler:
             
             down_pres = downstream_pressure(script)
             stuck_tag = " ⚠STUCK" if script in self._stuck_stages else ""
+
+            if blocking_stage:
+                # A deeper stage is currently holding the investigation lock
+                self._actions[script] = f"{depth:4d}  {pressure_bar(depth):16s}  [LOCKED by {blocking_stage}]"
+                continue
 
             # Determine base schedule
             if depth == 0:
@@ -349,12 +356,16 @@ class StageScheduler:
                     f"[WAIT {self._cooldown[script]:2d}t]{bp_tag}{stuck_tag}"
                 )
                 update_stuck(script, depth, False) # No dispatch, so no progress expected
+                if strict_lock:
+                    blocking_stage = self.STAGE_LABELS.get(script, script).strip()
                 continue
 
             if has_active(script):
                 self._actions[script] = (
                     f"{depth:4d}  {pressure_bar(depth):16s}  [RUNNING]{bp_tag}{stuck_tag}"
                 )
+                if strict_lock:
+                    blocking_stage = self.STAGE_LABELS.get(script, script).strip()
                 continue
 
             # Refire guard: don't re-dispatch if we just fired recently
@@ -365,6 +376,8 @@ class StageScheduler:
                     f"[REFIRE {fmt_timer(ticks_left)}]{stuck_tag}"
                 )
                 update_stuck(script, depth, False) # No dispatch, so no progress expected
+                if strict_lock:
+                    blocking_stage = self.STAGE_LABELS.get(script, script).strip()
                 continue
 
             # Ready to fire
@@ -381,6 +394,9 @@ class StageScheduler:
                 action = f"[{label}]{bp_tag}{stuck_tag}"
             self._actions[script] = f"{depth:4d}  {pressure_bar(depth):16s}  {action}"
             update_stuck(script, depth, True)
+            
+            if strict_lock:
+                blocking_stage = self.STAGE_LABELS.get(script, script).strip()
 
         # ── Stage 1 — Ingest ─
         if strict_lock:
