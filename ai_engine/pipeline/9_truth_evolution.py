@@ -194,6 +194,7 @@ def handle_contradicts(session, pg_cur, new_claim: dict,
             false_src    = new_claim.get("source_id")
 
         # 1. Tag both Claim nodes + create directed DEBUNKS edge
+        # AND retire the old PREDICATE edge that the debunked claim produced!
         session.run("""
             MATCH (debunker:Claim {id: $debunker_id})
             MATCH (false_claim:Claim {id: $false_id})
@@ -207,6 +208,11 @@ def handle_contradicts(session, pg_cur, new_claim: dict,
                 auto_resolved: true,
                 confidence:    $confidence
             }]->(false_claim)
+            WITH false_claim
+            MATCH (s:Entity)<-[:HAS_SUBJECT]-(false_claim)-[:HAS_OBJECT]->(o:Entity)
+            MATCH (s)-[r:PREDICATE {type: false_claim.predicate}]->(o)
+            WHERE r.is_current = true
+            SET r.is_current = false, r.valid_until = datetime($now)
         """, debunker_id=debunker_id, false_id=false_id,
              now=now_iso, confidence=round(score_diff, 3))
 
@@ -248,6 +254,7 @@ def handle_contradicts(session, pg_cur, new_claim: dict,
     else:
         # ── AMBIGUOUS: route both to human review ─────────────────────────────
         # 1. Mark both DISPUTED + create symmetric CONTRADICTS edge
+        # AND suspend the PREDICATE edges since they are in dispute
         session.run("""
             MATCH (new:Claim {id: $new_id})
             MATCH (old:Claim {id: $old_id})
@@ -256,6 +263,13 @@ def handle_contradicts(session, pg_cur, new_claim: dict,
                 new.epistemic_score = GREATEST(0.0, new.epistemic_score - 0.10),
                 old.epistemic_score = GREATEST(0.0, old.epistemic_score - 0.10)
             MERGE (new)-[:CONTRADICTS {detected_at: datetime($now)}]->(old)
+            WITH new, old
+            OPTIONAL MATCH (sn:Entity)<-[:HAS_SUBJECT]-(new)-[:HAS_OBJECT]->(on:Entity)
+            OPTIONAL MATCH (so:Entity)<-[:HAS_SUBJECT]-(old)-[:HAS_OBJECT]->(oo:Entity)
+            OPTIONAL MATCH (sn)-[rn:PREDICATE {type: new.predicate}]->(on)
+            OPTIONAL MATCH (so)-[ro:PREDICATE {type: old.predicate}]->(oo)
+            SET rn.is_current = false, rn.valid_until = datetime($now),
+                ro.is_current = false, ro.valid_until = datetime($now)
         """, new_id=str(new_claim["id"]), old_id=str(matched_id), now=now_iso)
 
         # 2. Controversy node — open, awaiting human verdict

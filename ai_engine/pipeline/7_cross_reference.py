@@ -228,11 +228,19 @@ def cross_ref_worker(worker_id: int):
 
                     routing = _scorer.determine_routing(new_score)
 
-                    new_status = {
-                        "AUTO_APPROVE": "AUTO_APPROVE",
-                        "HUMAN_REVIEW": "HUMAN_REVIEW",
-                        "AUTO_REJECT":  "AUTO_REJECT"
-                    }.get(routing, "PROCESSING")
+                    # ── Routing Decision ──
+                    # If it contradicts the graph, we MUST pass it to S8 (Neo4j) so S9 can
+                    # process the contradiction, create the Controversy node, and route it to
+                    # HUMAN_REVIEW with full context.
+                    if final_stance == "CONTRADICTS":
+                        new_status = "PROCESSING"
+                        out_stage = "STAGE_8_MUTATION_QUEUE"
+                    elif routing in ("HUMAN_REVIEW", "AUTO_REJECT"):
+                        new_status = routing
+                        out_stage = "STAGE_HELD_FOR_REVIEW"
+                    else:
+                        new_status = "AUTO_APPROVE"
+                        out_stage = "STAGE_8_MUTATION_QUEUE"
 
                     with psycopg2.connect(DATABASE_URL) as pg_conn:
                         with pg_conn.cursor() as cur:
@@ -240,9 +248,9 @@ def cross_ref_worker(worker_id: int):
                                 UPDATE extracted_claims
                                 SET epistemic_score = %s,
                                     status = %s,
-                                    pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+                                    pipeline_stage = %s
                                 WHERE id = %s
-                            """, (new_score, new_status, claim_id))
+                            """, (new_score, new_status, out_stage, claim_id))
 
                             cur.execute("""
                                 UPDATE claim_provenance

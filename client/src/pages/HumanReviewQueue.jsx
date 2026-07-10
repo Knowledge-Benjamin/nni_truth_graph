@@ -142,6 +142,28 @@ function ReviewCard({ item, onResolve }) {
                 </div>
             </div>
 
+            {item.controversy_context && (
+                <div style={{
+                    marginTop: '16px', padding: '12px', background: 'rgba(255, 59, 48, 0.1)', 
+                    borderLeft: '4px solid var(--color-danger)', borderRadius: '4px'
+                }}>
+                    <h4 style={{margin: '0 0 8px 0', color: 'var(--color-danger)', display: 'flex', alignItems: 'center', gap: '8px'}}>
+                        <AlertTriangle size={16} /> Contradicts Active Graph Truth
+                    </h4>
+                    <p style={{margin: '0 0 8px 0', fontSize: '0.9rem', color: 'var(--text-secondary)'}}>
+                        This claim directly challenges a verified fact already in Neo4j:
+                    </p>
+                    <div style={{background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '4px', fontSize: '0.9rem'}}>
+                        <span style={{color: 'var(--color-info)'}}>[ {item.controversy_context.subject} ]</span>{' '}
+                        <span style={{color: 'var(--color-warning)'}}>{item.controversy_context.predicate}</span>{' '}
+                        <span style={{color: 'var(--color-success)'}}>{item.controversy_context.object}</span>
+                    </div>
+                    <div style={{marginTop: '8px', fontSize: '0.85rem', color: 'var(--text-muted)'}}>
+                        <strong>Existing Source:</strong> {item.controversy_context.source_name} (Score: {Math.round(item.controversy_context.score * 100)}%)
+                    </div>
+                </div>
+            )}
+
             <div className="review-actions">
                 <button onClick={() => onResolve(item.id, 'REJECT')} className="action-btn discard">
                     <ShieldClose size={16} /> Discard

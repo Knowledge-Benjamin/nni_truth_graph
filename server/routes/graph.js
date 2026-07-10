@@ -865,6 +865,38 @@ router.get('/human-review', requireAdmin, async (req, res) => {
                 "SELECT COUNT(*) FROM extracted_claims WHERE status = 'HUMAN_REVIEW'"
             );
 
+            const session = neo4j(req).session();
+            try {
+                for (const row of rows) {
+                    if (row.lifecycle === 'DISPUTED') {
+                        // Find the controversy and the other claim
+                        const result = await session.run(`
+                            MATCH (c1:Claim {id: $id})<-[:INCLUDES]-(cv:Controversy)-[:INCLUDES]->(c2:Claim)
+                            WHERE c1 <> c2
+                            RETURN c2.subject AS subject, c2.predicate AS predicate, c2.object AS object,
+                                   c2.source_name AS source_name, c2.source_url AS source_url, 
+                                   c2.epistemic_score AS score
+                        `, { id: String(row.id) });
+                        
+                        if (result.records.length > 0) {
+                            const rec = result.records[0];
+                            row.controversy_context = {
+                                subject: rec.get('subject'),
+                                predicate: rec.get('predicate'),
+                                object: rec.get('object'),
+                                source_name: rec.get('source_name'),
+                                source_url: rec.get('source_url'),
+                                score: rec.get('score')
+                            };
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Neo4j Controversy Fetch Error:", err);
+            } finally {
+                await session.close();
+            }
+
             res.json({
                 page, limit,
                 total: parseInt(count.rows[0].count),
