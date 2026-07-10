@@ -587,7 +587,7 @@ def resolution_worker(worker_id: int):
                                     status           = %s,
                                     pipeline_stage   = 'STAGE_6_DEDUP'
                                 WHERE id = %s
-                            """, (new_score, routing if routing != "AUTO_APPROVE" else "PROCESSING", claim_id))
+                            """, (new_score, routing, claim_id))
 
                             cur.execute("""
                                 INSERT INTO claim_provenance

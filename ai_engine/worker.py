@@ -69,12 +69,12 @@ PRESSURE_QUERIES = {
     "6_deduplication.py": """
         SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
         JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
-        WHERE ec.pipeline_stage = 'STAGE_6_DEDUP' AND ec.status = 'PROCESSING'
+        WHERE ec.pipeline_stage = 'STAGE_6_DEDUP' AND ec.status IN ('PROCESSING', 'AUTO_APPROVE')
     """,
     "7_cross_reference.py": """
         SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec
         JOIN raw_articles ra ON ec.article_id = ra.id JOIN raw_urls ru ON ra.url_id = ru.id
-        WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF' AND ec.status = 'PROCESSING'
+        WHERE ec.pipeline_stage = 'STAGE_7_CROSS_REF' AND ec.status IN ('PROCESSING', 'AUTO_APPROVE')
     """,
     "8_graph_mutation.py": """
         SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec

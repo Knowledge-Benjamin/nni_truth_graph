@@ -250,7 +250,7 @@ def dedup_worker(worker_id: int):
                                 JOIN raw_articles ra ON ec.article_id = ra.id
                                 JOIN raw_urls ru     ON ra.url_id = ru.id
                                 WHERE ec.pipeline_stage = 'STAGE_6_DEDUP'
-                                  AND ec.status = 'PROCESSING'
+                                  AND ec.status IN ('PROCESSING', 'AUTO_APPROVE')
                                 {__filter_clause}
                                     ORDER BY ec.id ASC
                                 LIMIT 1
@@ -372,8 +372,7 @@ def dedup_worker(worker_id: int):
                             if not merged:
                                 cur.execute("""
                                     UPDATE extracted_claims
-                                    SET pipeline_stage = 'STAGE_7_CROSS_REF',
-                                        status = 'PROCESSING'
+                                    SET pipeline_stage = 'STAGE_7_CROSS_REF'
                                     WHERE id = %s
                                 """, (claim_id,))
                                 print(f"      -> [W-{worker_id}] UNIQUE. Routed to Stage 7.")
@@ -422,7 +421,7 @@ def process_dedup_queue():
 
         cur.execute("""
             SELECT COUNT(*) FROM extracted_claims
-            WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING';
+            WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status IN ('PROCESSING', 'AUTO_APPROVE');
         """)
         row = cur.fetchone()
         pending = row[0] if row else 0
