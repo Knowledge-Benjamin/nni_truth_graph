@@ -448,6 +448,21 @@ def run_article_daemon():
 
     cycle = 0
     while True:
+        try:
+            pg_conn = psycopg2.connect(DATABASE_URL)
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+                active_inv = cur.fetchone()[0]
+            pg_conn.close()
+        except Exception as e:
+            log.error(f"Failed to check investigations: {e}")
+            active_inv = 0
+
+        if active_inv > 0:
+            log.info(f"  [LOCKED] Investigation active. Article engine sleeping for 30s...")
+            time.sleep(30)
+            continue
+
         cycle += 1
         log.info(f"\n[{datetime.now(timezone.utc).isoformat()}] Cycle #{cycle}")
         try:

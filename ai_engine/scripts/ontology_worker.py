@@ -200,6 +200,21 @@ if __name__ == "__main__":
     print("= TRUTH GRAPH UNIVERSAL ONTOLOGY ENGINE STARTED  =")
     print("==================================================")
     while True:
+        try:
+            pg_conn = psycopg2.connect(DATABASE_URL)
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+                active_inv = cur.fetchone()[0]
+            pg_conn.close()
+        except Exception as e:
+            print(f"Failed to check investigations: {e}")
+            active_inv = 0
+
+        if active_inv > 0:
+            print("[LOCKED] Investigation active. Ontology engine sleeping for 30s...")
+            time.sleep(30)
+            continue
+
         processed_any = run_evaluation_cycle()
         if not processed_any:
             # Sleep 15 seconds before scanning again
