@@ -287,10 +287,16 @@ from urllib3.util.retry import Retry
 import httpx
 
 def _make_resilient_session() -> _requests.Session:
-    """Build a requests Session that auto-retries on connection/SSL errors."""
+    """
+    Build a requests Session with connection-error retries.
+    We do NOT retry on read timeouts — a slow LLM response is not a transient
+    connection error, and retrying would re-POST the full request unnecessarily.
+    """
     session = _requests.Session()
     retry = Retry(
         total=3,
+        connect=3,           # retry on connect failures only
+        read=0,              # never auto-retry on read timeout
         backoff_factor=1,
         status_forcelist=[500, 502, 503, 504],
         allowed_methods=["POST"],
@@ -376,69 +382,49 @@ class _OllamaCompletionsShim:
         """
         vLLM / any OpenAI-compatible server — POST /v1/chat/completions.
 
-        Uses SSE streaming so tokens flow continuously through the ngrok tunnel,
-        preventing SSL EOF drops that occur when a single long-wait HTTP response
-        sits idle. response_format is intentionally omitted — vLLM returns 404
-        when json_object mode is combined with stream=True. Our callers parse
-        JSON from the reconstructed text directly, so server enforcement is not needed.
+        Non-streaming. SSL verification is disabled (verify=False) so that the
+        ngrok tunnel's intermediate certificate chain does not cause SSLEOFErrors.
+        Streaming was tried but ngrok buffers SSE chunks, causing ReadTimeoutErrors
+        even when the model is actively generating. Non-streaming + long timeout is
+        the correct approach for ngrok-proxied vLLM.
         """
         payload: dict = {
             "model": model,
             "messages": messages,
-            "stream": True,
+            "stream": False,
         }
         if "temperature" in kwargs:
             payload["temperature"] = kwargs["temperature"]
         if "max_tokens" in kwargs:
             payload["max_tokens"] = kwargs["max_tokens"]
-        # Do NOT send response_format with stream=True — vLLM 404s on that combination.
+        if kwargs.get("response_format", {}).get("type") == "json_object":
+            payload["response_format"] = {"type": "json_object"}
 
         url = f"{self._base_url}/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer notneeded",
-            "Accept": "text/event-stream",
-        }
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer notneeded"}
 
         last_error: Exception | None = None
         for attempt in range(3):
             try:
                 resp = self._session.post(
                     url, json=payload, headers=headers,
-                    stream=True,
-                    timeout=(15, 300),  # connect=15s, per-chunk read=300s
-                    verify=False,
+                    timeout=720,   # 12 min — generous for long extractions
+                    verify=False,  # bypass ngrok SSL cert chain
                 )
                 resp.raise_for_status()
-
-                content_parts: list[str] = []
-                for raw_line in resp.iter_lines():
-                    if not raw_line:
-                        continue
-                    if isinstance(raw_line, bytes):
-                        raw_line = raw_line.decode("utf-8")
-                    if not raw_line.startswith("data:"):
-                        continue
-                    chunk_str = raw_line[5:].strip()
-                    if chunk_str == "[DONE]":
-                        break
-                    try:
-                        chunk_data = _json.loads(chunk_str)
-                        piece = (chunk_data.get("choices", [{}])[0]
-                                 .get("delta", {}).get("content", ""))
-                        if piece:
-                            content_parts.append(piece)
-                    except _json.JSONDecodeError:
-                        continue
-
-                return _GenAIResponseShim("".join(content_parts))
-
-            except (_requests.exceptions.Timeout, _requests.exceptions.RequestException) as e:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                return _GenAIResponseShim(content)
+            except _requests.exceptions.Timeout as e:
+                last_error = RuntimeError(f"[vLLMShim] Timeout from {url}: {e}")
+            except _requests.exceptions.RequestException as e:
                 last_error = RuntimeError(f"[vLLMShim] Connection error to {url}: {e}")
-            except (KeyError, IndexError, _json.JSONDecodeError) as e:
-                last_error = RuntimeError(f"[vLLMShim] Malformed SSE response from {url}: {e}")
+            except (KeyError, IndexError) as e:
+                last_error = RuntimeError(f"[vLLMShim] Malformed response from {url}: {e} | body={getattr(resp, 'text', '')[:300]}")
+            except _json.JSONDecodeError as e:
+                last_error = RuntimeError(f"[vLLMShim] JSON decode error from {url}: {e} | body={getattr(resp, 'text', '')[:300]}")
             if attempt < 2:
-                time.sleep(2)
+                time.sleep(3)
         raise last_error  # type: ignore[misc]
 
 
