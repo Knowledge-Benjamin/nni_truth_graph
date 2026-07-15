@@ -163,7 +163,19 @@ def process_classification_queue():
               AND id NOT IN (SELECT article_id FROM article_categories);
         """)
         
-        cursor.execute("SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION';")
+        cursor.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_inv = cursor.fetchone()[0]
+
+        if active_inv > 0:
+            cursor.execute("""
+                SELECT COUNT(*) FROM raw_articles ra 
+                JOIN raw_urls ru ON ra.url_id = ru.id
+                WHERE ra.status = 'PENDING_CLASSIFICATION' 
+                  AND ru.metadata->>'investigation_id' IS NOT NULL;
+            """)
+        else:
+            cursor.execute("SELECT COUNT(*) FROM raw_articles WHERE status = 'PENDING_CLASSIFICATION';")
+            
         count_row = cursor.fetchone()
         pending_count = count_row[0] if count_row else 0
         

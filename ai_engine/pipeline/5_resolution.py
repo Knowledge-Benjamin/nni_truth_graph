@@ -652,10 +652,22 @@ def process_resolution_queue():
         cur = conn.cursor()
 
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking STAGE_4_RESOLUTION queue...")
-        cur.execute("""
-            SELECT COUNT(*) FROM extracted_claims
-            WHERE status = 'PROCESSING' AND pipeline_stage = 'STAGE_4_RESOLUTION';
-        """)
+        cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_inv = cur.fetchone()[0]
+
+        if active_inv > 0:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims ec
+                JOIN raw_articles ra ON ec.article_id = ra.id
+                JOIN raw_urls ru ON ra.url_id = ru.id
+                WHERE ec.status = 'PROCESSING' AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
+                  AND ru.metadata->>'investigation_id' IS NOT NULL;
+            """)
+        else:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims
+                WHERE status = 'PROCESSING' AND pipeline_stage = 'STAGE_4_RESOLUTION';
+            """)
         row = cur.fetchone()
         pending = row[0] if row else 0
         cur.close()

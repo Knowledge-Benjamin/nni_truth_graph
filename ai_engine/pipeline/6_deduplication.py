@@ -420,10 +420,22 @@ def process_dedup_queue():
         conn.autocommit = True
         cur = conn.cursor()
 
-        cur.execute("""
-            SELECT COUNT(*) FROM extracted_claims
-            WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING';
-        """)
+        cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_inv = cur.fetchone()[0]
+
+        if active_inv > 0:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims ec
+                JOIN raw_articles ra ON ec.article_id = ra.id
+                JOIN raw_urls ru ON ra.url_id = ru.id
+                WHERE ec.pipeline_stage = 'STAGE_6_DEDUP' AND ec.status = 'PROCESSING'
+                  AND ru.metadata->>'investigation_id' IS NOT NULL;
+            """)
+        else:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims
+                WHERE pipeline_stage = 'STAGE_6_DEDUP' AND status = 'PROCESSING';
+            """)
         row = cur.fetchone()
         pending = row[0] if row else 0
         cur.close()

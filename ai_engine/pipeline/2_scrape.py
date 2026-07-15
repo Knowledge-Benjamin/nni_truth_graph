@@ -447,8 +447,15 @@ def process_scraping_queue():
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
         cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE';")
+        # Check if we have an active investigation lock
+        cursor.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_inv = cursor.fetchone()[0]
+
+        if active_inv > 0:
+            cursor.execute("SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE' AND metadata->>'investigation_id' IS NOT NULL;")
+        else:
+            cursor.execute("SELECT COUNT(*) FROM raw_urls WHERE status = 'PENDING_SCRAPE';")
+            
         count_row = cursor.fetchone()
         pending_count = count_row[0] if count_row else 0
         
@@ -456,7 +463,7 @@ def process_scraping_queue():
         conn.close()
         
         if pending_count == 0:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Queue empty. Exiting.")
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Queue empty (or only background items remaining during investigation lock). Exiting.")
             return
             
         # --- Auto-Scaling Logic ---

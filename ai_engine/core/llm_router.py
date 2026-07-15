@@ -24,8 +24,7 @@ import instructor
 from dotenv import load_dotenv
 from google.auth import default as google_default
 from google.auth.transport.requests import AuthorizedSession
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from pydantic.fields import PydanticUndefined
 
 # Ensure the ai_engine .env is loaded at import time for any script that imports this module first.
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -58,9 +57,9 @@ PROVIDERS = {
         "base_url": OLLAMA_BASE_URL,  # Resolved at module load from OLLAMA_BASE_URL env var
         "weight": 100,
         "env_keys": ["OLLAMA_SENTINEL"],  # Sentinel — not a real key; shim bypasses auth
-        "model_light":  "gemma-4-e4b",
-        "model_heavy":  "gemma-4-e4b",
-        "model_vision": "gemma-4-e4b"
+        "model_light":  "gemma2:9b",
+        "model_heavy":  "gemma2:9b",
+        "model_vision": "gemma2:9b"
     },
     # ── Disabled Cloud Providers ───────────────────────────────────────────────
     # All cloud providers are weight-zeroed. Routing is exclusively self-hosted.
@@ -76,9 +75,9 @@ PROVIDERS = {
         "base_url": None,
         "weight": 0,
         "env_keys": ["VERTEX_AI_API_KEY"],
-        "model_light":  "gemini-2.5-flash",
-        "model_heavy":  "gemini-2.5-pro",
-        "model_vision": "gemini-2.5-flash"
+        "model_light":  "gemma-4-12b-it",
+        "model_heavy":  "gemma-4-12b-it",
+        "model_vision": "gemma-4-12b-it"
     },
     "DEEPINFRA": {
         "base_url": "https://api.deepinfra.com/v1/openai",
@@ -257,8 +256,6 @@ class _GenAICompletionsShim:
             cfg["temperature"] = kwargs["temperature"]
         if "max_tokens" in kwargs:
             cfg["max_output_tokens"] = kwargs["max_tokens"]
-        if kwargs.get("response_format", {}).get("type") == "json_object":
-            cfg["response_mime_type"] = "application/json"
         config = _gt.GenerateContentConfig(**cfg) if cfg else None
         resp = self._client.models.generate_content(
             model=model, contents=contents, config=config
@@ -282,62 +279,25 @@ class _GenAIRawShim:
 
 import json as _json
 import requests as _requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import httpx
-
-def _make_resilient_session() -> _requests.Session:
-    """
-    Build a requests Session with connection-error retries.
-    We do NOT retry on read timeouts — a slow LLM response is not a transient
-    connection error, and retrying would re-POST the full request unnecessarily.
-    """
-    session = _requests.Session()
-    retry = Retry(
-        total=3,
-        connect=3,           # retry on connect failures only
-        read=0,              # never auto-retry on read timeout
-        backoff_factor=1,
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["POST"],
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
 
 class _OllamaCompletionsShim:
-    """
-    Translates OpenAI-style .create() kwargs into either:
-      - Ollama /api/chat  (when OLLAMA_NATIVE=true or base_url contains .hf.space)
-      - vLLM/OpenAI /v1/chat/completions  (default — used for ngrok/Colab vLLM endpoints)
-    """
+    """Translates OpenAI-style .create() kwargs into Ollama /api/chat calls."""
 
     def __init__(self, base_url: str):
         self._base_url = base_url.rstrip("/")
-        self._session = _make_resilient_session()
-        # Detect native Ollama vs vLLM/OpenAI-compat endpoint.
-        # Native Ollama endpoints are identified by the OLLAMA_NATIVE env var or
-        # by the legacy HF Space host. Everything else (ngrok, Cloud Run, etc.)
-        # is treated as an OpenAI-compatible vLLM server.
-        _native_flag = os.getenv("OLLAMA_NATIVE", "").strip().lower() == "true"
-        _hf_host = ".hf.space" in self._base_url
-        self._use_ollama_native = _native_flag or _hf_host
 
     def create(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
-        if self._use_ollama_native:
-            return self._create_ollama(model=model, messages=messages, **kwargs)
-        else:
-            return self._create_openai_compat(model=model, messages=messages, **kwargs)
-
-    def _create_ollama(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
-        """Ollama /api/chat — for the HF Space Gemma 2 backend."""
+        """
+        Calls POST {base_url}/api/chat with the Ollama message format.
+        Collects streamed response tokens and returns a unified _GenAIResponseShim
+        so downstream code (choices[0].message.content) works unchanged.
+        """
         payload: dict = {
             "model": model,
-            "messages": messages,
+            "messages": messages,  # Ollama /api/chat accepts the same role/content format
             "stream": True,
         }
+        # Map OpenAI generation kwargs to Ollama options where applicable
         options: dict = {}
         if "temperature" in kwargs:
             options["temperature"] = kwargs["temperature"]
@@ -350,84 +310,41 @@ class _OllamaCompletionsShim:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                resp = self._session.post(url, json=payload, stream=True, timeout=600, verify=False)
+                resp = _requests.post(url, json=payload, stream=True, timeout=600)
                 resp.raise_for_status()
                 break
             except _requests.exceptions.HTTPError as e:
-                last_error = RuntimeError(f"[OllamaShim] HTTP {getattr(resp, 'status_code', '?')} from {url}: {e}")
+                last_error = RuntimeError(f"[OllamaShim] HTTP {getattr(resp, 'status_code', 'unknown')} from {url}: {e}")
                 if attempt == 2:
                     raise last_error from e
-            except (_requests.exceptions.Timeout, _requests.exceptions.RequestException) as e:
+            except _requests.exceptions.Timeout as e:
+                last_error = RuntimeError(f"[OllamaShim] Timeout from {url}: {e}")
+                if attempt == 2:
+                    raise last_error from e
+            except _requests.exceptions.RequestException as e:
                 last_error = RuntimeError(f"[OllamaShim] Connection error to {url}: {e}")
                 if attempt == 2:
                     raise last_error from e
             time.sleep(2)
 
+        resp = resp  # type: ignore[assignment]
+        # Collect streamed NDJSON tokens into a full response string
         full_text = []
-        for raw_line in resp.iter_lines():  # type: ignore[union-attr]
+        for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
             try:
                 chunk = _json.loads(raw_line)
             except _json.JSONDecodeError:
                 continue
+            # Ollama /api/chat streaming format: {"message": {"content": "..."}}
             content_piece = chunk.get("message", {}).get("content", "")
             if content_piece:
                 full_text.append(content_piece)
             if chunk.get("done", False):
                 break
+
         return _GenAIResponseShim("".join(full_text))
-
-    def _create_openai_compat(self, *, model: str, messages: list, **kwargs) -> "_GenAIResponseShim":
-        """
-        vLLM / any OpenAI-compatible server — POST /v1/chat/completions.
-
-        Non-streaming. SSL verification is disabled (verify=False) so that the
-        ngrok tunnel's intermediate certificate chain does not cause SSLEOFErrors.
-        Streaming was tried but ngrok buffers SSE chunks, causing ReadTimeoutErrors
-        even when the model is actively generating. Non-streaming + long timeout is
-        the correct approach for ngrok-proxied vLLM.
-        """
-        payload: dict = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-        }
-        if "temperature" in kwargs:
-            payload["temperature"] = kwargs["temperature"]
-        if "max_tokens" in kwargs:
-            payload["max_tokens"] = kwargs["max_tokens"]
-        if kwargs.get("response_format", {}).get("type") == "json_object":
-            payload["response_format"] = {"type": "json_object"}
-
-        url = f"{self._base_url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json", "Authorization": "Bearer notneeded"}
-
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                resp = self._session.post(
-                    url, json=payload, headers=headers,
-                    timeout=720,   # 12 min — generous for long extractions
-                    verify=False,  # bypass ngrok SSL cert chain
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return _GenAIResponseShim(content)
-            except _requests.exceptions.Timeout as e:
-                last_error = RuntimeError(f"[vLLMShim] Timeout from {url}: {e}")
-            except _requests.exceptions.RequestException as e:
-                last_error = RuntimeError(f"[vLLMShim] Connection error to {url}: {e}")
-            except (KeyError, IndexError) as e:
-                last_error = RuntimeError(f"[vLLMShim] Malformed response from {url}: {e} | body={getattr(resp, 'text', '')[:300]}")
-            except _json.JSONDecodeError as e:
-                last_error = RuntimeError(f"[vLLMShim] JSON decode error from {url}: {e} | body={getattr(resp, 'text', '')[:300]}")
-            if attempt < 2:
-                time.sleep(3)
-        raise last_error  # type: ignore[misc]
-
-
 
 
 class _OllamaRawShim:
@@ -455,22 +372,15 @@ class RoutedClient:
         self.disabled = False
 
         if provider_name == "SELF_HOSTED_OLLAMA":
-            # Ollama shim — no SDK required, uses raw HTTP via requests
-            ollama_shim = _OllamaRawShim(p_config["base_url"])
-            self.raw_client = ollama_shim  # type: ignore
-            # Instructor wraps the raw client via a compatibility path;
-            # for JSON structured outputs we wrap a dummy OpenAI client pointed
-            # at the same Ollama server which exposes /v1/chat/completions too.
-            # Also pass a custom httpx client with SSL verification disabled so that
-            # the OpenAI SDK (which uses httpx internally) doesn't choke on the ngrok
-            # tunnel's SSL chain when used via instructor for structured outputs.
+            # Keep the self-hosted path on the same OpenAI-compatible
+            # /v1/chat/completions contract that the Gemma server exposes.
             openai_compat = OpenAI(
                 base_url=f"{p_config['base_url']}/v1",
-                api_key="ollama",  # Ollama accepts any non-empty key string
+                api_key="ollama",  # Accepts any non-empty key string for local compat servers
                 timeout=300.0,
-                max_retries=0,
-                http_client=httpx.Client(verify=False),
+                max_retries=0
             )
+            self.raw_client = openai_compat  # type: ignore
             self.client = instructor.from_openai(openai_compat, mode=instructor.Mode.JSON)  # type: ignore[assignment]
         elif provider_name == "GOOGLE_AI_STUDIO":
             from google import genai as _genai  # lazy import
@@ -593,17 +503,17 @@ class MultiProviderRouter:
             updated.append({"role": "user", "content": schema_hint})
         return updated
 
-    def _infer_safe_default_for_field(self, field_info: Any) -> Any:
-        """Produce a safe default for a Pydantic field when provider output is malformed."""
+    def _infer_safe_default_for_field(self, field_info: Any, field_name: str | None = None, response_model: Any | None = None, parsed: dict | None = None, context: Any | None = None) -> Any:
+        """Produce a field value from context when possible, otherwise fall back safely."""
         if field_info is None:
             return None
 
-        default = getattr(field_info, "default", None)
-        if default is not None:
+        default = getattr(field_info, "default", PydanticUndefined)
+        if default is not PydanticUndefined and default is not None:
             return default
 
         default_factory = getattr(field_info, "default_factory", None)
-        if default_factory is not None:
+        if default_factory is not None and default_factory is not PydanticUndefined:
             try:
                 return default_factory()
             except Exception:
@@ -612,6 +522,43 @@ class MultiProviderRouter:
         annotation = getattr(field_info, "annotation", None)
         annotation_name = getattr(annotation, "__name__", "") if annotation is not None else ""
         annotation_str = str(annotation)
+        field_name = field_name or getattr(field_info, 'name', None) or getattr(field_info, 'alias', None) or ''
+
+        model_name = getattr(response_model, '__name__', '') if response_model is not None else ''
+        if model_name == 'TriageResult':
+            if context is not None:
+                target = self._extract_target_from_context(context)
+                if target:
+                    if field_name == 'goal_type':
+                        return 'PROFILING'
+                    if field_name == 'target_type':
+                        return 'QUESTION'
+                    if field_name == 'canonical_target':
+                        return target.strip().lower()
+                    if field_name == 'rationale':
+                        return f"Triage fallback derived from the provided investigation target '{target}'."
+            if field_name == 'goal_type':
+                return 'PROFILING'
+            if field_name == 'target_type':
+                return 'QUESTION'
+            if field_name == 'canonical_target':
+                return ''
+            if field_name == 'rationale':
+                return 'Triage fallback generated from the supplied target context.'
+
+        if model_name == 'HarvestResult':
+            if context is not None:
+                target = self._extract_target_from_context(context)
+                if field_name == 'goal_progress_summary':
+                    if target:
+                        return f"Fallback harvest summary for '{target}': no structured harvest output was returned, so the investigation continues from the current evidence base."
+                    return 'Fallback harvest summary: no structured harvest output was returned, so the investigation continues from the current evidence base.'
+            if field_name == 'goal_progress_summary':
+                return 'Fallback harvest summary: no structured harvest output was returned, so the investigation continues from the current evidence base.'
+            if field_name == 'goal_achieved':
+                return False
+            if field_name == 'leads':
+                return []
 
         if annotation_name == "list" or annotation_str.startswith("typing.List") or annotation_str.startswith("list["):
             return []
@@ -623,14 +570,112 @@ class MultiProviderRouter:
             return 0
         return None
 
-    def _build_safe_model_instance(self, response_model: Any, parsed: Any | None = None) -> Any:
-        """Return a valid model instance with safe defaults rather than a plain dict."""
+    def _unwrap_structured_payload(self, parsed: Any, response_model: Any) -> Any:
+        """Extract a nested object payload when the provider wrapped it under the model name."""
+        if not isinstance(parsed, dict):
+            return parsed
+
+        model_name = getattr(response_model, '__name__', None)
+        if isinstance(model_name, str) and model_name in parsed and isinstance(parsed[model_name], dict):
+            return parsed[model_name]
+
+        for candidate_key in ('data', 'result', 'response', 'payload', 'value'):
+            if candidate_key in parsed and isinstance(parsed[candidate_key], dict):
+                return parsed[candidate_key]
+
+        return parsed
+
+    def _normalize_harvest_result_payload(self, parsed: Any) -> Any:
+        """Coerce single-lead HarvestResult payloads into the expected wrapper object."""
+        if not isinstance(parsed, dict):
+            return parsed
+
+        if isinstance(getattr(parsed, 'keys', None), type(lambda: None)):
+            pass
+
+        if 'leads' not in parsed and {'entity_name', 'lead_type', 'priority', 'relevance_reason'}.issubset(parsed.keys()):
+            return {
+                'leads': [
+                    {
+                        'entity_name': parsed.get('entity_name', ''),
+                        'lead_type': parsed.get('lead_type', 'GENERAL'),
+                        'priority': parsed.get('priority', 0),
+                        'relevance_reason': parsed.get('relevance_reason', ''),
+                    }
+                ],
+                'goal_progress_summary': parsed.get('goal_progress_summary', 'Harvest returned one lead without summary.'),
+                'goal_achieved': parsed.get('goal_achieved', False),
+            }
+
+        return parsed
+
+    def _extract_target_from_context(self, context: Any) -> str:
+        """Extract a likely investigation target from prompt/context payloads."""
+        if isinstance(context, str):
+            text = context
+        elif isinstance(context, list):
+            parts = []
+            for item in context:
+                if isinstance(item, dict):
+                    content = item.get('content')
+                    if isinstance(content, str):
+                        parts.append(content)
+                elif isinstance(item, str):
+                    parts.append(item)
+            text = '\n'.join(parts)
+        elif isinstance(context, dict):
+            text = str(context.get('content') or context.get('text') or context.get('target') or '')
+        else:
+            text = str(context or '')
+
+        if not text:
+            return ''
+
+        for marker in ('TARGET:', 'target:'):
+            if marker in text:
+                tail = text.split(marker, 1)[1].strip()
+                if tail:
+                    return tail.splitlines()[0].strip()
+        return ''
+
+    def _populate_missing_fields(self, response_model: Any, parsed: dict, context: Any | None = None) -> dict:
+        """Populate missing required fields with context-derived values before Pydantic validation."""
+        if not isinstance(parsed, dict):
+            return {}
+
+        fields = getattr(response_model, 'model_fields', None) or getattr(response_model, '__fields__', None) or {}
+        populated = dict(parsed)
+        for fname, finfo in fields.items():
+            if fname in populated and populated[fname] is not None:
+                continue
+            populated[fname] = self._infer_safe_default_for_field(
+                finfo,
+                field_name=fname,
+                response_model=response_model,
+                parsed=parsed,
+                context=context,
+            )
+        return populated
+
+    def _build_safe_model_instance(self, response_model: Any, parsed: Any | None = None, context: Any | None = None) -> Any:
+        """Build a valid response model instance from fallback/partial provider output."""
+        if isinstance(parsed, dict):
+            parsed = self._unwrap_structured_payload(parsed, response_model)
+            if getattr(response_model, '__name__', '') == 'HarvestResult':
+                parsed = self._normalize_harvest_result_payload(parsed)
+
         if hasattr(response_model, "model_validate"):
             try:
                 if isinstance(parsed, dict):
-                    return response_model.model_validate(parsed)
+                    populated = self._populate_missing_fields(response_model, parsed, context)
+                    if isinstance(populated, dict):
+                        return response_model.model_validate(populated)
                 if parsed is None:
-                    return response_model.model_validate({})
+                    populated = self._populate_missing_fields(response_model, {}, context)
+                    if isinstance(populated, dict):
+                        return response_model.model_validate(populated)
+                if isinstance(parsed, dict):
+                    return response_model.model_validate(parsed)
             except Exception:
                 pass
 
@@ -642,10 +687,22 @@ class MultiProviderRouter:
                     if fname in parsed and parsed[fname] is not None:
                         defaults[fname] = parsed[fname]
                     else:
-                        defaults[fname] = self._infer_safe_default_for_field(fields[fname])
+                        defaults[fname] = self._infer_safe_default_for_field(
+                            fields[fname],
+                            field_name=fname,
+                            response_model=response_model,
+                            parsed=parsed,
+                            context=context,
+                        )
             else:
                 for fname, finfo in fields.items():
-                    defaults[fname] = self._infer_safe_default_for_field(finfo)
+                    defaults[fname] = self._infer_safe_default_for_field(
+                        finfo,
+                        field_name=fname,
+                        response_model=response_model,
+                        parsed=parsed,
+                        context=context,
+                    )
 
             try:
                 return response_model(**defaults)
@@ -1026,13 +1083,8 @@ class MultiProviderRouter:
                 err_type = str(type(e)).lower()
                 reason = f"error: {type(e).__name__} {str(e)[:200]}"
 
-                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and any(x in err_str for x in ["timeout", "timed out", "connection", "temporarily unavailable", "retry", "failed_attempts", "ssl", "eof"]):
-                    print(f"[LLM Router] Local provider connection issue from {client_wrapper.provider}; cooling down and falling back to cloud providers: {str(e)[:120]}")
-                    client_wrapper.cooldown_until = time.time() + 30
-                    exceptions.append(e)
-                    continue
-                elif any(x in err_str for x in ["validation", "json", "parse"]):
-                    print(f"[LLM Router] Local provider JSON/parse issue from {client_wrapper.provider}; returning safe fallback: {str(e)[:120]}")
+                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and any(x in err_str for x in ["timeout", "timed out", "connection", "temporarily unavailable", "retry", "failed_attempts", "validation", "json", "parse"]):
+                    print(f"[LLM Router] Local provider fallback issue from {client_wrapper.provider}; returning safe fallback instead of disabling provider: {e}")
                     client_wrapper.cooldown_until = time.time() + 5
                     if "response_model" in kwargs and kwargs.get("response_model") is not None:
                         try:

@@ -61,6 +61,17 @@ def setup_postgres_schema():
         """)
         print("- Created raw_articles table")
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS article_extraction_progress (
+                article_id INTEGER PRIMARY KEY REFERENCES raw_articles(id) ON DELETE CASCADE,
+                total_chunks INTEGER DEFAULT 0,
+                last_completed_chunk INTEGER DEFAULT -1,
+                last_error TEXT,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        print("- Created article_extraction_progress table")
+
         # 2.5 article_categories (Stage 3 Semantic Classification via pgvector)
         # We must enable the vector extension first on the Neon / Postgres instance
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
@@ -101,6 +112,7 @@ def setup_postgres_schema():
                 model_version VARCHAR(255),
                 prompt_version VARCHAR(255),
                 ai_metadata JSONB,
+                investigation_id INTEGER REFERENCES investigations(id) ON DELETE CASCADE,
                 
                 -- Processing state
                 pipeline_stage VARCHAR(50) DEFAULT 'STAGE_4_RESOLUTION', 

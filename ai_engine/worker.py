@@ -59,7 +59,7 @@ PRESSURE_QUERIES = {
         SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles ra JOIN raw_urls ru ON ra.url_id = ru.id WHERE ra.status = 'PENDING_CLASSIFICATION'
     """,
     "4_extraction.py": """
-        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles ra JOIN raw_urls ru ON ra.url_id = ru.id WHERE ra.status = 'PENDING_EXTRACTION'
+        SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM raw_articles ra JOIN raw_urls ru ON ra.url_id = ru.id WHERE ra.status IN ('PENDING_EXTRACTION', 'PROCESSING_EXTRACTION')
     """,
     "5_resolution.py": """
         SELECT COUNT(*), SUM(CASE WHEN (ru.metadata->>'investigation_id') IS NOT NULL THEN 1 ELSE 0 END) FROM extracted_claims ec

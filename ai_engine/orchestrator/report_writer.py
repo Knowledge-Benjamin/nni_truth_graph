@@ -141,6 +141,47 @@ def _chapter_hash(items: list) -> str:
     return hashlib.md5("".join(key).encode()).hexdigest()
 
 
+def _normalize_response_content(response: object) -> str:
+    """Accept common LLM response shapes and return the text body if available."""
+    if response is None:
+        return ""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        for key in ("content", "text", "message", "output", "response", "value"):
+            value = response.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                nested = _normalize_response_content(value)
+                if nested:
+                    return nested
+        if len(response) == 1:
+            return _normalize_response_content(next(iter(response.values())))
+        return ""
+    for attr in ("content", "text", "output_text"):
+        value = getattr(response, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if hasattr(response, "message"):
+        message = getattr(response, "message")
+        if isinstance(message, str):
+            return message
+        if isinstance(message, dict):
+            return _normalize_response_content(message)
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content
+    if hasattr(response, "model_dump"):
+        try:
+            dumped = response.model_dump()
+            if isinstance(dumped, dict):
+                return _normalize_response_content(dumped)
+        except Exception:
+            pass
+    return ""
+
+
 def _claim_line(c: dict) -> str:
     """Format a single claim for LLM context."""
     badge = "🥇 " if c.get('corroboration_count', 1) >= 3 else "🥈 " if c.get('corroboration_count', 1) == 2 else ""
@@ -203,7 +244,7 @@ def _generate_chapter(
             temperature=0.3,
             max_tokens=800,
         )
-        return resp.content
+        return _normalize_response_content(resp)
     except Exception as e:
         print(f"  [ReportWriter] LLM error in '{chapter_title}': {e}")
         return ""

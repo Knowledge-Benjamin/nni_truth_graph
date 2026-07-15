@@ -36,6 +36,21 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
 HF_EMBED_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
+
+def _coerce_optional_numeric_property(value):
+    """Return a float only when the upstream extractor actually produced one."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _embed_text(text: str) -> list | None:
     """768-dim embedding via shared InferencePool endpoint."""
     try:
@@ -283,21 +298,33 @@ def write_claim_to_graph(session, claim: dict):
 
     # 8. Mutate Media node for Visual Provenance
     if claim.get("media"):
-        session.run("""
-            MERGE (m:Media {url: $media_url})
+        media_url = claim["media"]["url"]
+        phash = claim["media"].get("phash") or ""
+        synthetic_prob = _coerce_optional_numeric_property(claim["media"].get("synthetic_probability"))
+        cross_modal_sim = _coerce_optional_numeric_property(claim.get("cross_modal_similarity"))
+
+        prop_fragments = []
+        params = {
+            "media_url": media_url,
+            "phash": phash,
+            "claim_id": str(claim["id"]),
+        }
+        if synthetic_prob is not None:
+            prop_fragments.append("synthetic_probability: $synthetic_prob")
+            params["synthetic_prob"] = synthetic_prob
+        if cross_modal_sim is not None:
+            prop_fragments.append("cross_modal_similarity: $cross_modal_sim")
+            params["cross_modal_sim"] = cross_modal_sim
+
+        rel_props = f" {{{', '.join(prop_fragments)}}}" if prop_fragments else ""
+        session.run(f"""
+            MERGE (m:Media {{url: $media_url}})
               ON CREATE SET m.phash = $phash,
                             m.created_at = datetime()
             WITH m
-            MATCH (c:Claim {id: $claim_id})
-            MERGE (c)-[:SUPPORTED_BY {
-                synthetic_probability: $synthetic_prob,
-                cross_modal_similarity: $cross_modal_sim
-            }]->(m)
-        """, media_url=claim["media"]["url"],
-             phash=claim["media"].get("phash") or "",
-             synthetic_prob=claim["media"].get("synthetic_probability") or 0.0,
-             cross_modal_sim=claim.get("cross_modal_similarity"),
-             claim_id=str(claim["id"]))
+            MATCH (c:Claim {{id: $claim_id}})
+            MERGE (c)-[:SUPPORTED_BY{rel_props}]->(m)
+        """, **params)
 
     # 9. Graph Attribution (Investigation Tracking)
     inv_id = claim.get("investigation_id")
@@ -523,7 +550,15 @@ def mutation_worker(worker_id: int):
                                 response_model=None,
                                 temperature=0.0
                             )
-                            ans = response.strip().upper()
+                            text = ""
+                            if hasattr(response, "choices") and response.choices:
+                                text = getattr(response.choices[0].message, "content", "") or ""
+                            elif isinstance(response, str):
+                                text = response
+                            else:
+                                text = str(response)
+
+                            ans = text.strip().upper()
                             if "REJECTED" in ans:
                                 with psycopg2.connect(DATABASE_URL) as pg_conn:
                                     with pg_conn.cursor() as cur:
@@ -646,11 +681,24 @@ def process_mutation_queue():
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
         cur = conn.cursor()
-        cur.execute("""
-            SELECT COUNT(*) FROM extracted_claims
-            WHERE pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
-              AND status IN ('AUTO_APPROVE', 'PROCESSING');
-        """)
+        cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
+        active_inv = cur.fetchone()[0]
+
+        if active_inv > 0:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims ec
+                JOIN raw_articles ra ON ec.article_id = ra.id
+                JOIN raw_urls ru ON ra.url_id = ru.id
+                WHERE ec.pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+                  AND ec.status IN ('AUTO_APPROVE', 'PROCESSING')
+                  AND ru.metadata->>'investigation_id' IS NOT NULL;
+            """)
+        else:
+            cur.execute("""
+                SELECT COUNT(*) FROM extracted_claims
+                WHERE pipeline_stage = 'STAGE_8_MUTATION_QUEUE'
+                  AND status IN ('AUTO_APPROVE', 'PROCESSING');
+            """)
         row = cur.fetchone()
         pending = row[0] if row else 0
         cur.close()
