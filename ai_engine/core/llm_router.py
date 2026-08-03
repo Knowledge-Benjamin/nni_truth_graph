@@ -470,6 +470,10 @@ class MultiProviderRouter:
                 except json.JSONDecodeError:
                     continue
 
+        repaired = self._recover_malformed_json_object(candidate)
+        if repaired is not None:
+            return repaired
+
         # Attempt to recover a truncated JSON object by scanning for the first
         # top-level key/value pairs even if the closing braces are missing.
         recovered = self._recover_partial_object(candidate)
@@ -482,6 +486,97 @@ class MultiProviderRouter:
         if recovered is not None:
             return recovered
 
+        return None
+
+    def _find_matching_bracket(self, text: str, start_idx: int, open_ch: str, close_ch: str) -> int:
+        """Find the matching closing bracket for an open bracket at start_idx."""
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start_idx, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return idx
+        return -1
+
+    def _extract_malformed_string_item(self, text: str, start_idx: int) -> tuple[str, int]:
+        """Extract a string item from a malformed JSON list where inner quotes are unescaped."""
+        items: list[str] = []
+        i = start_idx + 1
+        while i < len(text):
+            ch = text[i]
+            if ch == '"':
+                next_non_ws = i + 1
+                while next_non_ws < len(text) and text[next_non_ws] in ' \t\r\n':
+                    next_non_ws += 1
+                if next_non_ws < len(text) and text[next_non_ws] in ',]':
+                    return ''.join(items), next_non_ws
+                items.append('\\"')
+                i += 1
+                continue
+            items.append(ch)
+            i += 1
+        return ''.join(items), i
+
+    def _recover_malformed_json_object(self, text: str) -> dict | None:
+        """Recover a malformed JSON object containing a `queries` list with embedded quotes."""
+        if not text:
+            return None
+
+        queries_match = re.search(r'"queries"\s*:\s*\[', text)
+        if not queries_match:
+            return None
+
+        array_start = queries_match.end() - 1
+        array_end = self._find_matching_bracket(text, array_start, '[', ']')
+        if array_end == -1:
+            return None
+
+        queries: list[str] = []
+        cursor = array_start + 1
+        while cursor < array_end:
+            while cursor < array_end and text[cursor] in ' \t\r\n':
+                cursor += 1
+            if cursor >= array_end:
+                break
+            if text[cursor] == '"':
+                item, cursor = self._extract_malformed_string_item(text, cursor)
+                queries.append(item)
+                while cursor < array_end and text[cursor] in ' \t\r\n':
+                    cursor += 1
+                if cursor < array_end and text[cursor] == ',':
+                    cursor += 1
+                continue
+            cursor += 1
+
+        rationale = ''
+        rationale_match = re.search(r'"rationale"\s*:\s*"((?:\\.|[^"\\])*)"', text, re.S)
+        if rationale_match:
+            try:
+                rationale = json.loads(f'"{rationale_match.group(1)}"')
+            except Exception:
+                rationale = rationale_match.group(1)
+
+        if queries:
+            return {
+                'queries': queries,
+                'rationale': rationale,
+            }
         return None
 
     def _recover_partial_object(self, text: str) -> Any | None:
