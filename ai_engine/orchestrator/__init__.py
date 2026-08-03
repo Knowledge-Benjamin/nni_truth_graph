@@ -37,11 +37,39 @@ from .triage    import triage_target, persist_triage
 from .lead_agent import run_lead_agent
 from .harvester  import run_harvester
 from .terminator import check_termination, complete_investigation
-from .report_writer import run_report_tick
+from .report_writer import run_report_tick, _ensure_pg_connection
 from ai_engine.core.license_manager import validate_license
 from ai_engine.core.source_utils import resolve_source_for_url
 
 _has_run_startup_recovery = False
+
+
+def _ensure_orchestrator_connection(pg_conn, database_url: str | None = None):
+    """Return a healthy orchestrator connection and recreate stale sockets safely."""
+    return _ensure_pg_connection(pg_conn, database_url or DATABASE_URL)
+
+
+def _checkpoint_investigation_state(pg_conn, investigation_id: int, findings: dict, phase: str, extra: dict | None = None) -> None:
+    """Persist the current orchestration checkpoint to DB so a crash can resume safely."""
+    payload = dict(findings or {})
+    payload["last_tick_phase"] = phase
+    payload["last_tick_checkpoint_at"] = time.time()
+    if extra:
+        payload.update(extra)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE investigations
+            SET findings = findings || %s::jsonb
+            WHERE id = %s
+            """,
+            (
+                Json(payload),
+                investigation_id,
+            ),
+        )
+    pg_conn.commit()
 
 
 def _get_or_create_searxng_source(pg_conn) -> int:
@@ -178,6 +206,8 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
         print(f"[Orchestrator] DB connection failed: {e}")
         return
 
+    pg_conn = _ensure_orchestrator_connection(pg_conn)
+
     global _has_run_startup_recovery
 
     try:
@@ -208,6 +238,7 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
         searxng_source_id = _get_or_create_searxng_source(pg_conn)
 
         for inv in active_investigations:
+            pg_conn = _ensure_orchestrator_connection(pg_conn)
             inv_id   = inv["id"]
             target   = inv["target"]
             findings = inv["findings"] or {}
@@ -229,9 +260,17 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
                         "initial_queries": triage.initial_queries,
                         "triage_rationale": triage.rationale,
                     })
+                    _checkpoint_investigation_state(
+                        pg_conn,
+                        inv_id,
+                        findings,
+                        phase="triage",
+                        extra={"canonical_target": triage.canonical_target, "target_type": triage.target_type},
+                    )
                     if triage.initial_queries and SEARXNG_URL:
                         _inject_initial_queries(inv_id, triage.initial_queries, pg_conn, searxng_source_id)
                 except Exception as e:
+                    _checkpoint_investigation_state(pg_conn, inv_id, findings, phase="triage_failed", extra={"error": str(e)})
                     print(f"[Orchestrator] Triage failed for #{inv_id}: {e}")
 
             # ── Step 2: Harvest — read pipeline output, score new leads ─────────
@@ -244,6 +283,17 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
                     pg_conn              = pg_conn,
                     neo4j_driver         = neo4j_driver,
                 )
+                _checkpoint_investigation_state(
+                    pg_conn,
+                    inv_id,
+                    findings,
+                    phase="harvest",
+                    extra={
+                        "last_harvest_summary": harvest.get("summary"),
+                        "new_leads": harvest.get("new_leads", 0),
+                        "goal_achieved": harvest.get("goal_achieved", False),
+                    },
+                )
                 if harvest.get("goal_achieved"):
                     with pg_conn.cursor() as cur:
                         cur.execute(
@@ -252,12 +302,14 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
                         )
                     pg_conn.commit()
             except Exception as e:
+                _checkpoint_investigation_state(pg_conn, inv_id, findings, phase="harvest_failed", extra={"error": str(e)})
                 print(f"[Orchestrator] Harvester failed for #{inv_id}: {e}")
 
             # ── Step 2b: Incrementally update the living investigation report ─────
             try:
                 report_conn = psycopg2.connect(DATABASE_URL)
                 report_conn.autocommit = False
+                report_conn = _ensure_orchestrator_connection(report_conn)
                 run_report_tick(
                     investigation_id     = inv_id,
                     investigation_target = target,
@@ -265,7 +317,20 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
                     inv_meta             = dict(inv),
                 )
                 report_conn.close()
+                pg_conn = _ensure_orchestrator_connection(pg_conn)
+                _checkpoint_investigation_state(
+                    pg_conn,
+                    inv_id,
+                    findings,
+                    phase="report_tick_complete",
+                    extra={"report_writer": "completed"},
+                )
             except Exception as e:
+                try:
+                    pg_conn = _ensure_orchestrator_connection(pg_conn)
+                except Exception:
+                    pass
+                _checkpoint_investigation_state(pg_conn, inv_id, findings, phase="report_tick_failed", extra={"error": str(e)})
                 print(f"[Orchestrator] Report writer failed for #{inv_id} (non-fatal): {e}")
 
             # ── Step 3: Check termination before spinning up agents ───────────────

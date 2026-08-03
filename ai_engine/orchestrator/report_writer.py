@@ -85,6 +85,8 @@ def _ensure_pg_connection(pg_conn, database_url: Optional[str] = None):
         return _connect_postgres(database_url)
 
     try:
+        if getattr(pg_conn, "closed", False):
+            raise RuntimeError("connection is closed")
         with pg_conn.cursor() as cur:
             cur.execute("SELECT 1")
         return pg_conn
