@@ -139,7 +139,10 @@ def _fetch_investigation_claims(pg_conn, investigation_id: int) -> list[dict]:
                 s.name           AS source_name,
                 s.epistemic_trust_score,
                 cp.internet_original_url   AS original_url,
-                cp.internet_original_source AS original_source
+                cp.internet_original_source AS original_source,
+                cp.neo4j_stance,
+                cp.neo4j_matched_claim_id,
+                cp.neo4j_similarity
             FROM extracted_claims ec
             JOIN raw_articles ra ON ec.article_id = ra.id
             JOIN raw_urls     ru ON ra.url_id = ru.id
@@ -184,6 +187,29 @@ def _fetch_investigation_sources(pg_conn, investigation_id: int) -> list[dict]:
         """, (investigation_id,))
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _fetch_investigation_evidence_counts(pg_conn, investigation_id: int) -> dict:
+    """Return document/source/witness/reference counts for the investigation."""
+    with pg_conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                COUNT(DISTINCT ec.article_id) AS document_count,
+                COUNT(DISTINCT ru.source_id) AS source_count,
+                COUNT(DISTINCT cc.raw_article_id) AS witness_count,
+                COUNT(DISTINCT ec.id) AS reference_count
+            FROM extracted_claims ec
+            JOIN raw_articles ra ON ec.article_id = ra.id
+            JOIN raw_urls ru ON ra.url_id = ru.id
+            LEFT JOIN claim_corroborations cc ON cc.claim_id = ec.id
+            WHERE (ru.metadata->>'investigation_id')::int = %s
+              AND ec.status IN ('GRAPH_COMMITTED', 'AUTO_APPROVE', 'CONTRADICTED', 'PROCESSING')
+        """, (investigation_id,))
+        row = cur.fetchone()
+        cols = [d[0] for d in cur.description]
+        if not row:
+            return {"document_count": 0, "source_count": 0, "witness_count": 0, "reference_count": 0}
+        return {k: int(v or 0) for k, v in dict(zip(cols, row)).items()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +264,7 @@ def _normalize_response_content(response: object) -> str:
 
 
 def _claim_line(c: dict) -> str:
-    """Format a single claim for LLM context with confidence and source-strength cues."""
+    """Format a single claim for LLM context with confidence, source-strength, and stance cues."""
     corroboration = int(c.get('corroboration_count') or 1)
     epistemic_score = float(c.get('epistemic_score') or 0.5)
     confidence_label = "high" if epistemic_score >= 0.8 else "medium" if epistemic_score >= 0.6 else "low"
@@ -251,10 +277,20 @@ def _claim_line(c: dict) -> str:
     if c.get('quote_context'):   line += f'\n   > "{str(c["quote_context"])[:200]}"'
     src = c.get('original_source') or c.get('source_name') or 'Unknown'
     url = c.get('original_url') or c.get('source_url') or 'N/A'
+    stance = str(c.get('neo4j_stance') or '').upper()
+    matched = c.get('neo4j_matched_claim_id')
+    similarity = c.get('neo4j_similarity')
+    stance_suffix = ""
+    if stance in {"CONTRADICTS", "EVOLVES", "CORROBORATES", "ENRICHES"}:
+        stance_suffix = f" | Stance: {stance.lower()}"
+        if matched:
+            stance_suffix += f" | Matched claim: {matched}"
+        if similarity is not None:
+            stance_suffix += f" | Similarity: {round(float(similarity), 2)}"
     line += (
         f"\n   Source: {src} | URL: {url} | "
         f"Confidence: {confidence_label} ({round(epistemic_score, 2)}) | "
-        f"Corroboration: {corroboration} | Source strength: {source_strength}"
+        f"Corroboration: {corroboration} | Source strength: {source_strength}{stance_suffix}"
     )
     return line
 
@@ -324,6 +360,34 @@ def _select_relevant_context(claims_used: list[dict], evidence_context: list[str
 # LLM Section Generator (self-hosted only)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_support_summary(claims: list[dict], support_metrics: Optional[dict] = None) -> str:
+    """Create a compact evidence-support block for the chapter prompt."""
+    document_count = int((support_metrics or {}).get('document_count') or 0)
+    source_count = int((support_metrics or {}).get('source_count') or 0)
+    witness_count = int((support_metrics or {}).get('witness_count') or 0)
+    reference_count = int((support_metrics or {}).get('reference_count') or 0)
+
+    if not any([document_count, source_count, witness_count, reference_count]):
+        document_count = len({c.get('article_id') for c in claims if c.get('article_id')})
+        source_count = len({c.get('source_id') or c.get('source_name') or c.get('original_source') or c.get('source_url') for c in claims if c.get('source_id') or c.get('source_name') or c.get('original_source') or c.get('source_url')})
+        witness_count = max(1, len({c.get('claim_id') for c in claims if c.get('quote_context')}))
+        reference_count = len(claims)
+
+    confidence_score = 0.0
+    if claims:
+        confidence_score = sum(float(c.get('epistemic_score') or 0.5) for c in claims) / len(claims)
+    confidence_pct = int(round(confidence_score * 100))
+
+    return "\n".join([
+        "### Evidence Support Summary",
+        f"- Documents: {document_count}",
+        f"- Sources: {source_count}",
+        f"- Witnesses: {witness_count}",
+        f"- References: {reference_count}",
+        f"- Confidence: {confidence_pct}%",
+    ])
+
+
 def _generate_chapter(
     investigation_target: str,
     chapter_title: str,
@@ -334,6 +398,7 @@ def _generate_chapter(
     evidence_context: Optional[list[str]] = None,
     new_facts: Optional[list[str]] = None,
     existing_facts: Optional[list[str]] = None,
+    support_metrics: Optional[dict] = None,
 ) -> str:
     """Revise an existing chapter in place using the local LLM."""
 
@@ -343,6 +408,9 @@ def _generate_chapter(
         "",
         "MISSION:",
         instruction,
+        "",
+        "EVIDENCE SUPPORT SUMMARY:",
+        _build_support_summary([], support_metrics),
         "",
         "STRICT RULES:",
         "1. Write in formal investigative report prose. Authoritative, precise, third-person.",
@@ -358,11 +426,13 @@ def _generate_chapter(
         "11. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
         "12. If a claim is unclear or needs additional context, use the optional evidence context provided below and avoid speculation.",
         "13. When a claim is weak, single-source, low-confidence, or poorly corroborated, say so explicitly and avoid overstating certainty.",
-        "14. When multiple claims are strong and corroborated, you may present the conclusion with higher confidence, but still note the degree of support.",
-        "15. If multiple claims point to the same pattern, explain the implication and the reasoning trail from evidence to conclusion.",
-        "16. Where relevant, explicitly surface graph-intelligence findings: connected entities, evidence clusters, corroboration strength, confidence levels, and contradictions or unresolved disputes.",
-        "17. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
-        "18. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
+        "14. Prefer uncertainty-aware phrasing such as 'Evidence suggests...', 'It is likely...', 'There is moderate confidence...', 'There is insufficient evidence...', and 'Conflicting reporting exists...' when the evidence does not justify a hard assertion.",
+        "15. When multiple claims are strong and corroborated, you may present the conclusion with higher confidence, but still note the degree of support.",
+        "16. If multiple claims point to the same pattern, explain the implication and the reasoning trail from evidence to conclusion.",
+        "17. Where relevant, explicitly surface graph-intelligence findings: connected entities, evidence clusters, corroboration strength, confidence levels, and contradictions or unresolved disputes.",
+        "18. Explicitly include the Evidence Support Summary block in the chapter body so the reader can see the measurable support behind the claim.",
+        "19. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
+        "20. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
     ]
 
     if existing_content:
@@ -413,7 +483,8 @@ def _build_sitrep(target: str, claims: list[dict], leads: list[dict],
                   inv_meta: dict, existing: Optional[str],
                   evidence_context: Optional[list[str]] = None,
                   new_facts: Optional[list[str]] = None,
-                  existing_facts: Optional[list[str]] = None) -> str:
+                  existing_facts: Optional[list[str]] = None,
+                  support_metrics: Optional[dict] = None) -> str:
     """Chapter 1: Executive Situation Report (live-updated)."""
     explored  = sum(1 for l in leads if l['status'] == 'EXPLORED')
     pending   = sum(1 for l in leads if l['status'] == 'PENDING')
@@ -428,13 +499,14 @@ def _build_sitrep(target: str, claims: list[dict], leads: list[dict],
         f"Stats: {total_cls} claims extracted, {explored} leads explored, "
         f"{pending} leads pending, {contra} contradicted claims."
     )
-    return _generate_chapter(target, "Executive Situation Report", instruction, top_facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Executive Situation Report", instruction, top_facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_target_profile(target: str, claims: list[dict], existing: Optional[str],
                           evidence_context: Optional[list[str]] = None,
                           new_facts: Optional[list[str]] = None,
-                          existing_facts: Optional[list[str]] = None) -> str:
+                          existing_facts: Optional[list[str]] = None,
+                          support_metrics: Optional[dict] = None) -> str:
     """Chapter 2: Target Profile & Background."""
     # Filter for identity/classification claims
     profile_preds = {'IS_A','SUBCLASS_OF','IS_TYPE_OF','WAS_BORN_IN','FOUNDED_IN',
@@ -448,13 +520,14 @@ def _build_target_profile(target: str, claims: list[dict], existing: Optional[st
         "Cover identity, background, known aliases, affiliations, roles, and key biographical facts. "
         "This is the 'Who/What is the target?' chapter."
     )
-    return _generate_chapter(target, "Target Profile & Background", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Target Profile & Background", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_timeline(target: str, claims: list[dict], existing: Optional[str],
                     evidence_context: Optional[list[str]] = None,
                     new_facts: Optional[list[str]] = None,
-                    existing_facts: Optional[list[str]] = None) -> str:
+                    existing_facts: Optional[list[str]] = None,
+                    support_metrics: Optional[dict] = None) -> str:
     """Chapter 3: Chronological Event Timeline."""
     timed = [c for c in claims if c.get('temporal_anchor') and str(c['temporal_anchor']).strip()]
     timed.sort(key=lambda c: str(c.get('temporal_anchor') or ''))
@@ -466,13 +539,14 @@ def _build_timeline(target: str, claims: list[dict], existing: Optional[str],
         "Format each entry as: **[DATE]** — Event description [REF:id]. "
         "Cover the full span of the investigation from earliest to most recent."
     )
-    return _generate_chapter(target, "Chronological Event Timeline", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Chronological Event Timeline", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_actors_map(target: str, claims: list[dict], existing: Optional[str],
                       evidence_context: Optional[list[str]] = None,
                       new_facts: Optional[list[str]] = None,
-                      existing_facts: Optional[list[str]] = None) -> str:
+                      existing_facts: Optional[list[str]] = None,
+                      support_metrics: Optional[dict] = None) -> str:
     """Chapter 4: Key Actors & Network Map."""
     actor_preds = {'WORKS_FOR','IS_FUNDED_BY','IS_ASSOCIATED_WITH','CONTROLS','OWNS',
                    'IS_DIRECTOR_OF','IS_CEO_OF','IS_MEMBER_OF','COLLABORATED_WITH',
@@ -486,7 +560,7 @@ def _build_actors_map(target: str, claims: list[dict], existing: Optional[str],
         "involved with the target. Describe each actor's role and relationship. "
         "Use **Actor Name** (Role) format for each person or organisation."
     )
-    return _generate_chapter(target, "Key Actors & Network Map", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Key Actors & Network Map", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_evidence_page(target: str, page_claims: list[dict],
@@ -494,7 +568,8 @@ def _build_evidence_page(target: str, page_claims: list[dict],
                           existing: Optional[str],
                           evidence_context: Optional[list[str]] = None,
                           new_facts: Optional[list[str]] = None,
-                          existing_facts: Optional[list[str]] = None) -> str:
+                          existing_facts: Optional[list[str]] = None,
+                          support_metrics: Optional[dict] = None) -> str:
     """Chapter 5+: Evidence Dossier — single paginated sub-chapter."""
     facts = [_claim_line(c) for c in page_claims]
     instruction = (
@@ -510,14 +585,16 @@ def _build_evidence_page(target: str, page_claims: list[dict],
         instruction, facts, existing, max_facts=PAGE_SIZE,
         evidence_context=evidence_context,
         new_facts=new_facts,
-        existing_facts=existing_facts
+        existing_facts=existing_facts,
+        support_metrics=support_metrics
     )
 
 
 def _build_source_assessment(target: str, sources: list[dict], existing: Optional[str],
                               evidence_context: Optional[list[str]] = None,
                               new_facts: Optional[list[str]] = None,
-                              existing_facts: Optional[list[str]] = None) -> str:
+                              existing_facts: Optional[list[str]] = None,
+                              support_metrics: Optional[dict] = None) -> str:
     """Chapter: Source Intelligence Assessment."""
     src_lines = []
     for s in sources[:60]:
@@ -531,13 +608,14 @@ def _build_source_assessment(target: str, sources: list[dict], existing: Optiona
         "Evaluate the quality, diversity, and reliability of sources used. "
         "Note which sources provided the most evidence and flag any low-trust sources."
     )
-    return _generate_chapter(target, "Source Intelligence Assessment", instruction, src_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Source Intelligence Assessment", instruction, src_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_leads_coverage(target: str, leads: list[dict], existing: Optional[str],
                           evidence_context: Optional[list[str]] = None,
                           new_facts: Optional[list[str]] = None,
-                          existing_facts: Optional[list[str]] = None) -> str:
+                          existing_facts: Optional[list[str]] = None,
+                          support_metrics: Optional[dict] = None) -> str:
     """Chapter: Lead Threads & OSINT Coverage."""
     explored = [l for l in leads if l['status'] == 'EXPLORED']
     pending  = [l for l in leads if l['status'] == 'PENDING']
@@ -560,32 +638,34 @@ def _build_leads_coverage(target: str, leads: list[dict], existing: Optional[str
         "what was found per lead, and what remains unexplored. "
         "This documents the investigative methodology."
     )
-    return _generate_chapter(target, "Lead Threads & OSINT Coverage", instruction, lead_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Lead Threads & OSINT Coverage", instruction, lead_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_contradictions(target: str, claims: list[dict], existing: Optional[str],
                           evidence_context: Optional[list[str]] = None,
                           new_facts: Optional[list[str]] = None,
-                          existing_facts: Optional[list[str]] = None) -> str:
+                          existing_facts: Optional[list[str]] = None,
+                          support_metrics: Optional[dict] = None) -> str:
     """Chapter: Contradictions & Disputes."""
-    contra = [c for c in claims if c.get('claim_status') == 'CONTRADICTED']
+    contra = [c for c in claims if c.get('claim_status') == 'CONTRADICTED' or str(c.get('neo4j_stance') or '').upper() == 'CONTRADICTS']
     if not contra:
         return ""
     facts = [_claim_line(c) for c in contra[:60]]
     instruction = (
-        "Write the contradictions and disputes chapter. "
-        "Document every case where the evidence base contains conflicting claims. "
-        "For each contradiction: state both sides, cite sources, assess which is more credible. "
-        "Flag unresolved contradictions clearly."
+        "Write the contradictions and disputes chapter as a real evidentiary analysis. "
+        "For each dispute, explain the conflicting claims, identify the sources on each side, note the confidence and corroboration of each claim, and assess which version is better supported. "
+        "When one side has stronger provenance or a higher-confidence source, say so clearly. "
+        "Treat disagreements as a core investigative finding, not a footnote."
     )
-    return _generate_chapter(target, "Contradictions & Disputes", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Contradictions & Disputes", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 def _build_knowledge_gaps(target: str, leads: list[dict], inv_meta: dict,
                            existing: Optional[str],
                            evidence_context: Optional[list[str]] = None,
                            new_facts: Optional[list[str]] = None,
-                           existing_facts: Optional[list[str]] = None) -> str:
+                           existing_facts: Optional[list[str]] = None,
+                           support_metrics: Optional[dict] = None) -> str:
     """Chapter: Knowledge Gaps & Open Questions."""
     pending  = [l for l in leads if l['status'] == 'PENDING']
     gap_lines = []
@@ -599,7 +679,7 @@ def _build_knowledge_gaps(target: str, leads: list[dict], inv_meta: dict,
         "unexplored leads, questions that arose but couldn't be answered, "
         "recommended next steps for a follow-up investigation."
     )
-    return _generate_chapter(target, "Knowledge Gaps & Open Questions", instruction, gap_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts)
+    return _generate_chapter(target, "Knowledge Gaps & Open Questions", instruction, gap_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -716,6 +796,7 @@ def run_report_tick(
         claims  = _fetch_investigation_claims(load_conn, investigation_id)
         leads   = _fetch_investigation_leads(load_conn, investigation_id)
         sources = _fetch_investigation_sources(load_conn, investigation_id)
+        evidence_counts = _fetch_investigation_evidence_counts(load_conn, investigation_id)
         existing_report, existing_hashes = _load_existing_report(load_conn, investigation_id)
         evidence_context = _fetch_evidence_context(load_conn, claims)
     finally:
@@ -813,14 +894,14 @@ def run_report_tick(
     # ── Chapter 1: SITREP ────────────────────────────────────────────────────
     sitrep_hash = _chapter_hash(claims[:20] + leads[:10])
     _maybe_write("ch1_sitrep", 1, "Executive Situation Report", sitrep_hash,
-                  lambda ex, ctx, nf, ef: _build_sitrep(investigation_target, claims, leads, inv_meta, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_sitrep(investigation_target, claims, leads, inv_meta, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   claims[:20])
 
     # ── Chapter 2: Target Profile ────────────────────────────────────────────
     profile_claims = claims[:50]
     profile_hash   = _chapter_hash(profile_claims)
     _maybe_write("ch2_profile", 2, "Target Profile & Background", profile_hash,
-                  lambda ex, ctx, nf, ef: _build_target_profile(investigation_target, profile_claims, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_target_profile(investigation_target, profile_claims, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   profile_claims)
 
     # ── Chapter 3: Timeline ──────────────────────────────────────────────────
@@ -828,13 +909,13 @@ def run_report_tick(
     if timed:
         timed_hash = _chapter_hash(timed)
         _maybe_write("ch3_timeline", 3, "Chronological Event Timeline", timed_hash,
-                      lambda ex, ctx, nf, ef: _build_timeline(investigation_target, claims, ex, ctx, nf, ef),
+                      lambda ex, ctx, nf, ef: _build_timeline(investigation_target, claims, ex, ctx, nf, ef, support_metrics=evidence_counts),
                       timed)
 
     # ── Chapter 4: Actors Map ────────────────────────────────────────────────
     actors_hash = _chapter_hash(claims[:60])
     _maybe_write("ch4_actors", 4, "Key Actors & Network Map", actors_hash,
-                  lambda ex, ctx, nf, ef: _build_actors_map(investigation_target, claims, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_actors_map(investigation_target, claims, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   claims[:60])
 
     # ── Chapters 5+: Evidence Dossier (paginated) ────────────────────────────
@@ -847,7 +928,7 @@ def run_report_tick(
         page_hash = _chapter_hash(page_claims)
         _maybe_write(key, order, title, page_hash,
                       lambda ex, ctx, nf, ef, pc=page_claims, pn=page_num, tp=total_pages:
-                          _build_evidence_page(investigation_target, pc, pn, tp, ex, ctx, nf, ef),
+                          _build_evidence_page(investigation_target, pc, pn, tp, ex, ctx, nf, ef, support_metrics=evidence_counts),
                       page_claims)
 
     base_order = 5 + total_pages
@@ -855,13 +936,13 @@ def run_report_tick(
     # ── Chapter: Source Assessment ───────────────────────────────────────────
     src_hash = hashlib.md5(json.dumps([s['name'] for s in sources[:60]], sort_keys=True).encode()).hexdigest()
     _maybe_write("ch_sources", base_order, "Source Intelligence Assessment", src_hash,
-                  lambda ex, ctx, nf, ef: _build_source_assessment(investigation_target, sources, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_source_assessment(investigation_target, sources, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   [])
 
     # ── Chapter: Lead Coverage ───────────────────────────────────────────────
     leads_hash = _chapter_hash([{'claim_id': l['entity_name']} for l in leads])
     _maybe_write("ch_leads", base_order + 1, "Lead Threads & OSINT Coverage", leads_hash,
-                  lambda ex, ctx, nf, ef: _build_leads_coverage(investigation_target, leads, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_leads_coverage(investigation_target, leads, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   [])
 
     # ── Chapter: Contradictions ──────────────────────────────────────────────
@@ -869,13 +950,13 @@ def run_report_tick(
     if contra:
         contra_hash = _chapter_hash(contra)
         _maybe_write("ch_contradictions", base_order + 2, "Contradictions & Disputes", contra_hash,
-                      lambda ex, ctx, nf, ef: _build_contradictions(investigation_target, contra, ex, ctx, nf, ef),
+                      lambda ex, ctx, nf, ef: _build_contradictions(investigation_target, contra, ex, ctx, nf, ef, support_metrics=evidence_counts),
                       contra)
 
     # ── Chapter: Knowledge Gaps ──────────────────────────────────────────────
     gaps_hash = _chapter_hash([{'claim_id': l['entity_name']} for l in leads if l['status'] == 'PENDING'])
     _maybe_write("ch_gaps", base_order + 3, "Knowledge Gaps & Open Questions", gaps_hash,
-                  lambda ex, ctx, nf, ef: _build_knowledge_gaps(investigation_target, leads, inv_meta, ex, ctx, nf, ef),
+                  lambda ex, ctx, nf, ef: _build_knowledge_gaps(investigation_target, leads, inv_meta, ex, ctx, nf, ef, support_metrics=evidence_counts),
                   [])
 
     if not changed:
