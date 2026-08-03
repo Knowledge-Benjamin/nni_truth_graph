@@ -131,13 +131,13 @@ function Investigations() {
         URL.revokeObjectURL(url);
     };
 
-    const buildReportMarkdown = (report) => {
+    const buildReportText = (report) => {
         if (!report || typeof report !== 'object') return '';
         const lines = [
-            '# INVESTIGATION DOSSIER',
+            'INVESTIGATION DOSSIER',
             '',
-            `**Investigation ID:** #${selectedInvestigation?.id || 'unknown'}`,
-            `**Target:** ${selectedInvestigation?.target || 'Unknown'}`,
+            `Investigation ID: #${selectedInvestigation?.id || 'unknown'}`,
+            `Target: ${selectedInvestigation?.target || 'Unknown'}`,
             '',
         ];
 
@@ -149,7 +149,7 @@ function Investigations() {
             const content = chapter?.content || chapter?.text || chapter?.body || '';
             if (!content) continue;
             const title = chapter?.title || key;
-            lines.push(`## ${title}`);
+            lines.push(title.toUpperCase());
             lines.push('');
             lines.push(content.trim());
             lines.push('');
@@ -157,14 +157,14 @@ function Investigations() {
 
         const refs = Array.isArray(report._references) ? report._references : [];
         if (refs.length > 0) {
-            lines.push('## References');
+            lines.push('REFERENCES');
             lines.push('');
             refs.forEach((ref, index) => {
                 const src = ref?.source_name || ref?.source || ref?.original_source || 'Unknown';
                 const url = ref?.source_url || ref?.original_url || '';
                 const title = ref?.article_title || '';
                 const cid = ref?.claim_id || ref?.uuid || ref?.id || index + 1;
-                lines.push(`- [${cid}] ${url ? `[${src}](${url})` : src}${title ? ` — *${title}*` : ''}`);
+                lines.push(`- [${cid}] ${src}${title ? ` — ${title}` : ''}${url ? ` (${url})` : ''}`);
             });
         }
 
@@ -173,15 +173,38 @@ function Investigations() {
 
     const downloadReport = () => {
         const report = selectedInvestigation?.report;
-        const markdown = buildReportMarkdown(report);
-        if (!markdown) return;
-        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = `investigation-${selectedInvestigation?.id || 'report'}.md`;
-        anchor.click();
-        URL.revokeObjectURL(url);
+        const text = buildReportText(report);
+        if (!text) return;
+
+        const doc = window.open('', '_blank', 'width=800,height=1000');
+        if (!doc) return;
+
+        doc.document.write(`<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Investigation Report</title>
+    <style>
+      body { font-family: Arial, sans-serif; color: #111; line-height: 1.5; margin: 24px; }
+      h1, h2, h3 { color: #0f172a; }
+      h1 { font-size: 24px; margin-bottom: 8px; }
+      h2 { font-size: 16px; margin-top: 24px; margin-bottom: 8px; }
+      p { margin: 0 0 10px; }
+      .meta { color: #475569; margin-bottom: 16px; }
+      .page-break { page-break-after: always; }
+    </style>
+  </head>
+  <body>
+    <h1>Investigation Dossier</h1>
+    <div class="meta">Investigation ID: #${selectedInvestigation?.id || 'unknown'}<br />Target: ${selectedInvestigation?.target || 'Unknown'}</div>
+    ${text.replace(/\n/g, '<br />')}
+  </body>
+</html>`);
+        doc.document.close();
+        doc.focus();
+        setTimeout(() => {
+            doc.print();
+        }, 250);
     };
 
     const renderCompletedReport = () => {

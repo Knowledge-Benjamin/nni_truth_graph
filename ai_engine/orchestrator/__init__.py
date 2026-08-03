@@ -216,16 +216,23 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
             print(f"[Orchestrator] Processing investigation #{inv_id}: '{target}'")
 
             # ── Step 1: Triage on first tick (no leads yet, no initial queries) ──
-            if not findings.get("initial_queries"):
+            needs_triage = not findings.get("initial_queries") and not findings.get("canonical_target")
+            if needs_triage:
                 print(f"[Orchestrator] Investigation #{inv_id}: Running triage...")
                 try:
                     triage = triage_target(target, neo4j_driver=neo4j_driver)
                     persist_triage(inv_id, triage, pg_conn)
+                    findings = dict(findings)
+                    findings.update({
+                        "canonical_target": triage.canonical_target,
+                        "target_type": triage.target_type,
+                        "initial_queries": triage.initial_queries,
+                        "triage_rationale": triage.rationale,
+                    })
                     if triage.initial_queries and SEARXNG_URL:
                         _inject_initial_queries(inv_id, triage.initial_queries, pg_conn, searxng_source_id)
                 except Exception as e:
                     print(f"[Orchestrator] Triage failed for #{inv_id}: {e}")
-                continue  # Give the pipeline time to process before the first harvest
 
             # ── Step 2: Harvest — read pipeline output, score new leads ─────────
             try:
