@@ -48,6 +48,7 @@ function Investigations() {
     const [graphLoading, setGraphLoading] = useState(false);
     const [graphQuery, setGraphQuery] = useState('');
     const [graphError, setGraphError] = useState('');
+    const [showDownloadOptions, setShowDownloadOptions] = useState(false);
     const cyRef = useRef(null);
 
     // New investigation form state
@@ -203,7 +204,7 @@ function Investigations() {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
-    const renderReportHtmlForPrint = (report) => {
+    const renderReportHtmlForPrint = (report, includeReferences = false) => {
         if (!report || typeof report !== 'object') return '';
         const chapterEntries = Object.entries(report)
             .filter(([key]) => !key.startsWith('_'))
@@ -238,16 +239,16 @@ function Investigations() {
         }).join('');
 
         const refs = Array.isArray(report._references) ? report._references : [];
-        const refsHtml = refs.length > 0
+        const refsHtml = includeReferences && refs.length > 0
             ? `<section class="references"><h2>References</h2><ol>${refs.map((ref, idx) => `<li><strong>${escapeHtml(ref.source_name || ref.source || ref.original_source || 'Source')}</strong>${ref.publish_date ? ` · ${escapeHtml(ref.publish_date.split('T')[0])}` : ''}${ref.stance === 'CONTRADICTS' ? ' <span class="warn">CONTRADICTED</span>' : ''}<br />${escapeHtml(ref.article_title || '')}${ref.source_url ? `<br /><a href="${escapeHtml(ref.source_url)}">${escapeHtml(ref.source_url)}</a>` : ''}</li>`).join('')}</ol></section>`
             : '';
 
         return `<h1>Investigation Dossier</h1><div class="meta">Investigation ID: #${selectedInvestigation?.id || 'unknown'}<br />Target: ${selectedInvestigation?.target || 'Unknown'}</div>${docSections}${refsHtml}`;
     };
 
-    const downloadReport = () => {
+    const performDownloadReport = (includeReferences = false) => {
         const report = selectedInvestigation?.report;
-        const html = renderReportHtmlForPrint(report);
+        const html = renderReportHtmlForPrint(report, includeReferences);
         if (!html) return;
 
         const doc = window.open('', '_blank', 'width=800,height=1000');
@@ -285,6 +286,10 @@ function Investigations() {
         setTimeout(() => {
             doc.print();
         }, 250);
+    };
+
+    const downloadReport = () => {
+        setShowDownloadOptions(true);
     };
 
     const renderCompletedReport = () => {
@@ -697,6 +702,40 @@ function Investigations() {
             </div>
 
             {/* New Investigation Modal */}
+            {showDownloadOptions && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120 }}>
+                    <div style={{ background: '#0f172a', padding: '24px', borderRadius: '12px', width: '420px', border: '1px solid #1e293b', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
+                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f8fafc', marginBottom: '10px' }}>Download PDF Options</div>
+                        <div style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.6', marginBottom: '18px' }}>
+                            Choose whether to include the final references chapter in the exported PDF. The default is to omit references.
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            <button
+                                type="button"
+                                onClick={() => { setShowDownloadOptions(false); performDownloadReport(false); }}
+                                style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', background: '#1d4ed8', color: '#fff', cursor: 'pointer', fontWeight: '700' }}
+                            >
+                                Download without references
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setShowDownloadOptions(false); performDownloadReport(true); }}
+                                style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid #334155', background: '#0f172a', color: '#f8fafc', cursor: 'pointer', fontWeight: '600' }}
+                            >
+                                Include references
+                            </button>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowDownloadOptions(false)}
+                            style={{ marginTop: '16px', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {showNewModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
                     <div style={{ background: '#0f172a', padding: '24px', borderRadius: '12px', width: '400px', border: '1px solid #1e293b' }}>
