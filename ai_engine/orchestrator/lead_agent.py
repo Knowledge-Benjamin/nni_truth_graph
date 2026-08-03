@@ -60,6 +60,61 @@ def extract_searxng_html_links(html_text: str) -> list[str]:
         urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text, re.I)
     return urls
 
+
+def _normalize_query_bounds(query: str) -> str:
+    """Collapse duplicated whitespace and trim stray punctuation from a query."""
+    if not query:
+        return ""
+    clean = re.sub(r'\s+', ' ', query).strip()
+    clean = clean.strip('"\'\'`')
+    return clean
+
+
+def _anchor_query_to_target(query: str, investigation_target: str, entity: str, lead_context: str = "") -> str:
+    """Force a query to remain attached to the investigation target and lead context."""
+    clean = _normalize_query_bounds(query)
+    if not clean:
+        return clean
+
+    target_phrase = f'"{investigation_target.strip()}"'
+    entity_phrase = f'"{entity.strip()}"' if entity else ""
+    pieces = []
+
+    if investigation_target and investigation_target.lower() not in clean.lower():
+        pieces.append(target_phrase)
+
+    if entity and entity.lower() not in clean.lower():
+        pieces.append(entity_phrase)
+
+    if lead_context:
+        context_tokens = [part.strip() for part in lead_context.split(';') if part.strip()][:2]
+        for token in context_tokens:
+            if token and token.lower() not in clean.lower():
+                pieces.append(token)
+
+    if pieces:
+        clean = " ".join(pieces + [clean])
+
+    return _normalize_query_bounds(clean)
+
+
+def _filter_and_anchor_queries(queries: list[str], investigation_target: str, entity: str, lead_context: str = "") -> list[str]:
+    """Reject generic decoupled queries and rewrite them to stay anchored to the case."""
+    anchored = []
+    seen = set()
+    for query in queries:
+        clean = _anchor_query_to_target(query, investigation_target, entity, lead_context)
+        if not clean:
+            continue
+        if investigation_target.lower() not in clean.lower() and not any(token.lower() in clean.lower() for token in (entity.lower(), lead_context.lower())):
+            clean = f'"{investigation_target}" {clean}'
+        if clean not in seen:
+            anchored.append(clean)
+            seen.add(clean)
+        if len(anchored) >= 6:
+            break
+    return anchored
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from ai_engine.core.llm_router import llm_pool
 
@@ -104,7 +159,7 @@ def run_lead_agent(
         # This is the same pattern used by existing worker.py and outbox_worker.js
         cur.execute(
             """
-            SELECT id, entity_name, lead_type, priority
+            SELECT id, entity_name, lead_type, priority, context
             FROM investigation_leads
             WHERE investigation_id = %s
               AND status = 'PENDING'
@@ -122,6 +177,7 @@ def run_lead_agent(
         lead_id    = row["id"]
         entity     = row["entity_name"]
         lead_type  = row["lead_type"]
+        lead_context = row.get("context") or ""
 
         # Mark as CLAIMED immediately so no other agent touches it
         cur.execute(
@@ -133,7 +189,7 @@ def run_lead_agent(
             (lead_id,)
         )
         pg_conn.commit()
-        claimed_lead = {"id": lead_id, "entity": entity, "lead_type": lead_type}
+        claimed_lead = {"id": lead_id, "entity": entity, "lead_type": lead_type, "context": lead_context}
 
     if not claimed_lead:
         return False
@@ -141,6 +197,7 @@ def run_lead_agent(
     entity    = claimed_lead["entity"]
     lead_id   = claimed_lead["id"]
     lead_type = claimed_lead["lead_type"]
+    lead_context = claimed_lead.get("context") or ""
 
     print(f"[LeadAgent] Claimed lead #{lead_id} [{lead_type}]: '{entity}'")
 
@@ -235,29 +292,40 @@ def run_lead_agent(
                     "role": "system",
                     "content": (
                         "You are an expert OSINT analyst generating targeted search queries. "
-                        "Given an investigation goal and a specific lead entity, produce "
-                        "precise search queries that will reveal connections, associations, "
-                        "public records, or digital footprints for this entity."
+                        "Given an investigation goal, a specific lead entity, and the lead's stored context, "
+                        "produce precise search queries that remain anchored to the investigation target. "
+                        "Prefer queries that combine the target name, geography, institution, or known relations "
+                        "with the lead entity so the search remains relevant and not generic. "
+                        "Use exact-phrase operators, country/location filters, and one or two high-signal modifiers. "
+                        "Every query must contain the investigation target or a clear target-country anchor. "
+                        "Never emit a query that is just the lead entity in isolation, such as 'Parliament' or 'Deputy Speaker'."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Investigation goal: {investigation_target}\n"
+                        f"Investigation target: {investigation_target}\n"
                         f"Goal type: {goal_type}\n"
-                        f"Current lead entity: {entity} (type: {lead_type})\n\n"
-                        "Generate targeted SearXNG queries to surface intelligence about this lead."
+                        f"Lead entity: {entity} (type: {lead_type})\n"
+                        f"Lead context: {lead_context or 'No stored lead context provided.'}\n\n"
+                        "Generate 3-6 targeted SearXNG queries to surface intelligence about this lead. "
+                        "Each query must stay anchored to the investigation target and the known context; "
+                        "do not emit generic broad-topic queries such as 'Parliament' or 'Deputy Speaker' without the target's country or institution context. "
+                        "A good pattern is: \"<target>\" \"<lead entity>\" <country/institution/context>."
                     ),
                 },
             ],
             response_model=LeadQueryPlan,
             temperature=0.3,
         )
-        queries = plan.queries
-        print(f"[LeadAgent] Lead #{lead_id}: generated {len(queries)} queries")
+        queries = _filter_and_anchor_queries(plan.queries, investigation_target, entity, lead_context)
+        print(f"[LeadAgent] Lead #{lead_id}: generated {len(queries)} anchored queries")
     except Exception as e:
         print(f"[LeadAgent] LLM query generation failed for lead #{lead_id}: {e}")
-        queries = [f'"{entity}" site:news.google.com OR site:reuters.com']
+        queries = [
+            f'"{investigation_target}" "{entity}"',
+            f'"{investigation_target}" "{entity}" site:gov OR site:org',
+        ]
 
     # ── Execute queries on SearXNG and inject URLs into raw_urls ────────────
     injected = 0

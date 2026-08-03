@@ -192,14 +192,15 @@ def _fetch_investigation_sources(pg_conn, investigation_id: int) -> list[dict]:
 
 
 def _fetch_investigation_evidence_counts(pg_conn, investigation_id: int) -> dict:
-    """Return document/source/witness/reference counts for the investigation."""
+    """Return document/source/witness/reference counts and an investigation confidence score."""
     with pg_conn.cursor() as cur:
         cur.execute("""
             SELECT
                 COUNT(DISTINCT ec.article_id) AS document_count,
                 COUNT(DISTINCT ru.source_id) AS source_count,
                 COUNT(DISTINCT cc.raw_article_id) AS witness_count,
-                COUNT(DISTINCT ec.id) AS reference_count
+                COUNT(DISTINCT ec.id) AS reference_count,
+                ROUND(AVG(COALESCE(ec.epistemic_score, 0.5)) * 100, 2) AS confidence_score
             FROM extracted_claims ec
             JOIN raw_articles ra ON ec.article_id = ra.id
             JOIN raw_urls ru ON ra.url_id = ru.id
@@ -210,8 +211,15 @@ def _fetch_investigation_evidence_counts(pg_conn, investigation_id: int) -> dict
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
         if not row:
-            return {"document_count": 0, "source_count": 0, "witness_count": 0, "reference_count": 0}
-        return {k: int(v or 0) for k, v in dict(zip(cols, row)).items()}
+            return {"document_count": 0, "source_count": 0, "witness_count": 0, "reference_count": 0, "confidence_score": 0.0}
+        data = dict(zip(cols, row))
+        return {
+            "document_count": int(data.get('document_count') or 0),
+            "source_count": int(data.get('source_count') or 0),
+            "witness_count": int(data.get('witness_count') or 0),
+            "reference_count": int(data.get('reference_count') or 0),
+            "confidence_score": float(data.get('confidence_score') or 0.0),
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -508,6 +516,7 @@ def _build_support_summary(claims: list[dict], support_metrics: Optional[dict] =
     source_count = int((support_metrics or {}).get('source_count') or 0)
     witness_count = int((support_metrics or {}).get('witness_count') or 0)
     reference_count = int((support_metrics or {}).get('reference_count') or 0)
+    confidence_score = float((support_metrics or {}).get('confidence_score') or 0.0)
 
     if not any([document_count, source_count, witness_count, reference_count]):
         document_count = len({c.get('article_id') for c in claims if c.get('article_id')})
@@ -515,10 +524,9 @@ def _build_support_summary(claims: list[dict], support_metrics: Optional[dict] =
         witness_count = max(1, len({c.get('claim_id') for c in claims if c.get('quote_context')}))
         reference_count = len(claims)
 
-    confidence_score = 0.0
-    if claims:
+    if not confidence_score and claims:
         confidence_score = sum(float(c.get('epistemic_score') or 0.5) for c in claims) / len(claims)
-    confidence_pct = int(round(confidence_score * 100))
+    confidence_pct = int(round(confidence_score))
 
     return "\n".join([
         "### Evidence Support Summary",
@@ -552,7 +560,7 @@ def _generate_chapter(
         instruction,
         "",
         "EVIDENCE SUPPORT SUMMARY:",
-        _build_support_summary([], support_metrics),
+        _build_support_summary(facts if isinstance(facts, list) and all(isinstance(x, dict) for x in facts) else [], support_metrics),
         "",
         "STRICT RULES:",
         "1. Write in formal investigative report prose. Authoritative, precise, third-person.",
@@ -1041,6 +1049,7 @@ def run_report_tick(
             context_evidence = [_claim_line(c) for c in context_claims[:20]]
 
             if not new_evidence and not existing_evidence:
+                print(f"      [DONE] Chapter '{title}' exhausted new evidence items; moving to next chapter.")
                 break
 
             if new_evidence:
@@ -1058,6 +1067,7 @@ def run_report_tick(
             final_content = content
             remaining_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in {str(x.get('claim_id')) for x in existing_claims + new_claims}]
             if not new_claims:
+                print(f"      [DONE] Chapter '{title}' exhausted new evidence items after {iterations} iteration(s); moving to next chapter.")
                 break
 
             chapter_state["relevant_claim_ids"] = list(set(chapter_state.get("relevant_claim_ids", [])) | {str(c.get('claim_id')) for c in new_claims})
