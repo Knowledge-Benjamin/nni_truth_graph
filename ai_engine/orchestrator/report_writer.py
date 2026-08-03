@@ -222,6 +222,79 @@ def _chapter_hash(items: list) -> str:
     return hashlib.md5("".join(key).encode()).hexdigest()
 
 
+def _extract_open_intelligence_gaps(report_text: str) -> list[dict]:
+    """Parse report content for Open Intelligence Gap lines and return normalized lead candidates."""
+    if not report_text:
+        return []
+
+    matches = []
+    pattern = re.compile(
+        r"Open Intelligence Gap:\s*\[(?P<lead_type>[^\]]+)\]\s*\*\*(?P<entity_name>.+?)\*\*\s*\(priority\s*(?P<priority>\d+)\)",
+        re.IGNORECASE,
+    )
+    for line in report_text.splitlines():
+        m = pattern.search(line)
+        if not m:
+            continue
+        lead_type = (m.group("lead_type") or "GENERAL").strip().upper()
+        entity = (m.group("entity_name") or "").strip()
+        priority = int(m.group("priority") or 0)
+        if entity:
+            matches.append({
+                "entity_name": entity,
+                "lead_type": lead_type,
+                "priority": priority,
+                "context": f"Re-seeded from Open Intelligence Gaps chapter: {line.strip()}",
+            })
+    return matches
+
+
+def _persist_open_intelligence_gaps(pg_conn, investigation_id: int, report: dict) -> int:
+    """Upsert any Open Intelligence Gaps found in the live report back into investigation_leads."""
+    leads_to_insert: list[dict] = []
+    for chapter in report.values():
+        if not isinstance(chapter, dict):
+            continue
+        content = chapter.get("content") or ""
+        for gap in _extract_open_intelligence_gaps(content):
+            leads_to_insert.append(gap)
+
+    if not leads_to_insert:
+        return 0
+
+    unique_by_entity: dict[str, dict] = {}
+    for gap in leads_to_insert:
+        unique_by_entity[gap["entity_name"]] = gap
+
+    conn = _ensure_pg_connection(pg_conn)
+    inserted = 0
+    with conn.cursor() as cur:
+        for gap in unique_by_entity.values():
+            cur.execute(
+                """
+                INSERT INTO investigation_leads
+                    (investigation_id, entity_name, lead_type, priority, status, context)
+                VALUES (%s, %s, %s, %s, 'PENDING', %s)
+                ON CONFLICT (investigation_id, entity_name)
+                DO UPDATE SET
+                    lead_type = EXCLUDED.lead_type,
+                    priority = GREATEST(investigation_leads.priority, EXCLUDED.priority),
+                    status = 'PENDING',
+                    context = EXCLUDED.context
+                """,
+                (
+                    investigation_id,
+                    gap["entity_name"],
+                    gap["lead_type"],
+                    gap["priority"],
+                    gap["context"],
+                ),
+            )
+            inserted += 1
+    conn.commit()
+    return inserted
+
+
 def _normalize_response_content(response: object) -> str:
     """Accept common LLM response shapes and return the text body if available."""
     if response is None:
@@ -672,17 +745,22 @@ def _build_knowledge_gaps(target: str, leads: list[dict], inv_meta: dict,
                            existing_facts: Optional[list[str]] = None,
                            support_metrics: Optional[dict] = None) -> str:
     """Chapter: Knowledge Gaps & Open Questions."""
-    pending  = [l for l in leads if l['status'] == 'PENDING']
+    pending = [l for l in leads if l.get('status') == 'PENDING']
     gap_lines = []
     for l in pending[:40]:
-        gap_lines.append(f"- Unexplored: [{l['lead_type']}] **{l['entity_name']}** (priority {l['priority']})")
+        entity = l.get('entity_name') or 'Unknown entity'
+        lead_type = l.get('lead_type') or 'GENERAL'
+        priority = l.get('priority') or 0
+        gap_lines.append(
+            f"- Open Intelligence Gap: [{lead_type}] **{entity}** (priority {priority}) — the next step is to investigate this unresolved line of inquiry and close the evidence hole."
+        )
     if not gap_lines:
-        gap_lines = ["- No significant pending leads remain."]
+        gap_lines = ["- Open Intelligence Gap: No significant pending leads remain. The investigation has no clear unresolved line to pursue next."]
     instruction = (
-        "Write the knowledge gaps chapter. "
-        "Document what this investigation did NOT fully resolve: "
-        "unexplored leads, questions that arose but couldn't be answered, "
-        "recommended next steps for a follow-up investigation."
+        "Write the knowledge gaps chapter as an actionable Open Intelligence Gaps register. "
+        "Translate unresolved leads into concrete analyst question statements that tell the reader where to investigate next. "
+        "Use a dedicated 'Open Intelligence Gaps' section and present each item as a concrete unresolved question or missing evidence category, not just a generic lead name. "
+        "Frame the section around the next step: what is unknown, why it matters, and how it should be investigated next."
     )
     return _generate_chapter(target, "Knowledge Gaps & Open Questions", instruction, gap_lines, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 
@@ -972,16 +1050,22 @@ def run_report_tick(
     updated_report['_references'] = sorted(all_refs,
                                             key=lambda x: x.get('corroboration_count', 0),
                                             reverse=True)
-                                            
+
     save_conn = _connect_postgres(DATABASE_URL)
     try:
         _save_report(save_conn, investigation_id, updated_report, updated_hashes)
         save_conn.commit()
+        seeded_gaps = _persist_open_intelligence_gaps(save_conn, investigation_id, updated_report)
+        if seeded_gaps:
+            print(f"  [ReportWriter] Re-seeded {seeded_gaps} Open Intelligence Gap lead(s) for #{investigation_id}.")
     except Exception as exc:
         if _is_recoverable_db_error(exc):
             save_conn = _connect_postgres(DATABASE_URL)
             _save_report(save_conn, investigation_id, updated_report, updated_hashes)
             save_conn.commit()
+            seeded_gaps = _persist_open_intelligence_gaps(save_conn, investigation_id, updated_report)
+            if seeded_gaps:
+                print(f"  [ReportWriter] Re-seeded {seeded_gaps} Open Intelligence Gap lead(s) for #{investigation_id}.")
         else:
             raise
     finally:
