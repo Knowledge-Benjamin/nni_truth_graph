@@ -222,6 +222,73 @@ def _chapter_hash(items: list) -> str:
     return hashlib.md5("".join(key).encode()).hexdigest()
 
 
+def _load_chapter_relevance_state(report: dict, chapter_key: str) -> dict:
+    """Return a per-chapter relevance cache that is independent across chapters."""
+    states = report.get('_chapter_evidence_state', {}) if isinstance(report, dict) else {}
+    state = states.get(chapter_key, {}) if isinstance(states, dict) else {}
+    return {
+        "relevant_claim_ids": [str(cid) for cid in state.get("relevant_claim_ids", []) if cid is not None],
+        "ignored_claim_ids": [str(cid) for cid in state.get("ignored_claim_ids", []) if cid is not None],
+        "context_claim_ids": [str(cid) for cid in state.get("context_claim_ids", []) if cid is not None],
+    }
+
+
+def _save_chapter_relevance_state(report: dict, chapter_key: str, state: dict):
+    """Persist the chapter-level relevance cache in the report object."""
+    if not isinstance(report, dict):
+        return
+    states = report.setdefault('_chapter_evidence_state', {})
+    states[chapter_key] = {
+        "relevant_claim_ids": sorted(set(str(cid) for cid in state.get("relevant_claim_ids", []))),
+        "ignored_claim_ids": sorted(set(str(cid) for cid in state.get("ignored_claim_ids", []))),
+        "context_claim_ids": sorted(set(str(cid) for cid in state.get("context_claim_ids", []))),
+    }
+
+
+def _plan_chapter_evidence(claims: list[dict], final_content: str, chapter_state: Optional[dict] = None):
+    """Split chapter inputs into existing / new / context-only buckets using chapter-local relevance state."""
+    chapter_state = chapter_state or {
+        "relevant_claim_ids": [],
+        "ignored_claim_ids": [],
+        "context_claim_ids": [],
+    }
+    relevant_ids = {str(cid) for cid in chapter_state.get("relevant_claim_ids", [])}
+    ignored_ids = {str(cid) for cid in chapter_state.get("ignored_claim_ids", [])}
+    context_ids = {str(cid) for cid in chapter_state.get("context_claim_ids", [])}
+
+    existing_content_ids = {
+        str(c.get('claim_id'))
+        for c in claims
+        if c.get('claim_id') and f"[REF:{c.get('claim_id')}]" in (final_content or "")
+    }
+
+    new_claims = []
+    existing_claims = []
+    context_claims = []
+
+    for claim in claims:
+        cid = str(claim.get('claim_id'))
+        if not cid:
+            continue
+        if cid in existing_content_ids:
+            existing_claims.append(claim)
+        elif cid in ignored_ids or cid in context_ids:
+            context_claims.append(claim)
+        else:
+            new_claims.append(claim)
+
+    # If the chapter has already marked these claims relevant in a prior pass,
+    # they are still fundamentally new to the current draft and should not be
+    # silently suppressed as context-only. That preserves chapter-local relevance.
+    if relevant_ids:
+        prior_relevant_ids = {cid for cid in relevant_ids if cid not in existing_content_ids and cid not in ignored_ids}
+        if prior_relevant_ids:
+            out_of_band = [c for c in claims if str(c.get('claim_id')) in prior_relevant_ids]
+            new_claims = [c for c in new_claims if str(c.get('claim_id')) not in prior_relevant_ids] + out_of_band
+
+    return new_claims, existing_claims, context_claims
+
+
 def _extract_open_intelligence_gaps(report_text: str) -> list[dict]:
     """Parse report content for Open Intelligence Gap lines and return normalized lead candidates."""
     if not report_text:
@@ -931,6 +998,7 @@ def run_report_tick(
         print(f"    [REV ] Chapter '{title}'...")
         existing_content = existing_report.get(key, {}).get('content')
         chapter_context = _select_relevant_context(claims_used, evidence_context)
+        chapter_state = _load_chapter_relevance_state(updated_report, key)
 
         remaining_claims = list(claims_used)
         final_content = existing_content or ""
@@ -939,15 +1007,14 @@ def run_report_tick(
 
         while remaining_claims and iterations < max_iterations:
             iterations += 1
-            existing_content_ids = {
-                str(c.get('claim_id'))
-                for c in remaining_claims
-                if c.get('claim_id') and f"[REF:{c.get('claim_id')}]" in (final_content or "")
-            }
-            new_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in existing_content_ids]
-            existing_claims = [c for c in remaining_claims if str(c.get('claim_id')) in existing_content_ids]
+            new_claims, existing_claims, context_claims = _plan_chapter_evidence(
+                remaining_claims,
+                final_content,
+                chapter_state,
+            )
             new_evidence = [_claim_line(c) for c in new_claims[:20]]
             existing_evidence = [_claim_line(c) for c in existing_claims[:20]]
+            context_evidence = [_claim_line(c) for c in context_claims[:20]]
 
             if not new_evidence and not existing_evidence:
                 break
@@ -956,6 +1023,8 @@ def run_report_tick(
                 print(f"      [ADD ] {len(new_evidence)} new evidence item(s) for chapter '{title}' (iteration {iterations}).")
             if existing_evidence:
                 print(f"      [REV ] {len(existing_evidence)} existing evidence item(s) carried forward for chapter '{title}' (iteration {iterations}).")
+            if context_evidence:
+                print(f"      [CTX ] {len(context_evidence)} chapter-context claim(s) preserved for later relevance checks in '{title}'.")
 
             content = generator(final_content, chapter_context, new_evidence, existing_evidence)
             if not content:
@@ -963,13 +1032,22 @@ def run_report_tick(
                 print(f"      [WARN] Chapter '{title}' generated empty content; preserved prior draft.")
 
             final_content = content
-            remaining_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in existing_content_ids]
+            remaining_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in {str(x.get('claim_id')) for x in existing_claims + new_claims}]
             if not new_claims:
                 break
+
+            chapter_state["relevant_claim_ids"] = list(set(chapter_state.get("relevant_claim_ids", [])) | {str(c.get('claim_id')) for c in new_claims})
+            chapter_state["ignored_claim_ids"] = list(set(chapter_state.get("ignored_claim_ids", [])) | {str(c.get('claim_id')) for c in context_claims})
+            chapter_state["context_claim_ids"] = list(set(chapter_state.get("context_claim_ids", [])) | {str(c.get('claim_id')) for c in context_claims})
+            _save_chapter_relevance_state(updated_report, key, chapter_state)
 
         if not final_content:
             final_content = existing_content or ""
             print(f"      [WARN] Chapter '{title}' generated empty content; preserved prior draft.")
+
+        chapter_state = _load_chapter_relevance_state(updated_report, key)
+        chapter_state["relevant_claim_ids"] = list(set(chapter_state.get("relevant_claim_ids", [])) | {str(c.get('claim_id')) for c in claims_used if c.get('claim_id')})
+        _save_chapter_relevance_state(updated_report, key, chapter_state)
 
         _write_chapter(key, order, title, final_content, new_hash, claims_used)
         time.sleep(1)  # pace the LLM calls
