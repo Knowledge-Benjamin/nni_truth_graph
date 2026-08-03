@@ -238,8 +238,12 @@ def _normalize_response_content(response: object) -> str:
 
 
 def _claim_line(c: dict) -> str:
-    """Format a single claim for LLM context."""
-    badge = "🥇 " if c.get('corroboration_count', 1) >= 3 else "🥈 " if c.get('corroboration_count', 1) == 2 else ""
+    """Format a single claim for LLM context with confidence and source-strength cues."""
+    corroboration = int(c.get('corroboration_count') or 1)
+    epistemic_score = float(c.get('epistemic_score') or 0.5)
+    confidence_label = "high" if epistemic_score >= 0.8 else "medium" if epistemic_score >= 0.6 else "low"
+    source_strength = "high" if corroboration >= 3 else "medium" if corroboration == 2 else "low"
+    badge = "🥇 " if corroboration >= 3 else "🥈 " if corroboration == 2 else ""
     pred  = str(c.get('predicate') or '').replace('_', ' ').lower()
     line  = f"{badge}[REF:{c['claim_id']}] {c['subject']} {pred} {c['object_entity']}"
     if c.get('temporal_anchor'): line += f" (when: {c['temporal_anchor']})"
@@ -247,7 +251,11 @@ def _claim_line(c: dict) -> str:
     if c.get('quote_context'):   line += f'\n   > "{str(c["quote_context"])[:200]}"'
     src = c.get('original_source') or c.get('source_name') or 'Unknown'
     url = c.get('original_url') or c.get('source_url') or 'N/A'
-    line += f"\n   Source: {src} | URL: {url} | Score: {round(float(c.get('epistemic_score') or 0.5), 2)}"
+    line += (
+        f"\n   Source: {src} | URL: {url} | "
+        f"Confidence: {confidence_label} ({round(epistemic_score, 2)}) | "
+        f"Corroboration: {corroboration} | Source strength: {source_strength}"
+    )
     return line
 
 
@@ -341,14 +349,20 @@ def _generate_chapter(
         "2. Revise the existing chapter in place. Preserve what remains accurate and useful, but remove or rewrite anything that is stale, unsupported, or out of context.",
         "3. Do not simply repeat the previous draft. Actively add, modify, enhance, and delete content so the chapter reflects the latest evidence and current understanding.",
         "4. Produce a detailed chapter, not a summary. Expand the narrative substantially with relevant facts, context, and evidence. There is no length cap; be comprehensive.",
-        "5. Compare the NEW EVIDENCE TO INCORPORATE against the ALREADY INTEGRATED EVIDENCE and the existing chapter. Only add material that meaningfully expands the report with relevant new facts.",
-        "6. Every factual statement MUST end with [REF:<id>] citing the fact ID from the evidence below.",
-        "7. You MUST include a '## References' section at the very end of the chapter mapping every [REF:<id>] used to its Source Name and URL.",
-        "8. Use markdown: ## for section headers, **bold** for key names.",
-        "9. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
-        "10. If a claim is unclear or needs additional context, use the optional evidence context provided below and avoid speculation.",
-        "11. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
-        "12. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
+        "5. Think like a professional investigator. Reason from the evidence provided. Make conclusions, explain the reasoning, and draw connections between facts. Do not merely list facts.",
+        "6. Compare the NEW EVIDENCE TO INCORPORATE against the ALREADY INTEGRATED EVIDENCE and the existing chapter. Only add material that meaningfully expands the report with relevant new facts and analytical insight.",
+        "7. Every factual statement MUST include an inline citation immediately after the sentence or clause using [REF:<id>]. Do not leave factual claims uncited.",
+        "8. Do not rely on a chapter-end references section alone. The paragraph itself must be verifiable on the fly.",
+        "9. You MUST include a '## References' section at the very end of the chapter mapping every [REF:<id>] used to its Source Name and URL.",
+        "10. Use markdown: ## for section headers, **bold** for key names.",
+        "11. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
+        "12. If a claim is unclear or needs additional context, use the optional evidence context provided below and avoid speculation.",
+        "13. When a claim is weak, single-source, low-confidence, or poorly corroborated, say so explicitly and avoid overstating certainty.",
+        "14. When multiple claims are strong and corroborated, you may present the conclusion with higher confidence, but still note the degree of support.",
+        "15. If multiple claims point to the same pattern, explain the implication and the reasoning trail from evidence to conclusion.",
+        "16. Where relevant, explicitly surface graph-intelligence findings: connected entities, evidence clusters, corroboration strength, confidence levels, and contradictions or unresolved disputes.",
+        "17. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
+        "18. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
     ]
 
     if existing_content:
@@ -753,26 +767,47 @@ def run_report_tick(
         print(f"    [REV ] Chapter '{title}'...")
         existing_content = existing_report.get(key, {}).get('content')
         chapter_context = _select_relevant_context(claims_used, evidence_context)
-        existing_content_ids = {
-            str(c.get('claim_id'))
-            for c in claims_used
-            if c.get('claim_id') and f"[REF:{c.get('claim_id')}]" in (existing_content or "")
-        }
-        new_claims = [c for c in claims_used if str(c.get('claim_id')) not in existing_content_ids]
-        existing_claims = [c for c in claims_used if str(c.get('claim_id')) in existing_content_ids]
-        new_evidence = [_claim_line(c) for c in new_claims[:20]]
-        existing_evidence = [_claim_line(c) for c in existing_claims[:20]]
-        if new_evidence:
-            print(f"      [ADD ] {len(new_evidence)} new evidence item(s) for chapter '{title}'.")
-        if existing_evidence:
-            print(f"      [REV ] {len(existing_evidence)} existing evidence item(s) carried forward for chapter '{title}'.")
-        if not new_evidence and not existing_evidence:
-            print(f"      [REV ] No claim-level evidence change detected for chapter '{title}'.")
-        content = generator(existing_content, chapter_context, new_evidence, existing_evidence)
-        if not content:
-            content = existing_content or ""
+
+        remaining_claims = list(claims_used)
+        final_content = existing_content or ""
+        iterations = 0
+        max_iterations = max(2, min(6, len(claims_used) // 10 + 1))
+
+        while remaining_claims and iterations < max_iterations:
+            iterations += 1
+            existing_content_ids = {
+                str(c.get('claim_id'))
+                for c in remaining_claims
+                if c.get('claim_id') and f"[REF:{c.get('claim_id')}]" in (final_content or "")
+            }
+            new_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in existing_content_ids]
+            existing_claims = [c for c in remaining_claims if str(c.get('claim_id')) in existing_content_ids]
+            new_evidence = [_claim_line(c) for c in new_claims[:20]]
+            existing_evidence = [_claim_line(c) for c in existing_claims[:20]]
+
+            if not new_evidence and not existing_evidence:
+                break
+
+            if new_evidence:
+                print(f"      [ADD ] {len(new_evidence)} new evidence item(s) for chapter '{title}' (iteration {iterations}).")
+            if existing_evidence:
+                print(f"      [REV ] {len(existing_evidence)} existing evidence item(s) carried forward for chapter '{title}' (iteration {iterations}).")
+
+            content = generator(final_content, chapter_context, new_evidence, existing_evidence)
+            if not content:
+                content = final_content or ""
+                print(f"      [WARN] Chapter '{title}' generated empty content; preserved prior draft.")
+
+            final_content = content
+            remaining_claims = [c for c in remaining_claims if str(c.get('claim_id')) not in existing_content_ids]
+            if not new_claims:
+                break
+
+        if not final_content:
+            final_content = existing_content or ""
             print(f"      [WARN] Chapter '{title}' generated empty content; preserved prior draft.")
-        _write_chapter(key, order, title, content, new_hash, claims_used)
+
+        _write_chapter(key, order, title, final_content, new_hash, claims_used)
         time.sleep(1)  # pace the LLM calls
 
     # ── Chapter 1: SITREP ────────────────────────────────────────────────────

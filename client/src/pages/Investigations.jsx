@@ -11,6 +11,17 @@ import fcose from 'cytoscape-fcose';
 
 cytoscape.use(fcose);
 
+function buildGraphElements(data) {
+    const elements = [];
+    for (const node of data?.nodes || []) {
+        elements.push({ data: node });
+    }
+    for (const edge of data?.edges || []) {
+        elements.push({ data: edge });
+    }
+    return elements;
+}
+
 export const CY_STYLE = [
     { selector: 'node[type="Entity"]', style: { width: 60, height: 60, shape: 'ellipse', 'background-color': '#3b82f6', 'border-width': 2, 'border-color': '#93c5fd', label: 'data(label)', color: '#ffffff', 'font-size': 12, 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 50 } },
     { selector: 'node[type="Claim"]', style: { width: 100, height: 30, shape: 'round-rectangle', 'background-color': '#10b981', label: 'data(label)', color: '#ffffff', 'font-size': 10, 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 90 } },
@@ -35,6 +46,8 @@ function Investigations() {
     const [activeTab, setActiveTab] = useState('overview'); // overview | report | graph
     const [graphElements, setGraphElements] = useState([]);
     const [graphLoading, setGraphLoading] = useState(false);
+    const [graphQuery, setGraphQuery] = useState('');
+    const [graphError, setGraphError] = useState('');
     const cyRef = useRef(null);
 
     // New investigation form state
@@ -91,17 +104,29 @@ function Investigations() {
 
     useEffect(() => {
         if (activeTab === 'graph' && selectedInvestigation?.target) {
+            setGraphQuery(selectedInvestigation.target);
             fetchGraph(selectedInvestigation.target);
         }
     }, [activeTab, selectedInvestigation?.target]);
 
     const fetchGraph = async (targetEntity) => {
+        if (!targetEntity) return;
         setGraphLoading(true);
+        setGraphError('');
         try {
-            const res = await api.search(targetEntity, 'entity');
-            setGraphElements(res.elements || []);
+            let data;
+            try {
+                data = await api.getNeighborhood(targetEntity, true, 60, 'internal');
+            } catch (firstErr) {
+                const searchRes = await api.search(targetEntity, 'entity');
+                const resolvedEntity = searchRes?.entities?.[0]?.name || targetEntity;
+                if (!resolvedEntity) throw firstErr;
+                data = await api.getNeighborhood(resolvedEntity, true, 60, 'internal');
+            }
+            setGraphElements(buildGraphElements(data));
         } catch (err) {
             console.error('Graph fetch error', err);
+            setGraphError(err.message || 'Unable to load graph');
         } finally {
             setGraphLoading(false);
         }
@@ -572,19 +597,38 @@ function Investigations() {
                                 </div>
                             )}
                             {activeTab === 'graph' && (
-                                <div style={{ height: '100%', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', position: 'relative' }}>
-                                    {graphLoading ? (
+                                <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '12px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', overflow: 'hidden' }}>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 14px', borderBottom: '1px solid #1e293b', background: 'rgba(15, 23, 42, 0.95)' }}>
+                                        <input
+                                            value={graphQuery}
+                                            onChange={(e) => setGraphQuery(e.target.value)}
+                                            placeholder="Search entity or investigation target"
+                                            style={{ flex: 1, padding: '9px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#111827', color: '#f8fafc' }}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => fetchGraph(graphQuery || selectedInvestigation?.target)}
+                                            style={{ padding: '9px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+                                        >
+                                            Query Graph
+                                        </button>
+                                    </div>
+                                    {graphError ? (
+                                        <div style={{ padding: '16px', color: '#fca5a5' }}>{graphError}</div>
+                                    ) : graphLoading ? (
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94a3b8' }}>Loading Graph...</div>
                                     ) : graphElements.length === 0 ? (
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>No graph data found for {selectedInvestigation?.target}</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>No graph data found for {graphQuery || selectedInvestigation?.target}</div>
                                     ) : (
-                                        <CytoscapeComponent
-                                            elements={CytoscapeComponent.normalizeElements(graphElements)}
-                                            style={{ width: '100%', height: '100%' }}
-                                            stylesheet={CY_STYLE}
-                                            layout={{ name: 'fcose', animate: false, nodeRepulsion: 4500 }}
-                                            cy={(cy) => { cyRef.current = cy; }}
-                                        />
+                                        <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+                                            <CytoscapeComponent
+                                                elements={CytoscapeComponent.normalizeElements(graphElements)}
+                                                style={{ width: '100%', height: '100%' }}
+                                                stylesheet={CY_STYLE}
+                                                layout={{ name: 'fcose', animate: false, nodeRepulsion: 4500 }}
+                                                cy={(cy) => { cyRef.current = cy; }}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                             )}
