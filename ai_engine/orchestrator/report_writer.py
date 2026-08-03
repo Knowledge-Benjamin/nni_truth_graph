@@ -200,7 +200,7 @@ def _fetch_investigation_evidence_counts(pg_conn, investigation_id: int) -> dict
                 COUNT(DISTINCT ru.source_id) AS source_count,
                 COUNT(DISTINCT cc.raw_article_id) AS witness_count,
                 COUNT(DISTINCT ec.id) AS reference_count,
-                ROUND(AVG(COALESCE(ec.epistemic_score, 0.5)) * 100, 2) AS confidence_score
+                ROUND(AVG(COALESCE(ec.epistemic_score, 0.5))::numeric * 100.0, 2) AS confidence_score
             FROM extracted_claims ec
             JOIN raw_articles ra ON ec.article_id = ra.id
             JOIN raw_urls ru ON ra.url_id = ru.id

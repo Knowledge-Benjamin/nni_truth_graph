@@ -129,6 +129,26 @@ def _normalize_query_text(query: str) -> str:
     return q.strip()
 
 
+def _anchor_queries_to_target(target: str, queries: list[str]) -> list[str]:
+    """Rewrite or prefix initial queries so every seed query is anchored to the target."""
+    clean_target = (target or "").strip().strip('"').strip("'")
+    if not clean_target:
+        return [q for q in queries if q]
+
+    output: list[str] = []
+    seen: set[str] = set()
+    for q in queries:
+        q = _normalize_query_text(q)
+        if not q:
+            continue
+        if clean_target.lower() not in q.lower():
+            q = f'"{clean_target}" {q}'
+        if q not in seen:
+            output.append(q)
+            seen.add(q)
+    return output[:6]
+
+
 def _looks_like_low_signal_queries(target: str, target_type: str, queries: list[str]) -> bool:
     """Return True when the generated queries are too generic or obviously noisy."""
     if not queries:
@@ -136,6 +156,12 @@ def _looks_like_low_signal_queries(target: str, target_type: str, queries: list[
 
     clean_target = (target or "").strip().strip('"').strip("'")
     clean_target_l = clean_target.lower()
+
+    # Every query must mention the investigation target at least once.
+    for q in queries:
+        ql = q.lower()
+        if clean_target_l not in ql:
+            return True
 
     if target_type == "PERSON":
         # Person searches should include at least one high-signal modifier such as linkedin/profile/news/wiki.
@@ -378,7 +404,8 @@ def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult
         "Classify the goal type, target type, and generate precise SearXNG search queries "
         "that will surface actionable intelligence. "
         "Think like a seasoned OSINT analyst: prefer exact-phrase queries, use one or two high-signal modifiers, "
-        "and avoid duplicate terms, long OR-chains, and generic noise."
+        "and avoid duplicate terms, long OR-chains, and generic noise. "
+        "Every seed query must remain anchored to the supplied investigation target; never emit detached topic terms like 'Parliament' or 'birth certificate leaks' by themselves."
     )
 
     user_prompt = (
@@ -423,6 +450,8 @@ def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult
         n = _normalize_query_text(q)
         if n:
             normalized_queries.append(n)
+
+    normalized_queries = _anchor_queries_to_target(target, normalized_queries)
 
     if _looks_like_low_signal_queries(target, getattr(result, 'target_type', '') or (pre_type or 'QUESTION'), normalized_queries):
         print("[Triage] LLM queries were low-signal or noisy. Falling back to deterministic rule-based triage.")
