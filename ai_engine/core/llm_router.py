@@ -38,6 +38,7 @@ EXECUTION_MODE = os.getenv("EXECUTION_MODE", "cloud").strip().lower()
 
 # Self-hosted Ollama backend (Hugging Face Spaces)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://bravadoben-gemma-proto-backend.hf.space")
+DEFAULT_LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "900"))
 
 from groq import Groq, RateLimitError as GroqRateLimitError
 from openai import OpenAI, RateLimitError as OpenAIRateLimitError, NotFoundError, InternalServerError
@@ -57,9 +58,9 @@ PROVIDERS = {
         "base_url": OLLAMA_BASE_URL,  # Resolved at module load from OLLAMA_BASE_URL env var
         "weight": 100,
         "env_keys": ["OLLAMA_SENTINEL"],  # Sentinel — not a real key; shim bypasses auth
-        "model_light":  "gemma2:9b",
-        "model_heavy":  "gemma2:9b",
-        "model_vision": "gemma2:9b"
+        "model_light":  "gemma-4-e4b",
+        "model_heavy":  "gemma-4-e4b",
+        "model_vision": "gemma-4-e4b"
     },
     # ── Disabled Cloud Providers ───────────────────────────────────────────────
     # All cloud providers are weight-zeroed. Routing is exclusively self-hosted.
@@ -175,6 +176,26 @@ def _vertex_ai_is_configured() -> bool:
     return bool(project and location and api_key and not _is_placeholder_vertex_key(api_key))
 
 
+def _is_transient_local_network_error(error: Exception) -> bool:
+    """Return True for local Ollama failures that are likely transient network/gateway issues."""
+    text = str(error).lower()
+    return any(token in text for token in [
+        "timeout",
+        "timed out",
+        "connection",
+        "temporarily unavailable",
+        "gateway error",
+        "ngrok",
+        "invalid or incomplete http",
+        "connection reset",
+        "ssl connection",
+        "ssl error",
+        "name or service not known",
+        "could not connect",
+        "connection aborted",
+    ])
+
+
 def discover_vertex_model_names() -> list[str]:
     """Query Vertex AI for available model IDs for the configured project and region."""
     project = os.getenv("VERTEX_AI_PROJECT", "").strip()
@@ -254,8 +275,7 @@ class _GenAICompletionsShim:
             cfg["system_instruction"] = " ".join(system_parts)
         if "temperature" in kwargs:
             cfg["temperature"] = kwargs["temperature"]
-        if "max_tokens" in kwargs:
-            cfg["max_output_tokens"] = kwargs["max_tokens"]
+        # Do not impose a response-length cap here; allow the model to return full structured output.
         config = _gt.GenerateContentConfig(**cfg) if cfg else None
         resp = self._client.models.generate_content(
             model=model, contents=contents, config=config
@@ -297,12 +317,12 @@ class _OllamaCompletionsShim:
             "messages": messages,  # Ollama /api/chat accepts the same role/content format
             "stream": True,
         }
+        request_timeout = kwargs.pop("timeout", DEFAULT_LLM_TIMEOUT_SECONDS)
         # Map OpenAI generation kwargs to Ollama options where applicable
         options: dict = {}
         if "temperature" in kwargs:
             options["temperature"] = kwargs["temperature"]
-        if "max_tokens" in kwargs:
-            options["num_predict"] = kwargs["max_tokens"]
+        # Do not impose a response-length cap here; allow the model to return full structured output.
         if options:
             payload["options"] = options
 
@@ -310,7 +330,7 @@ class _OllamaCompletionsShim:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                resp = _requests.post(url, json=payload, stream=True, timeout=600)
+                resp = _requests.post(url, json=payload, stream=True, timeout=request_timeout)
                 resp.raise_for_status()
                 break
             except _requests.exceptions.HTTPError as e:
@@ -377,7 +397,7 @@ class RoutedClient:
             openai_compat = OpenAI(
                 base_url=f"{p_config['base_url']}/v1",
                 api_key="ollama",  # Accepts any non-empty key string for local compat servers
-                timeout=300.0,
+                timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
                 max_retries=0
             )
             self.raw_client = openai_compat  # type: ignore
@@ -449,7 +469,152 @@ class MultiProviderRouter:
                     return parsed
                 except json.JSONDecodeError:
                     continue
+
+        # Attempt to recover a truncated JSON object by scanning for the first
+        # top-level key/value pairs even if the closing braces are missing.
+        recovered = self._recover_partial_object(candidate)
+        if recovered is not None:
+            return recovered
+
+        # Attempt to recover partial ChapterSection JSON when the provider
+        # output is truncated but still contains the content field.
+        recovered = self._recover_partial_chapter_section(candidate)
+        if recovered is not None:
+            return recovered
+
         return None
+
+    def _recover_partial_object(self, text: str) -> Any | None:
+        """Recover a truncated JSON object from leading key/value pairs."""
+        if not text:
+            return None
+
+        stripped = text.strip()
+        if not stripped:
+            return None
+
+        if stripped.startswith("{"):
+            body = stripped[1:]
+        elif stripped.startswith("["):
+            return None
+        else:
+            body = stripped
+
+        # Find the first top-level object opening brace if there is one.
+        brace_idx = body.find('{')
+        if brace_idx != -1:
+            body = body[brace_idx + 1:]
+
+        pairs: dict[str, Any] = {}
+        cursor = 0
+        while cursor < len(body):
+            ch = body[cursor]
+            if ch in " \t\n\r":
+                cursor += 1
+                continue
+            if ch == '}' or ch == ']':
+                break
+            if ch == '"':
+                key, cursor = self._extract_json_string_fragment(body, cursor)
+                if not key:
+                    break
+                while cursor < len(body) and body[cursor] in " \t\n\r":
+                    cursor += 1
+                if cursor < len(body) and body[cursor] == ':':
+                    cursor += 1
+                    while cursor < len(body) and body[cursor] in " \t\n\r":
+                        cursor += 1
+                    if cursor < len(body) and body[cursor] in '"{[':
+                        try:
+                            parsed, end_idx = json.JSONDecoder().raw_decode(body[cursor:])
+                        except json.JSONDecodeError:
+                            parsed = None
+                            end_idx = 0
+                        if parsed is not None:
+                            pairs[key] = parsed
+                            cursor += end_idx
+                        else:
+                            pairs[key] = ''
+                            cursor += 1
+                    else:
+                        # Scalar value (string/number/bool/null)
+                        value_start = cursor
+                        while cursor < len(body) and body[cursor] not in ',}\n\r':
+                            cursor += 1
+                        raw_value = body[value_start:cursor].strip()
+                        if raw_value.startswith('"'):
+                            try:
+                                parsed, _ = json.JSONDecoder().raw_decode(body[value_start:])
+                                pairs[key] = parsed
+                                cursor = value_start + len(str(parsed))
+                            except Exception:
+                                pairs[key] = raw_value.strip('"')
+                        elif raw_value.lower() == 'null':
+                            pairs[key] = None
+                        elif raw_value.lower() == 'true':
+                            pairs[key] = True
+                        elif raw_value.lower() == 'false':
+                            pairs[key] = False
+                        else:
+                            try:
+                                pairs[key] = float(raw_value)
+                            except ValueError:
+                                pairs[key] = raw_value
+                else:
+                    break
+            else:
+                cursor += 1
+
+        if pairs:
+            return pairs
+        return None
+
+    def _extract_json_string_fragment(self, text: str, start_idx: int) -> tuple[str, int]:
+        """Extract a JSON string fragment from text starting at the opening quote."""
+        i = start_idx
+        escaped = False
+        extracted: list[str] = []
+
+        while i < len(text):
+            ch = text[i]
+            if escaped:
+                extracted.append(ch)
+                escaped = False
+            elif ch == '\\':
+                extracted.append(ch)
+                escaped = True
+            elif ch == '"':
+                return ''.join(extracted), i + 1
+            else:
+                extracted.append(ch)
+            i += 1
+
+        # Reached end of text without a closing quote.
+        return ''.join(extracted), i
+
+    def _recover_partial_chapter_section(self, text: str) -> Any | None:
+        """Recover a truncated ChapterSection payload from incomplete JSON text."""
+        if 'ChapterSection' not in text or '"content"' not in text:
+            return None
+
+        match = re.search(r'"content"\s*:\s*"', text)
+        if not match:
+            return None
+
+        fragment, _ = self._extract_json_string_fragment(text, match.end())
+        if not fragment:
+            return None
+
+        # If the model output was truncated, the content string may not be
+        # closed. Attempt to decode the fragment as a JSON string.
+        fragment = fragment.replace('\r', '\\r').replace('\n', '\\n')
+        if fragment.endswith('\\'):
+            fragment = fragment[:-1]
+
+        try:
+            return {"content": json.loads(f'"{fragment}"')}
+        except json.JSONDecodeError:
+            return {"content": fragment}
 
     def _build_structured_prompt(self, messages: list[dict], response_model: Any) -> list[dict]:
         """Append a JSON-only instruction so Gemini can return a parseable payload."""
@@ -738,6 +903,11 @@ class MultiProviderRouter:
             print(f"[LLM Router] Structured-output fallback could not parse JSON from provider response: {text}")
             parsed = {}
 
+        if isinstance(parsed, dict):
+            parsed = self._unwrap_structured_payload(parsed, response_model)
+            if getattr(response_model, '__name__', '') == 'HarvestResult':
+                parsed = self._normalize_harvest_result_payload(parsed)
+
         # If the provider returned a bare list but the expected response
         # model is a Pydantic model (object), attempt to coerce the list
         # into a dict by placing it under a likely list-typed field name.
@@ -795,15 +965,32 @@ class MultiProviderRouter:
                             new_iq.append(str(item))
                         parsed['initial_queries'] = new_iq
 
-                # Ensure required top-level fields exist with safe defaults
-                if 'goal_type' not in parsed or not parsed.get('goal_type'):
-                    parsed.setdefault('goal_type', 'UNKNOWN')
-                if 'target_type' not in parsed or not parsed.get('target_type'):
-                    parsed.setdefault('target_type', 'UNKNOWN')
-                if 'canonical_target' not in parsed:
-                    parsed.setdefault('canonical_target', '')
-                if 'rationale' not in parsed:
-                    parsed.setdefault('rationale', '')
+                # Ensure required top-level fields exist with safe defaults.
+                # For triage, prefer context-derived, non-UNKNOWN defaults so the
+                # fallback doesn't break intake when the provider returns malformed JSON.
+                model_name = getattr(response_model, '__name__', '')
+                target_context = self._extract_target_from_context(fallback_kwargs.get('messages', []))
+                if model_name == 'TriageResult':
+                    if not parsed.get('goal_type') or str(parsed.get('goal_type')).upper() == 'UNKNOWN':
+                        parsed['goal_type'] = 'PROFILING'
+                    if not parsed.get('target_type') or str(parsed.get('target_type')).upper() == 'UNKNOWN':
+                        parsed['target_type'] = 'QUESTION'
+                    if 'canonical_target' not in parsed or not parsed.get('canonical_target'):
+                        parsed['canonical_target'] = target_context.strip().lower() if target_context else ''
+                    if 'rationale' not in parsed or not parsed.get('rationale'):
+                        parsed['rationale'] = (
+                            f"Triage fallback derived from the provided investigation target '{target_context}'."
+                            if target_context else 'Triage fallback generated from the supplied target context.'
+                        )
+                else:
+                    if 'goal_type' not in parsed or not parsed.get('goal_type'):
+                        parsed.setdefault('goal_type', 'UNKNOWN')
+                    if 'target_type' not in parsed or not parsed.get('target_type'):
+                        parsed.setdefault('target_type', 'UNKNOWN')
+                    if 'canonical_target' not in parsed:
+                        parsed.setdefault('canonical_target', '')
+                    if 'rationale' not in parsed:
+                        parsed.setdefault('rationale', '')
 
                 # Debugging aid: compact print of the normalized parsed JSON
                 try:
@@ -812,6 +999,9 @@ class MultiProviderRouter:
                     pass
         except Exception:
             pass
+
+        if isinstance(parsed, dict) and getattr(response_model, '__name__', '') == 'HarvestResult':
+            parsed = self._normalize_harvest_result_payload(parsed)
 
         # If the model accidentally returned a JSON Schema object (it echoed
         # the schema instead of filling it), attempt to extract concrete
@@ -1017,16 +1207,16 @@ class MultiProviderRouter:
             
             # Map the outgoing request to the precise model string the provider expects dynamically!
             call_kwargs = kwargs.copy()
+            response_model = call_kwargs.pop("response_model", None)
+            structured_response = response_model is not None
             call_kwargs["model"] = mapped_model
             
             try:
                 # If the caller requested a structured Pydantic response via
                 # `response_model=MyModel`, route through the instructor‑wrapped
-                # client. Otherwise, use the raw OpenAI/Groq client so plain
-                # text generations (ArticleWorker, stance detection, etc.)
-                # don't hit Instructor's strict `response_model` requirement.
-                if "response_model" in call_kwargs and call_kwargs["response_model"] is not None:
-                    response_model = call_kwargs["response_model"]
+                # client only when necessary. Otherwise, use the raw OpenAI/Groq
+                # client for plain text generations.
+                if structured_response:
                     if client_wrapper.provider in {"GOOGLE_AI_STUDIO", "VERTEX_AI", "SELF_HOSTED_OLLAMA"}:
                         # The local Ollama path and Gemini fallback both work better with a
                         # plain-text JSON response that we parse locally instead of the
@@ -1041,11 +1231,15 @@ class MultiProviderRouter:
                         if "temperature" in call_kwargs and client_wrapper.provider in {"GOOGLE_AI_STUDIO", "VERTEX_AI"}:
                             call_kwargs.pop("temperature")
 
-                        if "max_retries" not in call_kwargs and client_wrapper.provider != "SELF_HOSTED_OLLAMA":
+                        if "max_retries" not in call_kwargs:
                             call_kwargs["max_retries"] = 3
+                        call_kwargs["response_model"] = response_model
                         response = client_wrapper.client.chat.completions.create(**call_kwargs)
                 else:
                     response = client_wrapper.raw_client.chat.completions.create(**call_kwargs)
+
+                if structured_response:
+                    return response
 
                 # Debugging: inspect provider response structure
                 choices = getattr(response, "choices", None)
@@ -1072,8 +1266,8 @@ class MultiProviderRouter:
                 
             except (GroqRateLimitError, OpenAIRateLimitError, NotFoundError, InternalServerError) as e:
                 reason = f"provider failure: {type(e).__name__} {str(e)[:200]}"
-                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and "timeout" in str(e).lower():
-                    print(f"[LLM Router] Transient local timeout from {client_wrapper.provider}; retrying without disabling provider: {e}")
+                if client_wrapper.provider == "SELF_HOSTED_OLLAMA" and _is_transient_local_network_error(e):
+                    print(f"[LLM Router] Transient local provider issue from {client_wrapper.provider}; retrying without disabling provider: {e}")
                     client_wrapper.cooldown_until = time.time() + 5
                 else:
                     client_wrapper.disable(reason)

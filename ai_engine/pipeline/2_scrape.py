@@ -473,7 +473,7 @@ def process_scraping_queue():
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Found {pending_count} pending URLs. Spinning up {workers_to_use} concurrent threads...")
         
         # Spin up the scalable worker pool
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
             # We launch Exactly N workers. The workers will self-assign using SKIP LOCKED and terminate when the queue hits 0.
             futures = [executor.submit(scraper_worker, i) for i in range(workers_to_use)]
             for f in futures:

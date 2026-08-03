@@ -24,6 +24,10 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from dotenv import load_dotenv
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -35,6 +39,7 @@ from .harvester  import run_harvester
 from .terminator import check_termination, complete_investigation
 from .report_writer import run_report_tick
 from ai_engine.core.license_manager import validate_license
+from ai_engine.core.source_utils import resolve_source_for_url
 
 _has_run_startup_recovery = False
 
@@ -62,6 +67,8 @@ def _get_or_create_searxng_source(pg_conn) -> int:
 def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searxng_source_id: int) -> None:
     """Executes the triage's initial queries immediately and injects URLs into raw_urls."""
     import requests
+    from ai_engine.core.searxng_client import request_searxng
+
     def create_searxng_headers(secret: str = "") -> dict:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -72,11 +79,8 @@ def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searx
             headers["X-API-KEY"] = secret
         return headers
 
-    def build_searxng_params(query: str, time_range: str | None = None) -> dict:
-        params = {"q": query, "format": "json", "engines": "google,bing"}
-        if time_range:
-            params["time_range"] = time_range
-        return params
+    def build_searxng_params(query: str) -> dict:
+        return {"q": query, "format": "json"}
 
     def extract_searxng_html_links(html_text: str) -> list[str]:
         import re
@@ -90,13 +94,18 @@ def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searx
             urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text, re.I)
         return urls
 
+    print(f"[Orchestrator] Triage initial queries for investigation #{investigation_id}: {queries}")
+
     for q in queries:
         try:
-            resp = requests.get(
+            print(f"[Orchestrator] Running initial query #{queries.index(q)+1}/{len(queries)} for investigation #{investigation_id}: {q}")
+            resp = request_searxng(
                 f"{SEARXNG_URL.rstrip('/')}/search",
                 params=build_searxng_params(q),
                 headers=create_searxng_headers(os.getenv("SEARXNG_SECRET_KEY", "")),
-                timeout=15,
+                method="get",
+                timeout=10,
+                retries=2,
             )
             if resp.status_code != 200:
                 continue
@@ -113,11 +122,24 @@ def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searx
                 fallback_urls = extract_searxng_html_links(resp.text)
                 if fallback_urls:
                     results = [{"url": url} for url in fallback_urls]
+
+            print(f"[Orchestrator] SearXNG results for query '{q}' (investigation #{investigation_id}): {results[:10]}")
+            if results:
+                print(f"[Orchestrator] SearXNG URLs for query '{q}' (investigation #{investigation_id}): {[r.get('url', '') for r in results if isinstance(r, dict) and r.get('url')]}")
+
             with pg_conn.cursor() as cur:
                 for r in results:
                     url = r.get("url", "")
                     if not url:
                         continue
+                    source_id = resolve_source_for_url(
+                        cur,
+                        url,
+                        name=r.get("title") or r.get("engine") or "Discovered Source",
+                        category="Discovered",
+                    )
+                    if source_id is None:
+                        source_id = searxng_source_id
                     cur.execute(
                         """
                         INSERT INTO raw_urls (source_id, url, metadata, status)
@@ -125,8 +147,13 @@ def _inject_initial_queries(investigation_id: int, queries: list, pg_conn, searx
                         ON CONFLICT (url) DO NOTHING
                         """,
                         (
-                            searxng_source_id, url,
-                            Json({"investigation_id": investigation_id, "osint_query": q}),
+                            source_id, url,
+                            Json({
+                                "investigation_id": investigation_id,
+                                "osint_query": q,
+                                "gateway": "searxng",
+                                "gateway_source_id": searxng_source_id,
+                            }),
                         )
                     )
             pg_conn.commit()
@@ -192,7 +219,7 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
             if not findings.get("initial_queries"):
                 print(f"[Orchestrator] Investigation #{inv_id}: Running triage...")
                 try:
-                    triage = triage_target(target, neo4j_driver=neo4j_driver, pg_conn=pg_conn)
+                    triage = triage_target(target, neo4j_driver=neo4j_driver)
                     persist_triage(inv_id, triage, pg_conn)
                     if triage.initial_queries and SEARXNG_URL:
                         _inject_initial_queries(inv_id, triage.initial_queries, pg_conn, searxng_source_id)
@@ -222,11 +249,15 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
 
             # ── Step 2b: Incrementally update the living investigation report ─────
             try:
+                report_conn = psycopg2.connect(DATABASE_URL)
+                report_conn.autocommit = False
                 run_report_tick(
                     investigation_id     = inv_id,
                     investigation_target = target,
+                    pg_conn              = report_conn,
                     inv_meta             = dict(inv),
                 )
+                report_conn.close()
             except Exception as e:
                 print(f"[Orchestrator] Report writer failed for #{inv_id} (non-fatal): {e}")
 
@@ -247,32 +278,31 @@ def run_orchestrator_tick(neo4j_driver=None) -> None:
 
             threads = []
             _goal_type = inv["goal_type"] or "PROFILING"
-            
-            # Extract investigation context from the report/findings
-            report_obj = findings.get("report") or {}
-            executive_summary = report_obj.get("ch1_sitrep", {}).get("content", findings.get("last_harvest_summary", ""))
-            knowledge_gaps = report_obj.get("ch_gaps", {}).get("content", "")
-
             for _ in range(max_agents):
-                # IMPORTANT: pass loop variables as default args to freeze their values
+                # Each thread gets its own independent DB connection to avoid
+                # cursor conflicts between concurrent FOR UPDATE SKIP LOCKED calls.
+                # IMPORTANT: pass loop variables as default args to freeze their
+                # values — Python closures capture by reference, not by value.
                 def agent_thread(
                     _inv_id=inv_id,
                     _target=target,
                     _goal_type=_goal_type,
-                    _src_id=searxng_source_id,
-                    _exec_summary=executive_summary,
-                    _gaps=knowledge_gaps
+                    _src_id=searxng_source_id
                 ):
                     try:
-                        run_lead_agent(
-                            investigation_id     = _inv_id,
-                            investigation_target = _target,
-                            goal_type            = _goal_type,
-                            searxng_url          = SEARXNG_URL,
-                            searxng_source_id    = _src_id,
-                            executive_summary    = _exec_summary,
-                            knowledge_gaps       = _gaps
-                        )
+                        agent_conn = psycopg2.connect(DATABASE_URL)
+                        agent_conn.autocommit = False
+                        try:
+                            run_lead_agent(
+                                investigation_id     = _inv_id,
+                                investigation_target = _target,
+                                goal_type            = _goal_type,
+                                searxng_url          = SEARXNG_URL,
+                                pg_conn              = agent_conn,
+                                searxng_source_id    = _src_id,
+                            )
+                        finally:
+                            agent_conn.close()
                     except Exception as e:
                         print(f"[Orchestrator] Agent thread error: {e}")
 

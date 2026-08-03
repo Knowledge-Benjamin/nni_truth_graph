@@ -1,6 +1,43 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 
+function getReviewResolutionUpdate(decision) {
+    if (decision === 'APPROVE') {
+        return {
+            sql: `
+                UPDATE extracted_claims
+                SET pipeline_stage = 'STAGE_6_DEDUP',
+                    status = 'PROCESSING'
+                WHERE id = $1
+            `,
+            pipelineStage: 'STAGE_6_DEDUP',
+            status: 'PROCESSING'
+        };
+    }
+
+    if (decision === 'REJECT') {
+        return {
+            sql: `
+                UPDATE extracted_claims
+                SET status = 'AUTO_REJECT'
+                WHERE id = $1
+            `,
+            pipelineStage: null,
+            status: 'AUTO_REJECT'
+        };
+    }
+
+    return {
+        sql: `
+            UPDATE extracted_claims
+            SET status = 'RETRACTED'
+            WHERE id = $1
+        `,
+        pipelineStage: null,
+        status: 'RETRACTED'
+    };
+}
+
 const pgPool = new Pool({
     connectionString: process.env.DATABASE_URL
 });
@@ -30,16 +67,10 @@ async function processOutbox() {
 
             try {
                 if (decision === 'APPROVE') {
-                    // Queue the claim for graph mutation (stage 8)
-                    // Stage 8 will read it from PostgreSQL and write to Neo4j
-                    await client.query(`
-                        UPDATE extracted_claims
-                        SET pipeline_stage = 'STAGE_8_MUTATION_QUEUE',
-                            status = 'AUTO_APPROVE'
-                        WHERE id = $1
-                    `, [claim_id]);
+                    const update = getReviewResolutionUpdate(decision);
+                    await client.query(update.sql, [claim_id]);
 
-                    console.log(`  -> Enqueued Claim ${claim_id} to Stage 8 (Graph Mutation).`);
+                    console.log(`  -> Re-enqueued Claim ${claim_id} to ${update.pipelineStage} for deduplication review.`);
                 } else if (decision === 'REJECT') {
                     // Mark as rejected, don't enqueue to mutation
                     await client.query(`

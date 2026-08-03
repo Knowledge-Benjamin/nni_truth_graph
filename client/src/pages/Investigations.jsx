@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
     Activity, Play, Pause, Trash2, Search, Crosshair, Target, Clock, AlertTriangle, 
-    ChevronRight, CheckCircle2, ChevronDown, List, FolderSearch, Plus, X, BookOpen, Network
+    ChevronRight, CheckCircle2, ChevronDown, List, FolderSearch, Plus, X, BookOpen, Network, Download
 } from 'lucide-react';
 import { api } from '../api';
 import ArticleRenderer from '../components/ArticleRenderer';
@@ -127,6 +127,59 @@ function Investigations() {
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = `investigation-${selectedInvestigation.id}-summary.txt`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const buildReportMarkdown = (report) => {
+        if (!report || typeof report !== 'object') return '';
+        const lines = [
+            '# INVESTIGATION DOSSIER',
+            '',
+            `**Investigation ID:** #${selectedInvestigation?.id || 'unknown'}`,
+            `**Target:** ${selectedInvestigation?.target || 'Unknown'}`,
+            '',
+        ];
+
+        const chapterEntries = Object.entries(report)
+            .filter(([key]) => !key.startsWith('_'))
+            .sort(([, a], [, b]) => (a?.order ?? 999) - (b?.order ?? 999));
+
+        for (const [key, chapter] of chapterEntries) {
+            const content = chapter?.content || chapter?.text || chapter?.body || '';
+            if (!content) continue;
+            const title = chapter?.title || key;
+            lines.push(`## ${title}`);
+            lines.push('');
+            lines.push(content.trim());
+            lines.push('');
+        }
+
+        const refs = Array.isArray(report._references) ? report._references : [];
+        if (refs.length > 0) {
+            lines.push('## References');
+            lines.push('');
+            refs.forEach((ref, index) => {
+                const src = ref?.source_name || ref?.source || ref?.original_source || 'Unknown';
+                const url = ref?.source_url || ref?.original_url || '';
+                const title = ref?.article_title || '';
+                const cid = ref?.claim_id || ref?.uuid || ref?.id || index + 1;
+                lines.push(`- [${cid}] ${url ? `[${src}](${url})` : src}${title ? ` — *${title}*` : ''}`);
+            });
+        }
+
+        return lines.join('\n').trim();
+    };
+
+    const downloadReport = () => {
+        const report = selectedInvestigation?.report;
+        const markdown = buildReportMarkdown(report);
+        if (!markdown) return;
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `investigation-${selectedInvestigation?.id || 'report'}.md`;
         anchor.click();
         URL.revokeObjectURL(url);
     };
@@ -454,19 +507,45 @@ function Investigations() {
                                 </>
                             )}
                             {activeTab === 'report' && (
-                                <div style={{ background: '#0f172a', padding: '24px', borderRadius: '12px', border: '1px solid #1e293b' }}>
-                                    {selectedInvestigation?.report ? (
-                                        <ArticleRenderer 
-                                            articleObj={{ 
-                                                article: selectedInvestigation.report, 
-                                                references: selectedInvestigation.report._references || [] 
-                                            }} 
-                                        />
-                                    ) : (
-                                        <div style={{ color: '#64748b', textAlign: 'center', padding: '40px' }}>
-                                            Report is still generating or no claims have been committed yet.
+                                <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', overflow: 'hidden' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '16px 18px', borderBottom: '1px solid #1e293b', background: 'rgba(15, 23, 42, 0.96)', position: 'sticky', top: 0, zIndex: 5 }}>
+                                        <div>
+                                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>Investigation Report</div>
+                                            <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>Full chaptered report with live citations and references</div>
                                         </div>
-                                    )}
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                            <button
+                                                type="button"
+                                                onClick={downloadReport}
+                                                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#1d4ed8', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+                                            >
+                                                <Download size={14} /> Download Report
+                                            </button>
+                                            {selectedInvestigation?.report?.ch0_executive_summary?.content && (
+                                                <button
+                                                    type="button"
+                                                    onClick={downloadSummary}
+                                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#047857', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+                                                >
+                                                    <Download size={14} /> Export Summary
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 22px 32px' }}>
+                                        {selectedInvestigation?.report ? (
+                                            <ArticleRenderer 
+                                                articleObj={{ 
+                                                    article: selectedInvestigation.report, 
+                                                    references: selectedInvestigation.report._references || [] 
+                                                }} 
+                                            />
+                                        ) : (
+                                            <div style={{ color: '#64748b', textAlign: 'center', padding: '40px' }}>
+                                                Report is still generating or no claims have been committed yet.
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                             {activeTab === 'graph' && (

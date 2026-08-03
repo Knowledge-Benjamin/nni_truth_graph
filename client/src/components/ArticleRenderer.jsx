@@ -54,7 +54,10 @@ export default function ArticleRenderer({ articleObj, onEntityClick }) {
     const refMap = useMemo(() => {
         const map = {};
         refs.forEach((ref, index) => {
-            if (ref.uuid) map[ref.uuid] = { ...ref, displayIndex: index + 1 };
+            const refKey = ref.uuid || ref.claim_id || ref.claim_uuid || ref.id || ref._id || ref.source_id;
+            if (refKey) {
+                map[String(refKey)] = { ...ref, displayIndex: index + 1 };
+            }
         });
         return map;
     }, [refs]);
@@ -62,7 +65,7 @@ export default function ArticleRenderer({ articleObj, onEntityClick }) {
     // ── Inline text renderer (entity links + [REF:uuid] citations) ─────────────
     const renderInline = (text, keyPrefix) => {
         if (!text) return null;
-        const parts = text.split(/(\[\[.*?\]\]|\[REF:[a-zA-Z0-9\-]+\])/g);
+        const parts = text.split(/(\[\[.*?\]\]|\[(?:REF|ref):[a-zA-Z0-9\-_]+\])/g);
         return parts.map((part, i) => {
             if (part.startsWith('[[') && part.endsWith(']]')) {
                 const entityName = part.slice(2, -2);
@@ -82,15 +85,20 @@ export default function ArticleRenderer({ articleObj, onEntityClick }) {
                     </button>
                 );
             }
-            if (part.startsWith('[REF:') && part.endsWith(']')) {
-                const uuid = part.slice(5, -1);
-                const refInfo = refMap[uuid];
+            const citationMatch = part.match(/^\[(?:REF|ref):([a-zA-Z0-9\-_]+)\]$/);
+            if (citationMatch) {
+                const refKey = citationMatch[1];
+                const refInfo = refMap[refKey];
                 if (!refInfo) return null;
+                const targetUrl = refInfo.source_url || refInfo.original_url || `#ref-${refKey}`;
+                const isExternal = /^https?:\/\//i.test(targetUrl);
                 return (
                     <sup key={`${keyPrefix}-r${i}`} style={{ marginLeft: '2px' }}>
                         <a
-                            href={`#ref-${uuid}`}
-                            title={`Source: ${refInfo.source_name || uuid}`}
+                            href={targetUrl}
+                            target={isExternal ? '_blank' : undefined}
+                            rel={isExternal ? 'noopener noreferrer' : undefined}
+                            title={`Source: ${refInfo.source_name || refInfo.source || refKey}`}
                             style={{
                                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                 width: '16px', height: '16px', borderRadius: '50%',

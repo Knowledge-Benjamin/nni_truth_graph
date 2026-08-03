@@ -40,6 +40,7 @@ if PROJECT_ROOT not in sys.path:
 print("[INIT] Importing core modules (this may block if testing API keys)...")
 from ai_engine.core.epistemic_trust import EpistemicTrustScorer  # type: ignore[import]
 from ai_engine.core.logger import get_printer  # type: ignore[import]
+from ai_engine.core.searxng_client import request_searxng  # type: ignore[import]
 print("[INIT] Importing inference_pool...")
 from ai_engine.core.inference_pool import inference_pool as hf_pool  # type: ignore[import]
 print = get_printer(5)  # Bright Green
@@ -82,7 +83,7 @@ neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
 llm_client   = groq_pool
 # Keep resolution concurrency low on HF Spaces to reduce Serper/HF load.
 # Increased from 2 to 10 per request.
-MAX_WORKERS = 4
+MAX_WORKERS = 6
 
 WAYBACK_CDX = os.getenv(
     "WAYBACK_CDX_URL",
@@ -140,23 +141,26 @@ def searxng_search(query: str, date_before: Optional[str] = None) -> list[dict]:
     Searches via our self-hosted SearXNG instance.
     date_before: ISO date string 'YYYY-MM-DD'.
     """
-    # Note: SearXNG time ranges are mostly: day, week, month, year. 
-    # Exact before-date is engine specific. We'll specify format=json
+    # Use a plain JSON search request without a time filter to avoid empty-result responses
+    # from the hosted SearXNG instance.
     payload = {
         "q": query,
         "format": "json",
-        "engines": "google,bing,brave,qwant"
     }
     headers = {
         "User-Agent": "KnowledgeBenjiTruthGraphBot/1.0 (Contact: admin@example.com)",
         "Accept": "application/json",
     }
-    # If date_before is strict, SearXNG doesn't seamlessly support "before X date" out of the box
-    # across all engines, but time_range="year" can be used if recent. 
-    # For now, we rely on Wayback CDX for exact timestamp validation anyway.
+    # We rely on Wayback CDX for exact timestamp validation anyway.
     
-    resp = requests.post(SEARXNG_SEARCH_URL, data=payload, headers=headers, timeout=15)
-    resp.raise_for_status()
+    resp = request_searxng(
+        SEARXNG_SEARCH_URL,
+        params=payload,
+        headers=headers,
+        method="post",
+        timeout=10,
+        retries=2,
+    )
     data = resp.json()
     return data.get("results", [])
 
@@ -344,9 +348,8 @@ def neo4j_cross_reference(subject: str, predicate: str, obj: str, claim_embeddin
                     best_es  = rec.get("es") or 0.4
                     best_rec = rec
 
-            if best_sim >= 0.95:
-                # Very high similarity — same claim, invert predicate meaning to detect contradiction
-                # Use Groq to do semantic stance detection on the objects
+            if best_sim >= 0.80:
+                # High similarity — use Groq to do semantic stance detection on the objects
                 stance_prompt = f"""
 You are a logical stance detector. Compare these two claim objects:
 Claim A object: "{obj}"
@@ -372,18 +375,14 @@ Reply with exactly one word: DUPLICATE, CONTRADICTS, CORROBORATES, or EVOLVES.
                     stance_word = stance_resp.choices[0].message.content.strip().upper().split()[0]
                     if stance_word in ("DUPLICATE", "CONTRADICTS", "CORROBORATES", "EVOLVES"):
                         result["stance"] = stance_word
-                except Exception:
-                    result["stance"] = "CORROBORATES" if best_sim >= 0.98 else "ORIGINAL"
+                except Exception as e:
+                    print(f"  [STANCE LLM ERROR] {e}")
+                    result["stance"] = "CORROBORATES" if best_sim >= 0.95 else "ORIGINAL"
 
                 result["matched_claim_id"] = best_id
                 result["similarity"] = round(best_sim, 4)  # type: ignore[call-overload]
                 if result["stance"] == "CONTRADICTS":
                     result["contradiction_weights"].append(best_es)
-
-            elif best_sim >= 0.80:
-                result["stance"] = "CORROBORATES"
-                result["matched_claim_id"] = best_id
-                result["similarity"] = round(best_sim, 4)  # type: ignore[call-overload]
 
     except Exception as e:
         print(f"  [NEO4J ERROR] {e}")
@@ -396,74 +395,33 @@ Reply with exactly one word: DUPLICATE, CONTRADICTS, CORROBORATES, or EVOLVES.
 
 def resolution_worker(worker_id: int):
     try:
-        # ── Two-phase queue: investigation items first, background second ──
-        # Phase 2 (background items) is skipped when an investigation is active
-        # so downstream investigation content is not starved by background work.
-        phases = [
-            (100, "AND ru.metadata->>'investigation_id' IS NOT NULL"),
-        ]
-        try:
-            with psycopg2.connect(DATABASE_URL) as _inv_check:
-                with _inv_check.cursor() as _inv_cur:
-                    _inv_cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
-                    _active_inv = _inv_cur.fetchone()[0]
-        except Exception:
-            _active_inv = 0
-            
-        if _active_inv == 0:
-            phases.append((20, "AND ru.metadata->>'investigation_id' IS NULL"))
-            
-        for __phase, (__limit, __filter_clause) in enumerate(phases):
-            items_processed = 0
+        pg_conn = psycopg2.connect(DATABASE_URL)
+        items_processed = 0
 
-            while items_processed < __limit:
-                try:
-                    claim_id = None
-                    subject = None
-                    predicate = None
-                    obj = None
-                    temporal = None
-                    spatial = None
-                    extr_conf = None
-                    epist_score = None
-                    pub_date = None
-                    art_title = None
-                    ingest_url = None
-                    src_trust = None
-                    ai_metadata = None
-
-                    with psycopg2.connect(DATABASE_URL) as claim_conn:
-                        with claim_conn.cursor() as cur:
-                            cur.execute(f"""
-                                SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
-                                       ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
-                                       ra.publish_date, ra.title, ru.url, s.epistemic_trust_score, ec.ai_metadata
-                                FROM extracted_claims ec
-                                JOIN raw_articles ra ON ec.article_id = ra.id
-                                JOIN raw_urls ru     ON ra.url_id = ru.id
-                                JOIN sources s       ON ru.source_id = s.id
-                                WHERE ec.status = 'PROCESSING'
-                                  AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
-                                {__filter_clause}
-                                    ORDER BY ec.id ASC
-                                LIMIT 1
-                                FOR UPDATE OF ec SKIP LOCKED;
-                            """)
-                            row = cur.fetchone()
-                            if not row:
-                                claim_conn.rollback()
-                                break
-
-                            (claim_id, subject, predicate, obj, temporal, spatial,
-                             extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust, ai_metadata) = row
-                            cur.execute(
-                                "UPDATE extracted_claims SET pipeline_stage = 'STAGE_5_RESOLUTION_IN_PROGRESS' WHERE id = %s",
-                                (claim_id,),
-                            )
-                            claim_conn.commit()
-
-                    if claim_id is None or subject is None or predicate is None or obj is None:
+        while items_processed < 20:
+            try:
+                with pg_conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
+                               ec.temporal_anchor, ec.spatial_anchor, ec.extraction_confidence, ec.epistemic_score,
+                               ra.publish_date, ra.title, ru.url, s.epistemic_trust_score, ec.ai_metadata
+                        FROM extracted_claims ec
+                        JOIN raw_articles ra ON ec.article_id = ra.id
+                        JOIN raw_urls ru     ON ra.url_id = ru.id
+                        JOIN sources s       ON ru.source_id = s.id
+                        WHERE ec.status = 'PROCESSING'
+                          AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
+                        ORDER BY CASE WHEN ru.metadata->>'investigation_id' IS NOT NULL THEN 0 ELSE 1 END, ec.id ASC
+                        LIMIT 1
+                        FOR UPDATE OF ec SKIP LOCKED;
+                    """)
+                    row = cur.fetchone()
+                    if not row:
+                        pg_conn.rollback()
                         break
+
+                    (claim_id, subject, predicate, obj, temporal, spatial,
+                     extr_conf, epist_score, pub_date, art_title, ingest_url, src_trust, ai_metadata) = row
 
                     print(f"  [W-{worker_id}] Resolving: [{predicate}] {subject[:30]} → {obj[:30]}")
 
@@ -518,12 +476,12 @@ def resolution_worker(worker_id: int):
                             wayback_date = wayback_first_seen(candidate_url)
                         except Exception:
                             pass
-
+                        
                         try:
                             cc_date = common_crawl_first_seen(candidate_url)
                         except Exception:
                             pass
-
+                            
                         # Take the absolute earliest verified date we have found
                         valid_dates = [d for d in [wayback_date, cc_date, candidate_date] if d is not None]
                         earliest = min(valid_dates) if valid_dates else None
@@ -535,11 +493,16 @@ def resolution_worker(worker_id: int):
 
                         if earliest:
                             if local_pub is None:
+                                # No local date to compare against — record the first internet result
+                                # as the canonical reference source
                                 if original_url is None:
                                     original_url  = candidate_url
                                     original_date = earliest
                                     original_name = candidate_source
+                                    # We cannot confidently say we're NOT the original without a local date
+                                    # so keep is_our_url_original=True but record the reference
                             elif earliest < local_pub:
+                                # Internet found an earlier source — mark ours as secondary
                                 is_our_url_original = False
                                 original_url  = candidate_url
                                 original_date = earliest
@@ -553,8 +516,9 @@ def resolution_worker(worker_id: int):
 
                     final_stance = neo4j_result["stance"]
 
+                    # If internet found an older source, override stance
                     if not is_our_url_original and final_stance == "ORIGINAL":
-                        final_stance = "CORROBORATES"
+                        final_stance = "CORROBORATES"  # Our article is not the origin
 
                     # ── C. Re-score with new intelligence ────────────────
                     days_old = (datetime.now(timezone.utc) - original_date).days if original_date else 0
@@ -579,66 +543,50 @@ def resolution_worker(worker_id: int):
                     routing = _scorer.determine_routing(new_score)
 
                     # ── D. Persist results ───────────────────────────────────
-                    # Routing decision:
-                    #   AUTO_APPROVE  → STAGE_6_DEDUP as PROCESSING (S7 does the definitive rescore)
-                    #   HUMAN_REVIEW  → STAGE_HELD_FOR_REVIEW (admin reviews via /api/human-review)
-                    #   AUTO_REJECT   → STAGE_HELD_FOR_REVIEW (terminal, never touches graph)
-                    # HUMAN_REVIEW/AUTO_REJECT must NOT enter STAGE_6_DEDUP — S6 only processes
-                    # PROCESSING items, so they would sit there permanently, invisible to the
-                    # terminator's in-flight count and never surfaced to the human-review queue.
-                    if routing in ("HUMAN_REVIEW", "AUTO_REJECT"):
-                        out_stage = "STAGE_HELD_FOR_REVIEW"
-                        out_status = routing          # preserve HUMAN_REVIEW / AUTO_REJECT
-                    else:
-                        out_stage = "STAGE_6_DEDUP"
-                        out_status = "PROCESSING"     # AUTO_APPROVE flattened; S7 rescores
+                    cur.execute("""
+                        UPDATE extracted_claims
+                        SET epistemic_score  = %s,
+                            status           = %s,
+                            pipeline_stage   = 'STAGE_6_DEDUP'
+                        WHERE id = %s
+                    """, (new_score, routing if routing != "AUTO_APPROVE" else "PROCESSING", claim_id))
 
-                    with psycopg2.connect(DATABASE_URL) as write_conn:
-                        with write_conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE extracted_claims
-                                SET epistemic_score  = %s,
-                                    status           = %s,
-                                    pipeline_stage   = %s
-                                WHERE id = %s
-                            """, (new_score, out_status, out_stage, claim_id))
+                    # Store provenance metadata into a jsonb column (add if needed)
+                    # We'll write a separate provenance record to keep claims table clean
+                    cur.execute("""
+                        INSERT INTO claim_provenance
+                            (claim_id, internet_original_url, internet_original_source,
+                             internet_original_date, is_our_source_original,
+                             neo4j_stance, neo4j_matched_claim_id, neo4j_similarity)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (claim_id) DO UPDATE SET
+                            internet_original_url = EXCLUDED.internet_original_url,
+                            neo4j_stance = EXCLUDED.neo4j_stance;
+                    """, (
+                        claim_id, original_url, original_name,
+                        original_date, is_our_url_original,
+                        final_stance,
+                        neo4j_result["matched_claim_id"],
+                        neo4j_result["similarity"]
+                    ))
 
-                            cur.execute("""
-                                INSERT INTO claim_provenance
-                                    (claim_id, internet_original_url, internet_original_source,
-                                     internet_original_date, is_our_source_original,
-                                     neo4j_stance, neo4j_matched_claim_id, neo4j_similarity)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (claim_id) DO UPDATE SET
-                                    internet_original_url = EXCLUDED.internet_original_url,
-                                    neo4j_stance = EXCLUDED.neo4j_stance;
-                            """, (
-                                claim_id, original_url, original_name,
-                                original_date, is_our_url_original,
-                                final_stance,
-                                neo4j_result["matched_claim_id"],
-                                neo4j_result["similarity"]
-                            ))
-                        write_conn.commit()
+                    pg_conn.commit()
 
                     print(f"      -> [W-{worker_id}] Stance: {final_stance} | Score: {new_score:.2f} | Route: {routing}")
 
                     # ── E. Fire new ingestion if original is not ours ────────
                     if not is_our_url_original and original_url and original_url != ingest_url:
-                        with psycopg2.connect(DATABASE_URL) as ingest_conn:
-                            fire_new_ingestion(ingest_conn, original_url, original_name)
+                        fire_new_ingestion(pg_conn, original_url, original_name)
 
                     items_processed += 1
                     time.sleep(1.5)  # Respect Serper rate limits
 
-                except Exception as loop_err:
-                    print(f"  [ERROR W-{worker_id} Loop] {loop_err}. Rolling back to keep in queue.")
-                    try:
-                        with psycopg2.connect(DATABASE_URL) as rollback_conn:
-                            rollback_conn.rollback()
-                    except Exception:
-                        pass
-                    time.sleep(10)
+            except Exception as loop_err:
+                print(f"  [ERROR W-{worker_id} Loop] {loop_err}. Rolling back to keep in queue.")
+                pg_conn.rollback()
+                time.sleep(10)
+
+        pg_conn.close()
     except Exception as fatal_e:
         print(f"[FATAL W-{worker_id}] {fatal_e}")
 
@@ -652,22 +600,10 @@ def process_resolution_queue():
         cur = conn.cursor()
 
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking STAGE_4_RESOLUTION queue...")
-        cur.execute("SELECT COUNT(*) FROM investigations WHERE status = 'ACTIVE'")
-        active_inv = cur.fetchone()[0]
-
-        if active_inv > 0:
-            cur.execute("""
-                SELECT COUNT(*) FROM extracted_claims ec
-                JOIN raw_articles ra ON ec.article_id = ra.id
-                JOIN raw_urls ru ON ra.url_id = ru.id
-                WHERE ec.status = 'PROCESSING' AND ec.pipeline_stage = 'STAGE_4_RESOLUTION'
-                  AND ru.metadata->>'investigation_id' IS NOT NULL;
-            """)
-        else:
-            cur.execute("""
-                SELECT COUNT(*) FROM extracted_claims
-                WHERE status = 'PROCESSING' AND pipeline_stage = 'STAGE_4_RESOLUTION';
-            """)
+        cur.execute("""
+            SELECT COUNT(*) FROM extracted_claims
+            WHERE status = 'PROCESSING' AND pipeline_stage = 'STAGE_4_RESOLUTION';
+        """)
         row = cur.fetchone()
         pending = row[0] if row else 0
         cur.close()
@@ -680,7 +616,7 @@ def process_resolution_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims pending. Spinning {workers} provenance threads...")
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(resolution_worker, i) for i in range(workers)]  # type: ignore[arg-type]
             for f in futures:
                 f.result()

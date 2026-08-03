@@ -425,7 +425,6 @@ def extraction_worker(worker_id):
                                         {"role": "user", "content": prompt}
                                     ],
                                     temperature=0.1,
-                                    max_tokens=4000,
                                     response_format={"type": "json_object"}
                                 )
                                 raw_text = groq_pool.extract_text_from_response(response_obj)

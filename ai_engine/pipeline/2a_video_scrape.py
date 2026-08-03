@@ -250,13 +250,23 @@ def process_video():
                     else:
                          cursor.execute("UPDATE raw_urls SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{retry_count}', %s), status = 'PENDING_VIDEO' WHERE id = %s", (Json(new_retry), url_id))
                          
-        except psycopg2.Error as db_e:
-            print(f"[W-{worker_id}] DB Error: {db_e}")
-            break
+            except psycopg2.Error as db_e:
+                print(f"[W-{worker_id}] DB Error: {db_e}")
+                break
 
     conn.close()
     if items_processed == 0:
         print(f"  [W-{worker_id}] No video URLs in queue.")
 
+MAX_WORKERS = 6
 if __name__ == "__main__":
-    process_video()
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting Stage 2A: Multimedia Scrape (Concurrent)")
+    
+    # We will spin up MAX_WORKERS threads. Each thread calls process_video() which loops until queue is empty.
+    # process_video is already written to exit when it finds no row.
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_video) for i in range(MAX_WORKERS)]
+        for f in futures:
+            f.result()

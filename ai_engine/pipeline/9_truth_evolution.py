@@ -67,6 +67,7 @@ def handle_evolves(session, pg_cur, new_claim: dict, matched_id: str, similarity
     Retire the old claim and link new → old with SUPERSEDES.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
+    predicate = (new_claim.get("predicate") or "").strip()
 
     # 1. Retire old claim in Neo4j
     session.run("""
@@ -86,7 +87,7 @@ def handle_evolves(session, pg_cur, new_claim: dict, matched_id: str, similarity
         MATCH (s:Entity)-[r:PREDICATE]->(o:Entity)
         WHERE r.type = $predicate AND r.is_current = true
         SET r.is_current = false, r.valid_until = $now
-    """, predicate=new_claim["predicate"], now=now_iso)
+    """, predicate=predicate, now=now_iso)
 
     # 3. Mark old PG claim as SUPERSEDED
     pg_cur.execute("""
@@ -109,6 +110,7 @@ def handle_evolves(session, pg_cur, new_claim: dict, matched_id: str, similarity
 
 def handle_enriches(session, pg_cur, new_claim: dict, matched_id: str, similarity: float):
     now_iso = datetime.now(timezone.utc).isoformat()
+    predicate = (new_claim.get("predicate") or "").strip()
 
     # 1. Retire old claim in Neo4j
     session.run("""
@@ -123,7 +125,7 @@ def handle_enriches(session, pg_cur, new_claim: dict, matched_id: str, similarit
         MATCH (s:Entity)-[r:PREDICATE]->(o:Entity)
         WHERE r.type = $predicate AND r.is_current = true
         SET r.is_current = false, r.valid_until = datetime($now)
-    """, predicate=new_claim["predicate"], now=now_iso)
+    """, predicate=predicate, now=now_iso)
 
     # 3. Mark old PG claim as ENRICHED_BY
     pg_cur.execute("""
@@ -428,32 +430,37 @@ def evolution_sweep():
                         with psycopg2.connect(DATABASE_URL) as claim_conn:
                             claim_conn.autocommit = False
                             with claim_conn.cursor() as claim_cur:
-                                if stance == "EVOLVES" and matched_id:
-                                    handle_evolves(session, claim_cur, claim,
-                                                   matched_id, similarity)
+                                try:
+                                    with session.begin_transaction() as tx:
+                                        if stance == "EVOLVES" and matched_id:
+                                            handle_evolves(tx, claim_cur, claim,
+                                                           matched_id, similarity)
 
-                                elif stance == "ENRICHES" and matched_id:
-                                    handle_enriches(session, claim_cur, claim,
-                                                    matched_id, similarity)
+                                        elif stance == "ENRICHES" and matched_id:
+                                            handle_enriches(tx, claim_cur, claim,
+                                                            matched_id, similarity)
 
-                                elif stance == "CONTRADICTS" and matched_id:
-                                    rec = session.run(
-                                        "MATCH (c:Claim {id: $id}) RETURN c.epistemic_score AS s",
-                                        id=str(matched_id)
-                                    ).single()
-                                    matched_score = float(rec["s"] or 0.4) if rec else 0.4
-                                    handle_contradicts(session, claim_cur, claim,
-                                                       matched_id, matched_score)
+                                        elif stance == "CONTRADICTS" and matched_id:
+                                            rec = tx.run(
+                                                "MATCH (c:Claim {id: $id}) RETURN c.epistemic_score AS s",
+                                                id=str(matched_id)
+                                            ).single()
+                                            matched_score = float(rec["s"] or 0.4) if rec else 0.4
+                                            handle_contradicts(tx, claim_cur, claim,
+                                                               matched_id, matched_score)
 
-                                elif stance == "CORROBORATES":
-                                    adjust_source_trust(claim_cur, source_id, +0.005)
-                                    print(f"    [CORROBORATES] Claim {matched_id} acknowledged. Source trust +0.005.")
+                                        elif stance == "CORROBORATES":
+                                            adjust_source_trust(claim_cur, source_id, +0.005)
+                                            print(f"    [CORROBORATES] Claim {matched_id} acknowledged. Source trust +0.005.")
 
-                                claim_cur.execute("""
-                                    UPDATE extracted_claims SET lifecycle = 'EVOLUTION_PROCESSED'
-                                    WHERE id = %s
-                                """, (claim_id,))
-                                claim_conn.commit()
+                                        claim_cur.execute("""
+                                            UPDATE extracted_claims SET lifecycle = 'EVOLUTION_PROCESSED'
+                                            WHERE id = %s
+                                        """, (claim_id,))
+                                        claim_conn.commit()
+                                except Exception:
+                                    claim_conn.rollback()
+                                    raise
 
                 return len(rows)
 

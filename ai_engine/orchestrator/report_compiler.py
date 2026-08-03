@@ -113,7 +113,7 @@ def _build_investigator_notes(target: str, claims: list[dict], leads: list[dict]
         f"- Leads Pending at Close: {pending}",
         f"- Unique Sources Used: {total_src}",
         f"- High-Trust Sources (≥0.8): {high_trust_src}",
-        f"- Pipeline model: gemma2:9b (self-hosted Ollama)",
+        f"- Pipeline model: gemma-4-e4b (self-hosted Ollama)",
     ]
     instruction = (
         "Write the Investigator Notes chapter. "

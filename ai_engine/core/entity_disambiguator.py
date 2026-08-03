@@ -46,6 +46,8 @@ import re
 import math
 import time
 import threading
+import queue
+import atexit
 import requests
 from collections import OrderedDict
 from typing import Optional
@@ -312,7 +314,7 @@ class EntityDisambiguator:
 
     # ── Signal 3: Wikidata REST API ───────────────────────────────────────────
 
-    def _signal_wikidata(self, name: str) -> Optional[str]:
+    def _process_wikidata_inline(self, name: str) -> Optional[str]:
         """
         Query the Wikidata API wbsearchentities action to find the canonical
         English label for the entity.  No API key required.
@@ -379,6 +381,12 @@ class EntityDisambiguator:
             print(f"  [Disambig·Wikidata] Non-fatal error: {exc}")
             return None
 
+
+    def _signal_wikidata(self, name: str) -> Optional[str]:
+        # Enqueue the name to be processed asynchronously
+        # so it doesn't block the worker pipeline.
+        _wikidata_queue.put(name)
+        return None
     def _spawn_background_ingestion(self, canonical_name: str):
         """
         Dynamically trigger a Tier 2 background Wikipedia ingestion for a novel entity.
@@ -448,6 +456,36 @@ _instance: Optional[EntityDisambiguator] = None
 _instance_lock = threading.Lock()
 
 
+
+_wikidata_queue = queue.Queue()
+_wikidata_worker_thread = None
+
+def _wikidata_worker_loop():
+    while True:
+        try:
+            name = _wikidata_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+            
+        if name is None:
+            break
+            
+        try:
+            if _instance is not None:
+                _instance._process_wikidata_inline(name)
+        except Exception as e:
+            print(f"  [Wikidata Queue] Error: {e}")
+        finally:
+            _wikidata_queue.task_done()
+            time.sleep(10)
+
+def drain_wikidata_queue():
+    global _wikidata_worker_thread
+    if _wikidata_worker_thread and _wikidata_worker_thread.is_alive():
+        if not _wikidata_queue.empty():
+            print(f"  [Wikidata Queue] Waiting for {_wikidata_queue.qsize()} background requests to finish...")
+        _wikidata_queue.put(None)
+        _wikidata_worker_thread.join(timeout=60)
 def get_disambiguator(
     neo4j_driver=None,
     groq_pool=None,
@@ -468,4 +506,10 @@ def get_disambiguator(
                     embed_fn=embed_fn,
                 )
                 _instance.warm_cache()
+
+                global _wikidata_worker_thread
+                if _wikidata_worker_thread is None or not _wikidata_worker_thread.is_alive():
+                    _wikidata_worker_thread = threading.Thread(target=_wikidata_worker_loop, daemon=False)
+                    _wikidata_worker_thread.start()
+                    atexit.register(drain_wikidata_queue)
     return _instance

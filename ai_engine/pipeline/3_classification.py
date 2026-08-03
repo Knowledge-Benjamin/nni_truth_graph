@@ -189,7 +189,7 @@ def process_classification_queue():
         workers_to_use = min(MAX_WORKERS, max(1, pending_count))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Found {pending_count} pending articles. Spinning up {workers_to_use} classification threads...")
         
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers_to_use) as executor:
             futures = [executor.submit(classification_worker, i) for i in range(workers_to_use)]
             for f in futures:
                 f.result()

@@ -41,7 +41,7 @@ from ai_engine.core.logger import get_printer  # type: ignore
 print = get_printer(6)  # Bright Red
 
 # Dedup is relatively light but still touches the DB and LLM; keep threads small.
-MAX_WORKERS     = 2
+MAX_WORKERS     = 6
 COSINE_THRESHOLD = 0.94   # Layer 2: minimum cosine similarity to advance to LLM judge
 
 from ai_engine.core.epistemic_trust import EpistemicTrustScorer
@@ -448,7 +448,7 @@ def process_dedup_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims pending. Spinning {workers} dedup threads...")
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(dedup_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()

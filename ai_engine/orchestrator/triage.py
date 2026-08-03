@@ -119,6 +119,149 @@ def _pre_classify_target_type(target: str) -> Optional[str]:
     return None
 
 
+def _normalize_query_text(query: str) -> str:
+    """Normalize a raw query string without breaking exact-phrase quoting."""
+    if not query:
+        return ""
+    q = str(query).strip()
+    q = re.sub(r"\s+", " ", q)
+    # Preserve explicit double quotes around exact phrases. Only trim outer whitespace.
+    return q.strip()
+
+
+def _looks_like_low_signal_queries(target: str, target_type: str, queries: list[str]) -> bool:
+    """Return True when the generated queries are too generic or obviously noisy."""
+    if not queries:
+        return True
+
+    clean_target = (target or "").strip().strip('"').strip("'")
+    clean_target_l = clean_target.lower()
+
+    if target_type == "PERSON":
+        # Person searches should include at least one high-signal modifier such as linkedin/profile/news/wiki.
+        has_marker = any(marker in q.lower() for q in queries for marker in ["linkedin", "profile", "news", "bio", "wiki", "resume", "social", "site:"])
+        if not has_marker:
+            return True
+
+        # Reject obvious duplicate/OR-chain noise like '"Name" OR "Name" biography'.
+        for q in queries:
+            ql = q.lower()
+            if ql.count(clean_target_l) >= 3 or (" or " in ql and clean_target_l in ql and ql.count(clean_target_l) >= 2):
+                return True
+        return False
+
+    return False
+
+
+def _expand_person_queries(target: str, queries: list[str]) -> list[str]:
+    """Expand person-target queries into higher-signal variants while preserving the exact phrase."""
+    if not queries:
+        return []
+
+    clean_target = (target or "").strip().strip('"').strip("'")
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    for q in queries:
+        q = str(q).strip()
+        if not q:
+            continue
+        if q not in seen:
+            expanded.append(q)
+            seen.add(q)
+
+        if not clean_target:
+            continue
+
+        exact_phrase = f'"{clean_target}"'
+        if q.startswith(exact_phrase):
+            for suffix in [
+                f'{q} profile',
+                f'{q} site:linkedin.com/in',
+                f'{q} -anitta -anita',
+            ]:
+                if suffix not in seen:
+                    expanded.append(suffix)
+                    seen.add(suffix)
+
+    return expanded[:6]
+
+
+def _build_rule_based_triage(target: str, pre_type: Optional[str], graph_seed_leads: list[dict]) -> "TriageResult":
+    """Reliable deterministic triage fallback used when the LLM response is empty or malformed."""
+    clean_target = (target or "").strip().strip('"').strip("'")
+    cleaned = clean_target.lower()
+
+    if pre_type:
+        target_type = pre_type
+    elif _EMAIL_RE.match(clean_target):
+        target_type = "EMAIL"
+    elif _IP_RE.match(clean_target):
+        target_type = "IP"
+    elif _WALLET_RE.match(clean_target):
+        target_type = "WALLET"
+    elif _DOMAIN_RE.match(clean_target):
+        target_type = "DOMAIN"
+    elif any(ch.isspace() for ch in clean_target) or "." not in clean_target and "@" not in clean_target:
+        target_type = "PERSON"
+    else:
+        target_type = "QUESTION"
+
+    goal_type = "PROFILING"
+    canonical_target = cleaned
+    rationale = f"Deterministic fallback triage generated from the supplied target '{clean_target}'."
+
+    if target_type == "PERSON":
+        queries = [
+            f'"{clean_target}"',
+            f'"{clean_target}" profile',
+            f'"{clean_target}" site:linkedin.com/in',
+            f'"{clean_target}" news -anitta -anita',
+        ]
+    elif target_type == "DOMAIN":
+        queries = [
+            f'{clean_target} whois',
+            f'{clean_target} site:whois.domaintools.com',
+            f'{clean_target} company records',
+        ]
+    elif target_type == "EMAIL":
+        queries = [
+            f'{clean_target} email leak',
+            f'{clean_target} public profile',
+            f'{clean_target} breach dump',
+        ]
+    elif target_type == "IP":
+        queries = [
+            f'{clean_target} abuseipdb',
+            f'{clean_target} whois',
+            f'{clean_target} shodan',
+        ]
+    elif target_type == "WALLET":
+        queries = [
+            f'{clean_target} blockchain explorer',
+            f'{clean_target} transaction history',
+            f'{clean_target} wallet analytics',
+        ]
+    else:
+        queries = [
+            f'"{clean_target}" investigation',
+            f'"{clean_target}" news',
+            f'"{clean_target}" profile',
+        ]
+
+    result = TriageResult(
+        goal_type=goal_type,
+        target_type=target_type,
+        canonical_target=canonical_target,
+        exhaust_predicate=None,
+        initial_queries=queries,
+        seed_leads=[],
+        rationale=rationale,
+    )
+    result._graph_seed_leads = graph_seed_leads  # type: ignore[attr-defined]
+    return result
+
+
 # ── Main triage function ─────────────────────────────────────────────────────
 
 def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult":
@@ -234,7 +377,8 @@ def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult
         "Perform intake triage on a new investigation target. "
         "Classify the goal type, target type, and generate precise SearXNG search queries "
         "that will surface actionable intelligence. "
-        "Think like a seasoned OSINT analyst: use operator syntax, enumerate likely sub-targets."
+        "Think like a seasoned OSINT analyst: prefer exact-phrase queries, use one or two high-signal modifiers, "
+        "and avoid duplicate terms, long OR-chains, and generic noise."
     )
 
     user_prompt = (
@@ -244,19 +388,51 @@ def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult
         f"{postgres_context}"
         f"{graph_context}\n\n"
         "Perform triage. Generate the goal_type, target_type, canonical form, "
-        "initial SearXNG queries, any seed leads you can derive from the target itself, "
-        "and a brief rationale."
+        "3-5 initial SearXNG queries, any seed leads you can derive from the target itself, "
+        "and a brief rationale. Keep each query specific and relevant; avoid repeated terms and broad OR-chains."
     )
 
-    result = llm_pool.chat_completions_create(
-        model="TIER_HEAVY",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
-        response_model=TriageResult,
-        temperature=0.2,
-    )
+    print(f"[Triage] Target='{target}'")
+    print(f"[Triage] Prompting LLM with system prompt: {system_prompt}")
+    print(f"[Triage] User prompt: {user_prompt}")
+
+    try:
+        result = llm_pool.chat_completions_create(
+            model="TIER_HEAVY",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            response_model=TriageResult,
+            temperature=0.2,
+        )
+    except Exception as e:
+        print(f"[Triage] LLM triage failed: {e}. Falling back to deterministic rule-based triage.")
+        return _build_rule_based_triage(target, pre_type, graph_seed_leads)
+
+    if not result or getattr(result, 'goal_type', None) in (None, '') or getattr(result, 'target_type', None) in (None, ''):
+        print("[Triage] LLM triage returned an empty or malformed result. Falling back to deterministic rule-based triage.")
+        return _build_rule_based_triage(target, pre_type, graph_seed_leads)
+
+    if not getattr(result, 'initial_queries', None):
+        print("[Triage] LLM triage returned no queries. Falling back to deterministic rule-based triage.")
+        return _build_rule_based_triage(target, pre_type, graph_seed_leads)
+
+    normalized_queries = []
+    for q in getattr(result, 'initial_queries', []) or []:
+        n = _normalize_query_text(q)
+        if n:
+            normalized_queries.append(n)
+
+    if _looks_like_low_signal_queries(target, getattr(result, 'target_type', '') or (pre_type or 'QUESTION'), normalized_queries):
+        print("[Triage] LLM queries were low-signal or noisy. Falling back to deterministic rule-based triage.")
+        return _build_rule_based_triage(target, pre_type, graph_seed_leads)
+
+    if getattr(result, 'target_type', '') == 'PERSON':
+        normalized_queries = _expand_person_queries(target, normalized_queries)
+
+    result.initial_queries = normalized_queries
+    print(f"[Triage] LLM triage result: goal={getattr(result, 'goal_type', None)}, target_type={getattr(result, 'target_type', None)}, canonical_target={getattr(result, 'canonical_target', None)}, queries={getattr(result, 'initial_queries', None)}")
     # Attach graph neighbors so persist_triage can insert them
     result._graph_seed_leads = graph_seed_leads  # type: ignore[attr-defined]
     return result

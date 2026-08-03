@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 import os
+import sys
 import time
 import json
 import gzip
@@ -12,8 +14,11 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 from io import BytesIO
 
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from ai_engine.core.searxng_client import request_searxng
 from ai_engine.core.logger import get_printer
 print = get_printer(1)  # Bright Cyan
 
@@ -23,7 +28,6 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../ai_engine
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 SEARXNG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-SEARXNG_SEARCH_ENGINES = "google,bing"
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 RSS_API_EXCLUDE_HOSTS = {
@@ -74,15 +78,11 @@ def create_searxng_headers(secret: str = "") -> dict:
     return headers
 
 
-def build_searxng_params(query: str, time_range: str | None = None) -> dict:
-    params = {
+def build_searxng_params(query: str) -> dict:
+    return {
         "q": query,
         "format": "json",
-        "engines": SEARXNG_SEARCH_ENGINES,
     }
-    if time_range:
-        params["time_range"] = time_range
-    return params
 
 
 def extract_searxng_html_links(html_text: str) -> list[str]:
@@ -152,6 +152,82 @@ def seed_sources_if_empty(cursor):
     else:
         print(f"Dynamic 'sources' table already initialized ({total_count} active sources).")
 
+
+def process_rss_source(source_tuple):
+    import psycopg2
+    import feedparser
+    from psycopg2.extras import Json
+    from ai_engine.core.config import DATABASE_URL
+    
+    # We can rely on is_rss_candidate_source which is already in scope
+    source_id, name, url, domain, trust_score, etag, modified = source_tuple
+    print(f"Fetching from {name} (Trust: {trust_score})...")
+    
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    cursor = conn.cursor()
+    new_urls_count = 0
+    try:
+        # In this file, is_rss_candidate_source is a global function
+        # But since we are calling it, we must ensure it's accessible.
+        # It's at the top level of 1_ingest.py, so it will be available.
+        if not is_rss_candidate_source(url):
+            print(f"  -> [SKIP] Not an RSS/feed endpoint: {url}")
+            cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP WHERE id = %s;", (source_id,))
+            return 0
+
+        feed = None
+        try:
+            feed = feedparser.parse(url, etag=etag, modified=modified)
+            
+            if getattr(feed, 'status', None) == 304:
+                print(f"  -> [304 NOT MODIFIED] Skipping {name} - no updates since last run.")
+                cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP WHERE id = %s;", (source_id,))
+                return 0
+            
+            if getattr(feed, 'bozo_exception', None):
+                print(f"  Warning: Feed parsing issue for {url}: {feed.bozo_exception}")
+            if not feed.entries:
+                print(f"  Warning: No entries found for {url}")
+                return 0
+                
+            for entry in feed.entries[:10]:
+                link = entry.get('link')
+                if not link:
+                    continue
+                    
+                metadata = {
+                    "title": entry.get('title', ''),
+                    "author": entry.get('author', ''),
+                    "published": entry.get('published', ''),
+                    "summary": entry.get('summary', '')[:500]
+                }
+                    
+                try:
+                    cursor.execute("""
+                        INSERT INTO raw_urls (source_id, url, metadata, status)
+                        VALUES (%s, %s, %s, 'PENDING_SCRAPE')
+                        ON CONFLICT (url) DO NOTHING
+                        RETURNING id;
+                    """, (source_id, link, Json(metadata)))
+                    
+                    result = cursor.fetchone()
+                    if result:
+                        new_urls_count += 1
+                        print(f"    -> [SUCCESS] Queued: {link}")
+                    else:
+                        print(f"    -> [SKIPPED] Already in queue: {link}")
+                except Exception as e:
+                    print(f"    -> [ERROR] Failed inserting {link}: {e}")
+        except Exception as e:
+            print(f"    -> [ERROR] Failed to fetch feed from {url}: {e}")
+        
+        cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP, feed_etag = %s, feed_modified = %s WHERE id = %s;", 
+                       (getattr(feed, 'etag', None), getattr(feed, 'modified', None), source_id))
+    finally:
+        cursor.close()
+        conn.close()
+    return new_urls_count
 def ingest_urls():
     """
     Stage 1: Ingests raw URLs from configured dynamic sources and pushes them to PostgreSQL.
@@ -195,10 +271,17 @@ def ingest_urls():
                      
                 print(f"  -> dynamically hunting for: {search_query}")
                 
-                params = build_searxng_params(search_query, time_range="day")
+                params = build_searxng_params(search_query)
                 headers = create_searxng_headers(searxng_secret)
                 
-                resp = requests.get(f"{searxng_url.rstrip('/')}/search", params=params, headers=headers, timeout=15)
+                resp = request_searxng(
+                    f"{searxng_url.rstrip('/')}/search",
+                    params=params,
+                    headers=headers,
+                    method="get",
+                    timeout=10,
+                    retries=2,
+                )
                 if resp.status_code == 200:
                     try:
                         searx_json = resp.json()
@@ -281,69 +364,11 @@ def ingest_urls():
         active_sources = cursor.fetchall()
         
         print(f"Loaded {len(active_sources)} evolving sources for RSS ingestion.")
-        
-        for source_id, name, url, domain, trust_score, etag, modified in active_sources:
-            print(f"Fetching from {name} (Trust: {trust_score})...")
-            
-            if not is_rss_candidate_source(url):
-                print(f"  -> [SKIP] Not an RSS/feed endpoint: {url}")
-                cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP WHERE id = %s;", (source_id,))
-                continue
 
-            feed = None
-            try:
-                feed = feedparser.parse(url, etag=etag, modified=modified)
-                
-                if getattr(feed, 'status', None) == 304:
-                    print(f"  -> [304 NOT MODIFIED] Skipping {name} - no updates since last run.")
-                    
-                    # Update timestamp even if skipped so we know we checked it
-                    cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP WHERE id = %s;", (source_id,))
-                    continue
-                
-                if getattr(feed, 'bozo_exception', None):
-                    print(f"  Warning: Feed parsing issue for {url}: {feed.bozo_exception}")
-                if not feed.entries:
-                    print(f"  Warning: No entries found for {url}")
-                    continue
-                    
-                for entry in feed.entries[:10]: # Grab latest 10 to avoid overwhelming for now
-                    link = entry.get('link')
-                    if not link:
-                        continue
-                        
-                    # Extract Metadata
-                    metadata = {
-                        "title": entry.get('title', ''),
-                        "author": entry.get('author', ''),
-                        "published": entry.get('published', ''),
-                        "summary": entry.get('summary', '')[:500] # truncate summary
-                    }
-                        
-                    # Insert if it doesn't already exist in the queue
-                    try:
-                        cursor.execute("""
-                            INSERT INTO raw_urls (source_id, url, metadata, status)
-                            VALUES (%s, %s, %s, 'PENDING_SCRAPE')
-                            ON CONFLICT (url) DO NOTHING
-                            RETURNING id;
-                        """, (source_id, link, Json(metadata)))
-                        
-                        result = cursor.fetchone()
-                        if result:
-                            new_urls_count += 1
-                            print(f"    -> [SUCCESS] Queued: {link}")
-                        else:
-                            print(f"    -> [SKIPPED] Already in queue: {link}")
-                    except Exception as e:
-                        print(f"    -> [ERROR] Failed inserting {link}: {e}")
-            except Exception as e:
-                print(f"    -> [ERROR] Failed to fetch feed from {url}: {e}")
-            
-            # Update the last_ingested_at timestamp and the state properties for the dynamic source
-            cursor.execute("UPDATE sources SET last_ingested_at = CURRENT_TIMESTAMP, feed_etag = %s, feed_modified = %s WHERE id = %s;", 
-                           (getattr(feed, 'etag', None), getattr(feed, 'modified', None), source_id))
-                    
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            results = list(executor.map(process_rss_source, active_sources))
+        new_urls_count += sum(results)
+        
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction Complete. Pushed {new_urls_count} new URLs (with metadata) to the staging buffer.")
 
     except psycopg2.Error as e:

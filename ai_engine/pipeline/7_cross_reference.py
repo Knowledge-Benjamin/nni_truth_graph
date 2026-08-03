@@ -44,7 +44,7 @@ neo4j_driver = GraphDatabase.driver(
 )
 _scorer      = EpistemicTrustScorer()
 # Cross-ref is LLM + Neo4j heavy; keep concurrency low on HF Spaces.
-MAX_WORKERS = 2
+MAX_WORKERS = 6
 
 
 def detect_stance(new_claim: dict, existing_claim: dict) -> str:
@@ -310,7 +310,7 @@ def process_cross_ref_queue():
         workers = min(MAX_WORKERS, max(1, pending))
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pending} claims. Spinning {workers} stance-detection threads...")
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(cross_ref_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()

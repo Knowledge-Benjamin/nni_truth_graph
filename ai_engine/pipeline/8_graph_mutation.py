@@ -51,6 +51,111 @@ def _coerce_optional_numeric_property(value):
         return None
 
 
+def _normalise_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        value = value.strip()
+        return " ".join(value.split()).lower()
+    return str(value).strip().lower()
+
+
+def _build_claim_key(claim: dict) -> tuple[str, str, str, str, str, str]:
+    """Create a canonical key for de-duplicating claim writes across whitespace/casing drift."""
+    subject = _normalise_text(claim.get("subject"))
+    predicate = _normalise_text(claim.get("predicate"))
+    object_entity = _normalise_text(claim.get("object_entity"))
+    temporal = _normalise_text(claim.get("temporal_anchor"))
+    spatial = _normalise_text(claim.get("spatial_anchor"))
+    fingerprint = _normalise_text(claim.get("spo_fingerprint"))
+    return (subject, predicate, object_entity, temporal, spatial, fingerprint)
+
+
+def _choose_canonical_claim(candidates: list[dict]) -> dict | None:
+    """Choose the best canonical claim when duplicate claim nodes exist."""
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -float(item.get("epistemic_score") or 0.0),
+            int(str(item.get("id") or "0")),
+        ),
+    )[0]
+
+
+def _repair_graph_duplicates(session) -> dict[str, int]:
+    """Consolidate duplicate Claim nodes and return an audit summary."""
+    try:
+        rows = list(session.run("""
+            MATCH (c:Claim)
+            WITH c.subject AS subject, c.predicate AS predicate, c.object AS object,
+                 c.temporal AS temporal, c.spatial AS spatial, c.spo_fingerprint AS fingerprint,
+                 collect(c) AS claims
+            WHERE size(claims) > 1
+            RETURN subject, predicate, object, temporal, spatial, fingerprint, [claim IN claims | {
+                id: claim.id,
+                epistemic_score: claim.epistemic_score,
+                lifecycle: claim.lifecycle,
+                is_current: claim.is_current
+            }] AS claim_data
+        """))
+    except Exception as exc:
+        print(f"      -> [repair] duplicate scan failed: {exc}")
+        return {"duplicates_found": 0, "relationships_rewired": 0, "canonical_claims_preserved": 0}
+
+    duplicates_found = 0
+    relationships_rewired = 0
+    canonical_claims_preserved = 0
+    for record in rows:
+        claim_data = record["claim_data"] or []
+        canonical = _choose_canonical_claim(claim_data)
+        if not canonical:
+            continue
+        canonical_id = str(canonical.get("id"))
+        duplicate_ids = [str(item.get("id")) for item in claim_data if str(item.get("id")) != canonical_id]
+        if not duplicate_ids:
+            continue
+
+        duplicates_found += len(duplicate_ids)
+        canonical_claims_preserved += 1
+
+        for duplicate_id in duplicate_ids:
+            try:
+                result = session.run("""
+                    MATCH (canonical:Claim {id: $canonical_id})
+                    MATCH (dup:Claim {id: $duplicate_id})
+                    WHERE canonical <> dup
+                    WITH canonical, dup
+                    OPTIONAL MATCH (dup)-[incoming]->(source)
+                    WHERE source <> canonical
+                    WITH canonical, dup, collect(incoming) AS incoming_rels
+                    OPTIONAL MATCH (target)<-[outgoing]-(dup)
+                    WHERE target <> canonical
+                    WITH canonical, dup, incoming_rels, collect(outgoing) AS outgoing_rels
+                    FOREACH (rel IN incoming_rels |
+                        CREATE (canonical)-[:MERGED_INTO {merged_at: datetime(), duplicate_id: $duplicate_id}]->(rel.endNode)
+                    )
+                    FOREACH (rel IN outgoing_rels |
+                        CREATE (rel.startNode)-[:MERGED_INTO {merged_at: datetime(), duplicate_id: $duplicate_id}]->(canonical)
+                    )
+                    SET dup.is_current = false,
+                        dup.lifecycle = COALESCE(dup.lifecycle, 'MERGED'),
+                        dup.valid_until = datetime(),
+                        dup.replaced_by = $canonical_id
+                    MERGE (canonical)-[:MERGED_INTO {merged_at: datetime(), duplicate_id: $duplicate_id}]->(dup)
+                """, canonical_id=canonical_id, duplicate_id=duplicate_id)
+                relationships_rewired += 1
+            except Exception as exc:
+                print(f"      -> [repair] failed for {duplicate_id}: {exc}")
+
+    return {
+        "duplicates_found": duplicates_found,
+        "relationships_rewired": relationships_rewired,
+        "canonical_claims_preserved": canonical_claims_preserved,
+    }
+
+
 def _embed_text(text: str) -> list | None:
     """768-dim embedding via shared InferencePool endpoint."""
     try:
@@ -63,7 +168,7 @@ neo4j_driver = GraphDatabase.driver(
     NEO4J_URI or "",
     auth=(NEO4J_USER or "", NEO4J_PASSWORD or "")
 )
-MAX_WORKERS  = 5
+MAX_WORKERS  = 6
 
 # ── Entity Disambiguator — shared across all worker threads ──────────────────
 _disambiguator = get_disambiguator(
@@ -77,6 +182,8 @@ def write_claim_to_graph(session, claim: dict):
     """MERGE all nodes and relationships for one atomic claim.
     Entity names are resolved to canonical form before any MERGE.
     """
+    claim_key = _build_claim_key(claim)
+
     # ── Canonicalise entity names before writing ───────────────────────────
     claim["subject"]       = _disambiguator.resolve(claim["subject"])
     claim["object_entity"] = _disambiguator.resolve(claim["object_entity"])
@@ -129,6 +236,7 @@ def write_claim_to_graph(session, claim: dict):
     # 4. Claim node + entity links + direct SPO edge
     session.run("""
         MERGE (c:Claim {
+            claim_key: $claim_key,
             subject:   $subject,
             predicate: $predicate,
             object:    $object,
@@ -137,6 +245,7 @@ def write_claim_to_graph(session, claim: dict):
         })
           ON CREATE SET
             c.id                    = $claim_id,
+            c.claim_key            = $claim_key,
             c.epistemic_domain      = $epistemic_domain,
             c.epistemic_score       = $score,
             c.extraction_confidence = $conf,
@@ -161,7 +270,7 @@ def write_claim_to_graph(session, claim: dict):
         MATCH (s:Entity {name: $subject}), (o:Entity {name: $object})
         MERGE (c)-[:HAS_SUBJECT]->(s)
         MERGE (c)-[:HAS_OBJECT]->(o)
-        MERGE (s)-[r:PREDICATE {type: $predicate, temporal: $temporal, spatial: $spatial}]->(o)
+        MERGE (s)-[r:PREDICATE {type: $predicate, temporal: $temporal, spatial: $spatial, claim_key: $claim_key}]->(o)
         SET r.epistemic_score = $score,
             r.is_current = true,
             r.discovered_by_agent = $agent,
@@ -173,6 +282,7 @@ def write_claim_to_graph(session, claim: dict):
         MERGE (c)-[:EXTRACTED_FROM]->(a)
     """,
         claim_id=str(claim["id"]),
+        claim_key=claim_key,
         epistemic_domain=claim.get("epistemic_domain", "EMPIRICAL"),
         subject=claim["subject"],
         predicate=claim["predicate"],
@@ -359,6 +469,13 @@ def mutation_worker(worker_id: int):
         if _active_inv == 0:
             phases.append((50, "AND ru.metadata->>'investigation_id' IS NULL"))
             
+        def _pg():
+            """Open a fresh short-lived Postgres connection.
+            Neon serverless drops idle connections after a few seconds,
+            so we open-and-close per operation rather than holding one open.
+            """
+            return psycopg2.connect(DATABASE_URL)
+
         for __phase, (__limit, __filter_clause) in enumerate(phases):
             items_processed = 0
 
@@ -393,7 +510,7 @@ def mutation_worker(worker_id: int):
                     content_sha256 = None
                     snapshot_path = None
 
-                    with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with _pg() as pg_conn:
                         with pg_conn.cursor() as cur:
                             cur.execute(f"""
                                 SELECT ec.id, ec.subject, ec.predicate, ec.object_entity,
@@ -431,7 +548,6 @@ def mutation_worker(worker_id: int):
                             """)
                             row = cur.fetchone()
                             if not row:
-                                pg_conn.rollback()
                                 break
 
                             (claim_id, subj, pred, obj, temporal, spatial, conf, score,
@@ -457,7 +573,7 @@ def mutation_worker(worker_id: int):
 
                     src_tier = 1 if (src_trust or 0) >= 0.80 else (2 if (src_trust or 0) >= 0.50 else 3)
 
-                    with psycopg2.connect(DATABASE_URL) as pg_conn:
+                    with _pg() as pg_conn:
                         with pg_conn.cursor() as cur:
                             cur.execute("""
                                 SELECT cc.quote_context, cc.discovered_at,
@@ -558,9 +674,11 @@ def mutation_worker(worker_id: int):
                             else:
                                 text = str(response)
 
+                            print(f"      -> [W-{worker_id}] Red Teamer raw response: {text!r}")
+
                             ans = text.strip().upper()
                             if "REJECTED" in ans:
-                                with psycopg2.connect(DATABASE_URL) as pg_conn:
+                                if True:
                                     with pg_conn.cursor() as cur:
                                         cur.execute("""
                                             UPDATE extracted_claims
@@ -599,9 +717,9 @@ def mutation_worker(worker_id: int):
 
                     try:
                         with neo4j_driver.session() as session:
-                            write_claim_to_graph(session, claim)
+                            session.execute_write(write_claim_to_graph, claim)
 
-                        with psycopg2.connect(DATABASE_URL) as pg_conn:
+                        with _pg() as pg_conn:
                             with pg_conn.cursor() as cur:
                                 cur.execute("""
                                     UPDATE extracted_claims
@@ -636,7 +754,7 @@ def mutation_worker(worker_id: int):
                         _ai['mutation_retries'] = retries
                         _ai['last_mutation_error'] = str(ne)[:200]
 
-                        with psycopg2.connect(DATABASE_URL) as pg_conn:
+                        with _pg() as pg_conn:
                             with pg_conn.cursor() as cur:
                                 if retries >= 3:
                                     cur.execute("""
@@ -663,11 +781,6 @@ def mutation_worker(worker_id: int):
 
                 except Exception as le:
                     print(f"  [ERROR W-{worker_id}] {le}")
-                    try:
-                        with psycopg2.connect(DATABASE_URL) as rollback_conn:
-                            rollback_conn.rollback()
-                    except Exception:
-                        pass
                     time.sleep(2)
     except Exception as fatal:
         print(f"[FATAL W-{worker_id}] {fatal}")
@@ -676,6 +789,19 @@ def mutation_worker(worker_id: int):
 def process_mutation_queue():
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
           "Starting Stage 8: Neo4j Graph Mutation Engine (Single Pass)")
+
+    try:
+        with neo4j_driver.session() as session:
+            repair_stats = _repair_graph_duplicates(session)
+            if repair_stats and any(repair_stats.values()):
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                      f"Graph repair audit: duplicates_found={repair_stats['duplicates_found']}, "
+                      f"relationships_rewired={repair_stats['relationships_rewired']}, "
+                      f"canonical_claims_preserved={repair_stats['canonical_claims_preserved']}")
+            elif repair_stats:
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Graph repair audit: no duplicate claims found.")
+    except Exception as exc:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Graph repair pass failed: {exc}")
 
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -713,7 +839,7 @@ def process_mutation_queue():
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
               f"{pending} claims. Spinning {workers} graph-write threads...")
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(mutation_worker, i) for i in range(workers)]  # type: ignore
             for f in futures:
                 f.result()
