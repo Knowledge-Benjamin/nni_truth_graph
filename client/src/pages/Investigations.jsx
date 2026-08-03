@@ -196,10 +196,59 @@ function Investigations() {
         return lines.join('\n').trim();
     };
 
+    const escapeHtml = (value) => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const renderReportHtmlForPrint = (report) => {
+        if (!report || typeof report !== 'object') return '';
+        const chapterEntries = Object.entries(report)
+            .filter(([key]) => !key.startsWith('_'))
+            .sort(([, a], [, b]) => (a?.order ?? 999) - (b?.order ?? 999));
+
+        const docSections = chapterEntries.map(([key, chapter]) => {
+            const content = chapter?.content || chapter?.text || chapter?.body || '';
+            const title = chapter?.title || key;
+            const blocks = (content || '')
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                    const graphMatch = /^(GRAPH|RELATIONSHIP_MAP|DIAGRAM)\s*:\s*(.+)$/i.exec(line);
+                    if (graphMatch) {
+                        const nodes = graphMatch[2]
+                            .split(/\s*(?:\|\s*|\s*↓\s*|\s*->\s*|\s*→\s*)\s*/)
+                            .map(node => node.trim())
+                            .filter(Boolean);
+                        const chainHtml = nodes.map((node, idx) => {
+                            const cell = `<div class="graph-node">${escapeHtml(node)}</div>`;
+                            const arrow = idx < nodes.length - 1 ? '<div class="graph-arrow">↓</div>' : '';
+                            return `${cell}${arrow}`;
+                        }).join('');
+                        return `<div class="graph-block">${chainHtml}</div>`;
+                    }
+                    return `<p>${escapeHtml(line)}</p>`;
+                })
+                .join('');
+
+            return `<section class="chapter"><h2>${escapeHtml(title)}</h2>${blocks}</section>`;
+        }).join('');
+
+        const refs = Array.isArray(report._references) ? report._references : [];
+        const refsHtml = refs.length > 0
+            ? `<section class="references"><h2>References</h2><ol>${refs.map((ref, idx) => `<li><strong>${escapeHtml(ref.source_name || ref.source || ref.original_source || 'Source')}</strong>${ref.publish_date ? ` · ${escapeHtml(ref.publish_date.split('T')[0])}` : ''}${ref.stance === 'CONTRADICTS' ? ' <span class="warn">CONTRADICTED</span>' : ''}<br />${escapeHtml(ref.article_title || '')}${ref.source_url ? `<br /><a href="${escapeHtml(ref.source_url)}">${escapeHtml(ref.source_url)}</a>` : ''}</li>`).join('')}</ol></section>`
+            : '';
+
+        return `<h1>Investigation Dossier</h1><div class="meta">Investigation ID: #${selectedInvestigation?.id || 'unknown'}<br />Target: ${selectedInvestigation?.target || 'Unknown'}</div>${docSections}${refsHtml}`;
+    };
+
     const downloadReport = () => {
         const report = selectedInvestigation?.report;
-        const text = buildReportText(report);
-        if (!text) return;
+        const html = renderReportHtmlForPrint(report);
+        if (!html) return;
 
         const doc = window.open('', '_blank', 'width=800,height=1000');
         if (!doc) return;
@@ -216,13 +265,19 @@ function Investigations() {
       h2 { font-size: 16px; margin-top: 24px; margin-bottom: 8px; }
       p { margin: 0 0 10px; }
       .meta { color: #475569; margin-bottom: 16px; }
-      .page-break { page-break-after: always; }
+      .chapter { page-break-inside: avoid; margin-bottom: 18px; }
+      .graph-block { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 12px 0 18px; }
+      .graph-node { min-width: 180px; max-width: 420px; width: 100%; padding: 9px 12px; border-radius: 10px; background: #eaf2ff; border: 1px solid #93c5fd; color: #0f172a; text-align: center; font-size: 13px; font-weight: 600; }
+      .graph-arrow { color: #2563eb; font-size: 16px; line-height: 1; }
+      .warn { color: #b45309; font-weight: 700; }
+      a { color: #2563eb; }
+      ol { padding-left: 20px; }
+      li { margin-bottom: 8px; }
+      @media print { body { margin: 18mm; } }
     </style>
   </head>
   <body>
-    <h1>Investigation Dossier</h1>
-    <div class="meta">Investigation ID: #${selectedInvestigation?.id || 'unknown'}<br />Target: ${selectedInvestigation?.target || 'Unknown'}</div>
-    ${text.replace(/\n/g, '<br />')}
+    ${html}
   </body>
 </html>`);
         doc.document.close();

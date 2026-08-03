@@ -418,21 +418,22 @@ def _generate_chapter(
         "3. Do not simply repeat the previous draft. Actively add, modify, enhance, and delete content so the chapter reflects the latest evidence and current understanding.",
         "4. Produce a detailed chapter, not a summary. Expand the narrative substantially with relevant facts, context, and evidence. There is no length cap; be comprehensive.",
         "5. Think like a professional investigator. Reason from the evidence provided. Make conclusions, explain the reasoning, and draw connections between facts. Do not merely list facts.",
-        "6. Compare the NEW EVIDENCE TO INCORPORATE against the ALREADY INTEGRATED EVIDENCE and the existing chapter. Only add material that meaningfully expands the report with relevant new facts and analytical insight.",
-        "7. Every factual statement MUST include an inline citation immediately after the sentence or clause using [REF:<id>]. Do not leave factual claims uncited.",
-        "8. Do not rely on a chapter-end references section alone. The paragraph itself must be verifiable on the fly.",
-        "9. You MUST include a '## References' section at the very end of the chapter mapping every [REF:<id>] used to its Source Name and URL.",
-        "10. Use markdown: ## for section headers, **bold** for key names.",
-        "11. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
-        "12. If a claim is unclear or needs additional context, use the optional evidence context provided below and avoid speculation.",
-        "13. When a claim is weak, single-source, low-confidence, or poorly corroborated, say so explicitly and avoid overstating certainty.",
-        "14. Prefer uncertainty-aware phrasing such as 'Evidence suggests...', 'It is likely...', 'There is moderate confidence...', 'There is insufficient evidence...', and 'Conflicting reporting exists...' when the evidence does not justify a hard assertion.",
-        "15. When multiple claims are strong and corroborated, you may present the conclusion with higher confidence, but still note the degree of support.",
-        "16. If multiple claims point to the same pattern, explain the implication and the reasoning trail from evidence to conclusion.",
-        "17. Where relevant, explicitly surface graph-intelligence findings: connected entities, evidence clusters, corroboration strength, confidence levels, and contradictions or unresolved disputes.",
-        "18. Explicitly include the Evidence Support Summary block in the chapter body so the reader can see the measurable support behind the claim.",
-        "19. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
-        "20. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
+        "6. Include a clear Assessment section or paragraph in every chapter that explains why the evidence matters, what significance the pattern has, and how it changes the investigative understanding. This is the 'why this matters' analysis layer.",
+        "7. Compare the NEW EVIDENCE TO INCORPORATE against the ALREADY INTEGRATED EVIDENCE and the existing chapter. Only add material that meaningfully expands the report with relevant new facts and analytical insight.",
+        "8. Every factual statement MUST include an inline citation immediately after the sentence or clause using [REF:<id>]. Do not leave factual claims uncited.",
+        "9. Do not rely on a chapter-end references section alone. The paragraph itself must be verifiable on the fly.",
+        "10. You MUST include a '## References' section at the very end of the chapter mapping every [REF:<id>] used to its Source Name and URL.",
+        "11. Use markdown: ## for section headers, **bold** for key names.",
+        "12. DO NOT hallucinate. Only use the provided facts. Do not invent claims.",
+        "13. If a claim is unclear or needs additional context, use the optional evidence context provided below and avoid speculation.",
+        "14. When a claim is weak, single-source, low-confidence, or poorly corroborated, say so explicitly and avoid overstating certainty.",
+        "15. Prefer uncertainty-aware phrasing such as 'Evidence suggests...', 'It is likely...', 'There is moderate confidence...', 'There is insufficient evidence...', and 'Conflicting reporting exists...' when the evidence does not justify a hard assertion.",
+        "16. When multiple claims are strong and corroborated, you may present the conclusion with higher confidence, but still note the degree of support.",
+        "17. If multiple claims point to the same pattern, explain the implication and the reasoning trail from evidence to conclusion.",
+        "18. Where relevant, explicitly surface graph-intelligence findings: connected entities, evidence clusters, corroboration strength, confidence levels, and contradictions or unresolved disputes.",
+        "19. Explicitly include the Evidence Support Summary block in the chapter body so the reader can see the measurable support behind the claim.",
+        "20. Structure with clear paragraphs. Use bullet points only for lists of names/sources.",
+        "21. OUTPUT: Return only raw JSON matching the schema. No code blocks. No commentary.",
     ]
 
     if existing_content:
@@ -536,7 +537,10 @@ def _build_timeline(target: str, claims: list[dict], existing: Optional[str],
         return ""
     instruction = (
         "Write a strict chronological timeline of all events and facts that have a date. "
+        "Treat the timeline as a temporal evolution narrative: explain how the situation changed from one year to the next, what accelerated or stalled, and what the visible pattern of progression is across the observed years. "
+        "If a year or years are missing from the evidence, explicitly call out the missing years as a gap in the timeline and avoid inventing intermediate events. "
         "Format each entry as: **[DATE]** — Event description [REF:id]. "
+        "Create a true intelligence-style chronology rather than a flat list. "
         "Cover the full span of the investigation from earliest to most recent."
     )
     return _generate_chapter(target, "Chronological Event Timeline", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
@@ -558,7 +562,8 @@ def _build_actors_map(target: str, claims: list[dict], existing: Optional[str],
         "Write the key actors and network map section. "
         "Identify and describe all named individuals, organisations, and entities "
         "involved with the target. Describe each actor's role and relationship. "
-        "Use **Actor Name** (Role) format for each person or organisation."
+        "Use **Actor Name** (Role) format for each person or organisation. "
+        "Where a relationship chain is salient, include a compact inline diagram line using the form: GRAPH: Person ↓ Organizations ↓ Companies ↓ Events ↓ Locations."
     )
     return _generate_chapter(target, "Key Actors & Network Map", instruction, facts, existing, evidence_context=evidence_context, new_facts=new_facts, existing_facts=existing_facts, support_metrics=support_metrics)
 

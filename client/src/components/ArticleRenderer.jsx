@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { BookOpen, ExternalLink, AlertTriangle, Clock } from 'lucide-react';
+import { BookOpen, ExternalLink, AlertTriangle, Clock, ArrowDown } from 'lucide-react';
 
 /**
  * ArticleRenderer
@@ -115,6 +115,57 @@ export default function ArticleRenderer({ articleObj, onEntityClick }) {
         });
     };
 
+    const renderRelationshipMap = (text, keyPrefix) => {
+        const cleaned = String(text || '')
+            .replace(/^GRAPH\s*:\s*/i, '')
+            .replace(/^RELATIONSHIP_MAP\s*:\s*/i, '')
+            .replace(/^DIAGRAM\s*:\s*/i, '')
+            .trim();
+        if (!cleaned) return null;
+
+        const nodes = cleaned
+            .split(/\s*(?:\n|\|\s*|\s*↓\s*|\s*->\s*|\s*→\s*)\s*/)
+            .map(node => node.trim())
+            .filter(Boolean);
+
+        if (nodes.length < 2) return null;
+
+        return (
+            <div key={`${keyPrefix}-diagram`} style={{ margin: '20px 0 22px', background: 'rgba(15,23,42,0.72)', border: '1px solid rgba(148,163,184,0.18)', borderRadius: '12px', padding: '14px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#93c5fd', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    <ArrowDown size={12} /> Relationship chain
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+                    {nodes.map((node, idx) => (
+                        <React.Fragment key={`${keyPrefix}-node-${idx}`}>
+                            <div style={{
+                                minWidth: '180px',
+                                maxWidth: '420px',
+                                width: '100%',
+                                padding: '9px 12px',
+                                borderRadius: '10px',
+                                background: 'linear-gradient(180deg, rgba(37,99,235,0.26), rgba(30,41,59,0.72))',
+                                border: '1px solid rgba(96,165,250,0.35)',
+                                color: '#e2e8f0',
+                                textAlign: 'center',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                                boxShadow: '0 8px 18px rgba(15,23,42,0.22)'
+                            }}>
+                                {renderInline(node, `${keyPrefix}-node-${idx}`)}
+                            </div>
+                            {idx < nodes.length - 1 && (
+                                <div aria-hidden="true" style={{ color: '#93c5fd', fontSize: '16px', lineHeight: 1 }}>
+                                    ↓
+                                </div>
+                            )}
+                        </React.Fragment>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
     // ── Paragraph renderer for a block of plain text ───────────────────────────
     const renderParagraphs = (text, sectionKey) => {
         if (!text) return null;
@@ -131,6 +182,10 @@ export default function ArticleRenderer({ articleObj, onEntityClick }) {
                         <h3 style={{ fontSize: 16, fontWeight: 600, color: isControversy ? 'var(--color-amber)' : '#e2e8f0', margin: 0 }}>{h}</h3>
                     </div>
                 );
+            }
+
+            if (/^(GRAPH|RELATIONSHIP_MAP|DIAGRAM)\s*:/i.test(line)) {
+                return renderRelationshipMap(line, `${sectionKey}-graph-${pIdx}`);
             }
 
             return (
