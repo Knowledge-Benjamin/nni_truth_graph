@@ -129,24 +129,44 @@ def _normalize_query_text(query: str) -> str:
     return q.strip()
 
 
-def _anchor_queries_to_target(target: str, queries: list[str]) -> list[str]:
-    """Rewrite or prefix initial queries so every seed query is anchored to the target."""
+def _contextualize_queries_to_target(target: str, queries: list[str], context_hints: Optional[list[str]] = None) -> list[str]:
+    """Ground every initial query to the investigation target context before search injection.
+
+    This is the triage-side contextualization pass. It rewrites detached initial queries
+    into target-grounded queries using the investigation target as the grounding anchor.
+    """
     clean_target = (target or "").strip().strip('"').strip("'")
     if not clean_target:
         return [q for q in queries if q]
 
     output: list[str] = []
     seen: set[str] = set()
+    context_tokens = [str(x).strip() for x in (context_hints or []) if str(x).strip()]
+
     for q in queries:
         q = _normalize_query_text(q)
         if not q:
             continue
+
+        # If target not already present, anchor it explicitly.
         if clean_target.lower() not in q.lower():
             q = f'"{clean_target}" {q}'
+
+        # Preserve any known context hints when they are available.
+        for hint in context_tokens:
+            hint_str = _normalize_query_text(hint)
+            if hint_str and hint_str.lower() not in q.lower():
+                q = f'{q} {hint_str}'
+
         if q not in seen:
             output.append(q)
             seen.add(q)
     return output[:6]
+
+
+# Backward-compatible alias for the older triage-side helper naming.
+def _anchor_queries_to_target(target: str, queries: list[str], context_hints: Optional[list[str]] = None) -> list[str]:
+    return _contextualize_queries_to_target(target, queries, context_hints=context_hints)
 
 
 def _looks_like_low_signal_queries(target: str, target_type: str, queries: list[str]) -> bool:
@@ -451,7 +471,11 @@ def triage_target(target: str, neo4j_driver=None, pg_conn=None) -> "TriageResult
         if n:
             normalized_queries.append(n)
 
-    normalized_queries = _anchor_queries_to_target(target, normalized_queries)
+    normalized_queries = _contextualize_queries_to_target(
+        target,
+        normalized_queries,
+        context_hints=[postgres_context, graph_context],
+    )
 
     if _looks_like_low_signal_queries(target, getattr(result, 'target_type', '') or (pre_type or 'QUESTION'), normalized_queries):
         print("[Triage] LLM queries were low-signal or noisy. Falling back to deterministic rule-based triage.")

@@ -70,39 +70,6 @@ def _normalize_query_bounds(query: str) -> str:
     return clean
 
 
-def _repair_query_string(query: str, investigation_target: str, entity: str = "") -> str:
-    """Repair malformed quoted search queries after the LLM response.
-
-    This handles broken quote boundaries such as `Anita Among" family background profile`
-    by inserting the missing opening quote around the target phrase and preserving a
-    case-relevant anchor. It does not reject the query outright.
-    """
-    clean = _normalize_query_bounds(query)
-    if not clean:
-        return clean
-
-    target_phrase = investigation_target.strip().strip('"')
-    entity_phrase = entity.strip().strip('"') if entity else ""
-
-    # Repair broken target-phrase quoting: `Anita Among" ...` -> `"Anita Among" ...`
-    if target_phrase and target_phrase.lower() in clean.lower() and clean.count('"') == 1:
-        match = re.search(rf'(?<!")({re.escape(target_phrase)})(?!")', clean, re.I)
-        if match:
-            start, end = match.span()
-            if start > 0 and clean[start - 1] != '"':
-                clean = clean[:start] + '"' + clean[start:]
-            if end < len(clean) and clean[end] != '"':
-                clean = clean[:end] + '"' + clean[end:]
-
-    if target_phrase and target_phrase.lower() not in clean.lower():
-        clean = f'"{target_phrase}" {clean}'
-
-    if entity_phrase and entity_phrase.lower() not in clean.lower() and entity_phrase:
-        clean = f'{clean} "{entity_phrase}"'
-
-    return _normalize_query_bounds(clean)
-
-
 def _anchor_query_to_target(query: str, investigation_target: str, entity: str, lead_context: str = "") -> str:
     """Force a query to remain attached to the investigation target and lead context."""
     clean = _normalize_query_bounds(query)
@@ -132,12 +99,11 @@ def _anchor_query_to_target(query: str, investigation_target: str, entity: str, 
 
 
 def _filter_and_anchor_queries(queries: list[str], investigation_target: str, entity: str, lead_context: str = "") -> list[str]:
-    """Repair malformed queries and rewrite them to stay anchored to the case."""
+    """Rewrite lead queries so they remain anchored to the case context."""
     anchored = []
     seen = set()
     for query in queries:
-        repaired = _repair_query_string(query, investigation_target, entity)
-        clean = _anchor_query_to_target(repaired, investigation_target, entity, lead_context)
+        clean = _anchor_query_to_target(query, investigation_target, entity, lead_context)
         if not clean:
             continue
         if investigation_target.lower() not in clean.lower() and not any(token.lower() in clean.lower() for token in (entity.lower(), lead_context.lower())):
