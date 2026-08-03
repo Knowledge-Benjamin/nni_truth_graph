@@ -157,6 +157,27 @@ def clear_article_progress(conn, article_id):
         cursor.execute("DELETE FROM article_extraction_progress WHERE article_id = %s", (article_id,))
 
 
+def recover_stale_article_states(conn):
+    """Recover any extraction-progress rows left in PROCESSING_* states after a worker crash."""
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            UPDATE raw_articles
+            SET status = 'PENDING_EXTRACTION',
+                extraction_attempts = COALESCE(extraction_attempts, 0) + 1
+            WHERE status IN ('PROCESSING_EXTRACTION', 'PROCESSING_CLASSIFICATION')
+        """)
+        cursor.execute("""
+            DELETE FROM article_extraction_progress
+            WHERE article_id IN (
+                SELECT id FROM raw_articles
+                WHERE status IN ('PENDING_EXTRACTION', 'PENDING_CLASSIFICATION')
+            )
+        """)
+        recovered = cursor.rowcount
+    conn.commit()
+    return recovered
+
+
 def generate_extraction_prompt(title, author, date, text):
     return f"""
 You are a world-class Knowledge Graph extraction engine for the Living Truth Graph.
@@ -670,6 +691,7 @@ def process_extraction_queue():
             );
         """)
         _cur.execute("CREATE INDEX IF NOT EXISTS idx_extraction_progress_updated ON article_extraction_progress(updated_at);")
+        recover_stale_article_states(_conn)
         # Ensure uniqueness to prevent duplicate claim inserts (article + triple)
         try:
             _cur.execute("DROP INDEX IF EXISTS idx_claim_unique;")

@@ -868,6 +868,26 @@ def _save_report(pg_conn, investigation_id: int, report: dict, hashes: dict):
     conn.commit()
 
 
+def _checkpoint_report_state(pg_conn, investigation_id: int, report: dict, hashes: dict):
+    """Durably checkpoint the current report state to DB so an interrupted tick can resume cleanly."""
+    save_conn = _ensure_pg_connection(pg_conn)
+    try:
+        _save_report(save_conn, investigation_id, report, hashes)
+        save_conn.commit()
+    except Exception as exc:
+        if _is_recoverable_db_error(exc):
+            save_conn = _connect_postgres()
+            _save_report(save_conn, investigation_id, report, hashes)
+            save_conn.commit()
+        else:
+            raise
+    finally:
+        try:
+            save_conn.close()
+        except Exception:
+            pass
+
+
 def _export_markdown(investigation_id: int, target: str, report: dict, status: str = "ACTIVE") -> str:
     """Serialize the report dict to a Markdown string for file export."""
     lines = [
@@ -964,6 +984,7 @@ def run_report_tick(
     updated_hashes = dict(existing_hashes)
     all_refs: list = list(existing_report.get('_references', []))
     changed = False
+    save_conn = _connect_postgres(DATABASE_URL)
 
     def _write_chapter(key: str, order: int, title: str, content: str,
                         new_hash: str, claims_used: list):
@@ -992,6 +1013,7 @@ def run_report_tick(
                     "corroboration_count": c.get('corroboration_count', 1),
                 })
         changed = True
+        _checkpoint_report_state(save_conn, investigation_id, updated_report, updated_hashes)
 
     def _maybe_write(key: str, order: int, title: str,
                       new_hash: str, generator, claims_used: list):
@@ -1129,7 +1151,6 @@ def run_report_tick(
                                             key=lambda x: x.get('corroboration_count', 0),
                                             reverse=True)
 
-    save_conn = _connect_postgres(DATABASE_URL)
     try:
         _save_report(save_conn, investigation_id, updated_report, updated_hashes)
         save_conn.commit()
